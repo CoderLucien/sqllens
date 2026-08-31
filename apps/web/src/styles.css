@@ -87,6 +87,25 @@ input:focus-visible {
   font-weight: 600;
 }
 
+.icon-button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  margin-left: 4px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #c8ced5;
+  border-radius: 6px;
+  color: #4b5762;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  border-color: #8e99a4;
+  color: #17202a;
+}
+
 .runtime-dot {
   width: 8px;
   height: 8px;
@@ -270,6 +289,53 @@ h1 {
 
 .setup-form input:focus {
   border-color: #1c63ae;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  width: 17px;
+  min-height: 17px;
+  margin: 0;
+  padding: 0;
+}
+
+.owner-boundary {
+  display: flex;
+  max-width: 520px;
+  align-items: center;
+  gap: 12px;
+  margin: 28px 0 10px;
+  padding: 16px 0;
+  border-top: 1px solid #e3e7eb;
+  border-bottom: 1px solid #e3e7eb;
+  color: #32404c;
+}
+
+.owner-boundary svg {
+  flex: 0 0 auto;
+  color: #1d4f73;
+}
+
+.owner-boundary div {
+  display: grid;
+  gap: 3px;
+}
+
+.owner-boundary strong {
+  font-size: 13px;
+}
+
+.owner-boundary span {
+  color: #65707b;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .button {

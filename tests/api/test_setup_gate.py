@@ -15,7 +15,7 @@ from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
 from sqllens_api.provider import ProviderProbeRequest, ProviderProbeResult
-from sqllens_api.setup import SetupStore
+from sqllens_api.setup import SETUP_COOKIE_NAME, SetupStore
 
 
 @dataclass
@@ -395,7 +395,7 @@ def test_reissue_fails_closed_after_setup_is_finalized(
     assert client.post(
         "/api/v1/setup/finalize",
         headers={"X-CSRF-Token": csrf},
-        json={"mode": "rules"},
+        json={"mode": "rules", "owner_password": "owner-password-123"},
     ).status_code == 200
 
     replacement = "WXYZ-2345-6789-ABCD"
@@ -435,6 +435,10 @@ def test_setup_mutations_require_session_and_csrf(
         json={"external_model_egress": False, "allowed_provider_hosts": []},
     )
     assert accepted.status_code == 200
+    assert client.get("/api/v1/setup/status").json()["external_model"] == {
+        "credential_available": False,
+        "egress_enabled": False,
+    }
 
 
 def test_security_policy_is_committed_before_any_external_probe(
@@ -544,10 +548,12 @@ def test_local_probe_fails_closed_and_provider_failure_can_degrade_to_rules(
     fallback = client.post(
         "/api/v1/setup/finalize",
         headers={"X-CSRF-Token": csrf_token},
-        json={"mode": "rules"},
+        json={"mode": "rules", "owner_password": "owner-password-123"},
     )
     assert fallback.status_code == 200
-    assert fallback.json() == {"state": "ready", "model_mode": "rules"}
+    assert fallback.json()["state"] == "ready"
+    assert fallback.json()["model_mode"] == "rules"
+    assert fallback.json()["authenticated"] is True
 
 
 def test_successful_external_setup_persists_across_app_restart(
@@ -573,7 +579,7 @@ def test_successful_external_setup_persists_across_app_restart(
     finalized = client.post(
         "/api/v1/setup/finalize",
         headers={"X-CSRF-Token": csrf_token},
-        json={"mode": "external"},
+        json={"mode": "external", "owner_password": "owner-password-123"},
     )
     assert finalized.status_code == 200
 
@@ -588,8 +594,8 @@ def test_successful_external_setup_persists_across_app_restart(
         headers={"Idempotency-Key": "case-1"},
         json={"sql": "select 1"},
     )
-    assert post_setup.status_code == 501
-    assert post_setup.json()["error"]["code"] == "FEATURE_NOT_IMPLEMENTED"
+    assert post_setup.status_code == 401
+    assert post_setup.json()["error"]["code"] == "AUTH_REQUIRED"
 
 
 def test_finalized_setup_rejects_every_setup_mutation_without_state_regression(
@@ -614,13 +620,21 @@ def test_finalized_setup_rejects_every_setup_mutation_without_state_regression(
         ).status_code
         == 200
     )
+    captured_setup_cookie = client.cookies.get(SETUP_COOKIE_NAME)
+    assert captured_setup_cookie is not None
     assert (
         client.post(
             "/api/v1/setup/finalize",
             headers={"X-CSRF-Token": csrf_token},
-            json={"mode": "external"},
+            json={"mode": "external", "owner_password": "owner-password-123"},
         ).status_code
         == 200
+    )
+    assert SETUP_COOKIE_NAME not in client.cookies
+    client.cookies.set(
+        SETUP_COOKIE_NAME,
+        captured_setup_cookie,
+        path="/api/v1/setup",
     )
 
     responses = [
@@ -641,7 +655,7 @@ def test_finalized_setup_rejects_every_setup_mutation_without_state_regression(
         client.post(
             "/api/v1/setup/finalize",
             headers={"X-CSRF-Token": csrf_token},
-            json={"mode": "external"},
+            json={"mode": "external", "owner_password": "owner-password-123"},
         ),
     ]
 

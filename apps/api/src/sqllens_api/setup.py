@@ -6,6 +6,8 @@ import hmac
 import json
 import os
 import secrets
+import stat
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +22,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    case,
     create_engine,
     insert,
     select,
@@ -28,9 +31,11 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 
 from sqllens_api.config import Settings
+from sqllens_api.credentials import EncryptedCredential
 from sqllens_api.provider import ProviderProbeRequest, ProviderProbeResult
 
 SETUP_COOKIE_NAME = "sqllens_setup_session"
+OWNER_COOKIE_NAME = "sqllens_owner_session"
 _STATE_ID = 1
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
@@ -54,7 +59,14 @@ setup_state = Table(
     Column("provider_base_url", Text),
     Column("provider_model", String(200)),
     Column("provider_verified_at", Float),
+    Column("provider_credential_ciphertext", Text),
+    Column("provider_credential_key_version", String(80)),
     Column("model_mode", String(30)),
+    Column("owner_password_hash", String(128)),
+    Column("owner_password_salt", String(64)),
+    Column("owner_session_epoch", Integer, nullable=False, default=0),
+    Column("owner_failed_attempts", Integer, nullable=False, default=0),
+    Column("owner_locked_until", Float),
     Column("finalized_at", Float),
     Column("updated_at", Float, nullable=False),
 )
@@ -94,6 +106,18 @@ def _derive_code_hash(code: str, salt: bytes) -> str:
     return _b64(derived)
 
 
+def _derive_password_hash(password: str, salt: bytes) -> str:
+    derived = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=2**14,
+        r=8,
+        p=1,
+        dklen=32,
+    )
+    return _b64(derived)
+
+
 @dataclass(frozen=True, slots=True)
 class SetupSnapshot:
     stage: str
@@ -105,12 +129,24 @@ class SetupSnapshot:
     provider_base_url: str | None
     provider_model: str | None
     provider_verified_at: float | None
+    provider_credential: EncryptedCredential | None
     model_mode: str | None
     bootstrap_persisted: bool
     bootstrap_expires_at: float | None
     bootstrap_consumed_at: float | None
     bootstrap_failed_attempts: int
     setup_epoch: int
+    owner_configured: bool
+    owner_session_epoch: int
+    owner_failed_attempts: int
+    owner_locked_until: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerAuthentication:
+    status: Literal["authenticated", "invalid", "limited"]
+    setup_epoch: int | None = None
+    session_epoch: int | None = None
 
 
 class SetupStore:
@@ -124,8 +160,26 @@ class SetupStore:
         self.migrate()
 
     def _prepare_data_dir(self) -> None:
-        self.settings.data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.settings.data_dir.chmod(0o700)
+        try:
+            self.settings.data_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
+        except FileExistsError:
+            pass
+        except OSError as error:
+            raise RuntimeError("data directory cannot be created safely") from error
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(self.settings.data_dir, flags)
+        except OSError as error:
+            raise RuntimeError("data directory cannot be opened safely") from error
+        try:
+            directory = os.fstat(descriptor)
+            if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid():
+                raise RuntimeError("data directory ownership is invalid")
+            os.fchmod(descriptor, 0o700)
+        except OSError as error:
+            raise RuntimeError("data directory permissions cannot be set safely") from error
+        finally:
+            os.close(descriptor)
 
     def migrate(self) -> None:
         metadata.create_all(self.engine)
@@ -134,10 +188,21 @@ class SetupStore:
             existing_columns = {
                 row[1] for row in connection.exec_driver_sql("PRAGMA table_info(setup_state)")
             }
-            if "setup_epoch" not in existing_columns:
-                connection.exec_driver_sql(
-                    "ALTER TABLE setup_state ADD COLUMN setup_epoch INTEGER NOT NULL DEFAULT 1"
-                )
+            migrations = {
+                "setup_epoch": "INTEGER NOT NULL DEFAULT 1",
+                "provider_credential_ciphertext": "TEXT",
+                "provider_credential_key_version": "VARCHAR(80)",
+                "owner_password_hash": "VARCHAR(128)",
+                "owner_password_salt": "VARCHAR(64)",
+                "owner_session_epoch": "INTEGER NOT NULL DEFAULT 0",
+                "owner_failed_attempts": "INTEGER NOT NULL DEFAULT 0",
+                "owner_locked_until": "FLOAT",
+            }
+            for column, definition in migrations.items():
+                if column not in existing_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE setup_state ADD COLUMN {column} {definition}"
+                    )
             exists = connection.execute(
                 select(setup_state.c.id).where(setup_state.c.id == _STATE_ID)
             ).first()
@@ -148,6 +213,8 @@ class SetupStore:
                         stage="bootstrap_required",
                         bootstrap_failed_attempts=0,
                         setup_epoch=1,
+                        owner_session_epoch=0,
+                        owner_failed_attempts=0,
                         send_sql_text=False,
                         updated_at=now,
                     )
@@ -162,6 +229,12 @@ class SetupStore:
                 .one()
             )
         hosts = tuple(json.loads(row["allowed_provider_hosts"] or "[]"))
+        credential = None
+        if row["provider_credential_ciphertext"] and row["provider_credential_key_version"]:
+            credential = EncryptedCredential(
+                ciphertext=row["provider_credential_ciphertext"],
+                key_version=row["provider_credential_key_version"],
+            )
         return SetupSnapshot(
             stage=row["stage"],
             initialized=row["finalized_at"] is not None,
@@ -172,12 +245,17 @@ class SetupStore:
             provider_base_url=row["provider_base_url"],
             provider_model=row["provider_model"],
             provider_verified_at=row["provider_verified_at"],
+            provider_credential=credential,
             model_mode=row["model_mode"],
             bootstrap_persisted=row["bootstrap_hash"] is not None,
             bootstrap_expires_at=row["bootstrap_expires_at"],
             bootstrap_consumed_at=row["bootstrap_consumed_at"],
             bootstrap_failed_attempts=row["bootstrap_failed_attempts"],
             setup_epoch=row["setup_epoch"],
+            owner_configured=row["owner_password_hash"] is not None,
+            owner_session_epoch=row["owner_session_epoch"],
+            owner_failed_attempts=row["owner_failed_attempts"],
+            owner_locked_until=row["owner_locked_until"],
         )
 
     def is_ready(self) -> bool:
@@ -248,7 +326,14 @@ class SetupStore:
                     provider_base_url=None,
                     provider_model=None,
                     provider_verified_at=None,
+                    provider_credential_ciphertext=None,
+                    provider_credential_key_version=None,
                     model_mode=None,
+                    owner_password_hash=None,
+                    owner_password_salt=None,
+                    owner_session_epoch=setup_state.c.owner_session_epoch + 1,
+                    owner_failed_attempts=0,
+                    owner_locked_until=None,
                     updated_at=now_value,
                 )
             )
@@ -360,6 +445,7 @@ class SetupStore:
         self,
         request: ProviderProbeRequest,
         result: ProviderProbeResult,
+        credential: EncryptedCredential,
         now: datetime,
     ) -> None:
         if result.status != "verified":
@@ -382,20 +468,31 @@ class SetupStore:
                     provider_base_url=request.base_url,
                     provider_model=request.model,
                     provider_verified_at=_timestamp(now),
+                    provider_credential_ciphertext=credential.ciphertext,
+                    provider_credential_key_version=credential.key_version,
                     updated_at=_timestamp(now),
                 )
             )
         if write_result.rowcount != 1:
             raise RuntimeError("provider state changed concurrently")
 
-    def finalize(self, mode: Literal["external", "rules"], now: datetime) -> None:
+    def finalize(
+        self,
+        mode: Literal["external", "rules"],
+        owner_password: str,
+        now: datetime,
+    ) -> tuple[int, int]:
         snapshot = self.snapshot()
         if snapshot.stage != "model_required" or snapshot.initialized:
             raise RuntimeError("finalize is not valid in the current setup stage")
         if snapshot.policy_committed_at is None:
             raise RuntimeError("security policy is required")
-        if mode == "external" and snapshot.provider_status != "verified":
+        if mode == "external" and (
+            snapshot.provider_status != "verified" or snapshot.provider_credential is None
+        ):
             raise RuntimeError("a verified external provider is required")
+        owner_salt = secrets.token_bytes(16)
+        owner_hash = _derive_password_hash(owner_password, owner_salt)
         now_value = _timestamp(now)
         with self.engine.begin() as connection:
             result = connection.execute(
@@ -406,16 +503,210 @@ class SetupStore:
                     setup_state.c.setup_epoch == snapshot.setup_epoch,
                     setup_state.c.finalized_at.is_(None),
                     setup_state.c.policy_committed_at == snapshot.policy_committed_at,
+                    setup_state.c.provider_status == snapshot.provider_status,
                 )
                 .values(
                     stage="ready",
                     model_mode=mode,
+                    provider_status=(snapshot.provider_status if mode == "external" else None),
+                    provider_base_url=(
+                        snapshot.provider_base_url if mode == "external" else None
+                    ),
+                    provider_model=(snapshot.provider_model if mode == "external" else None),
+                    provider_verified_at=(
+                        snapshot.provider_verified_at if mode == "external" else None
+                    ),
+                    provider_credential_ciphertext=(
+                        snapshot.provider_credential.ciphertext
+                        if mode == "external" and snapshot.provider_credential is not None
+                        else None
+                    ),
+                    provider_credential_key_version=(
+                        snapshot.provider_credential.key_version
+                        if mode == "external" and snapshot.provider_credential is not None
+                        else None
+                    ),
+                    owner_password_hash=owner_hash,
+                    owner_password_salt=_b64(owner_salt),
+                    owner_session_epoch=setup_state.c.owner_session_epoch + 1,
+                    owner_failed_attempts=0,
+                    owner_locked_until=None,
                     finalized_at=now_value,
                     updated_at=now_value,
                 )
             )
         if result.rowcount != 1:
             raise RuntimeError("finalize state changed concurrently")
+        finalized = self.snapshot()
+        return finalized.setup_epoch, finalized.owner_session_epoch
+
+    def authenticate_owner(self, password: str, now: datetime) -> OwnerAuthentication:
+        now_value = _timestamp(now)
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(select(setup_state).where(setup_state.c.id == _STATE_ID))
+                .mappings()
+                .one()
+            )
+        if row["finalized_at"] is None or not row["owner_password_hash"]:
+            return OwnerAuthentication("invalid")
+        if row["owner_locked_until"] is not None and row["owner_locked_until"] > now_value:
+            return OwnerAuthentication("limited")
+        candidate = _derive_password_hash(password, _decode_b64(row["owner_password_salt"]))
+        if hmac.compare_digest(candidate, row["owner_password_hash"]):
+            with self.engine.begin() as connection:
+                result = connection.execute(
+                    update(setup_state)
+                    .where(
+                        setup_state.c.id == _STATE_ID,
+                        setup_state.c.setup_epoch == row["setup_epoch"],
+                        setup_state.c.owner_session_epoch == row["owner_session_epoch"],
+                        setup_state.c.owner_password_hash == row["owner_password_hash"],
+                        setup_state.c.finalized_at.is_not(None),
+                    )
+                    .values(owner_failed_attempts=0, owner_locked_until=None, updated_at=now_value)
+                )
+            if result.rowcount == 1:
+                return OwnerAuthentication(
+                    "authenticated",
+                    setup_epoch=row["setup_epoch"],
+                    session_epoch=row["owner_session_epoch"],
+                )
+            return OwnerAuthentication("invalid")
+
+        failed_attempts = case(
+            (
+                setup_state.c.owner_locked_until.is_not(None)
+                & (setup_state.c.owner_locked_until <= now_value),
+                1,
+            ),
+            else_=setup_state.c.owner_failed_attempts + 1,
+        )
+        locked_until = case(
+            (
+                failed_attempts >= self.settings.owner_login_max_attempts,
+                now_value + self.settings.owner_login_lock_seconds,
+            ),
+            else_=None,
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.setup_epoch == row["setup_epoch"],
+                    setup_state.c.owner_session_epoch == row["owner_session_epoch"],
+                    setup_state.c.owner_password_hash == row["owner_password_hash"],
+                    setup_state.c.finalized_at.is_not(None),
+                )
+                .values(
+                    owner_failed_attempts=failed_attempts,
+                    owner_locked_until=locked_until,
+                    updated_at=now_value,
+                )
+            )
+        return OwnerAuthentication("invalid")
+
+    def revoke_owner_sessions(self, *, setup_epoch: int, session_epoch: int, now: datetime) -> bool:
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.setup_epoch == setup_epoch,
+                    setup_state.c.owner_session_epoch == session_epoch,
+                    setup_state.c.finalized_at.is_not(None),
+                )
+                .values(
+                    owner_session_epoch=setup_state.c.owner_session_epoch + 1,
+                    updated_at=_timestamp(now),
+                )
+            )
+        return result.rowcount == 1
+
+    def replace_provider_credential(
+        self,
+        request: ProviderProbeRequest,
+        result: ProviderProbeResult,
+        credential: EncryptedCredential,
+        *,
+        expected_credential: EncryptedCredential | None,
+        expected_setup_epoch: int,
+        now: datetime,
+    ) -> bool:
+        with self.engine.begin() as connection:
+            write_result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.setup_epoch == expected_setup_epoch,
+                    setup_state.c.finalized_at.is_not(None),
+                    setup_state.c.external_model_egress.is_(True),
+                    (
+                        setup_state.c.provider_credential_ciphertext.is_(None)
+                        if expected_credential is None
+                        else setup_state.c.provider_credential_ciphertext
+                        == expected_credential.ciphertext
+                    ),
+                    (
+                        setup_state.c.provider_credential_key_version.is_(None)
+                        if expected_credential is None
+                        else setup_state.c.provider_credential_key_version
+                        == expected_credential.key_version
+                    ),
+                )
+                .values(
+                    provider_status=result.status,
+                    provider_base_url=request.base_url,
+                    provider_model=request.model,
+                    provider_verified_at=_timestamp(now),
+                    provider_credential_ciphertext=credential.ciphertext,
+                    provider_credential_key_version=credential.key_version,
+                    model_mode="external",
+                    updated_at=_timestamp(now),
+                )
+            )
+        return write_result.rowcount == 1
+
+    def delete_provider_credential(
+        self,
+        *,
+        expected_credential: EncryptedCredential | None,
+        expected_setup_epoch: int,
+        now: datetime,
+    ) -> bool:
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.setup_epoch == expected_setup_epoch,
+                    setup_state.c.finalized_at.is_not(None),
+                    (
+                        setup_state.c.provider_credential_ciphertext.is_(None)
+                        if expected_credential is None
+                        else setup_state.c.provider_credential_ciphertext
+                        == expected_credential.ciphertext
+                    ),
+                    (
+                        setup_state.c.provider_credential_key_version.is_(None)
+                        if expected_credential is None
+                        else setup_state.c.provider_credential_key_version
+                        == expected_credential.key_version
+                    ),
+                )
+                .values(
+                    provider_status=None,
+                    provider_base_url=None,
+                    provider_model=None,
+                    provider_verified_at=None,
+                    provider_credential_ciphertext=None,
+                    provider_credential_key_version=None,
+                    model_mode="rules",
+                    updated_at=_timestamp(now),
+                )
+            )
+        return result.rowcount == 1
 
 
 class SetupSessionSigner:
@@ -425,15 +716,51 @@ class SetupSessionSigner:
 
     @staticmethod
     def _load_or_create_key(path: Path) -> bytes:
+        directory = path.parent.lstat()
+        if (
+            not stat.S_ISDIR(directory.st_mode)
+            or directory.st_uid != os.geteuid()
+            or stat.S_IMODE(directory.st_mode) != 0o700
+        ):
+            raise RuntimeError("setup session key directory permissions are invalid")
         try:
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            descriptor = os.open(
+                path,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
         except FileExistsError:
-            key = path.read_bytes()
+            try:
+                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            except OSError as error:
+                raise RuntimeError("setup session key cannot be opened safely") from error
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                ):
+                    raise RuntimeError("setup session key permissions are invalid")
+                with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                    key = handle.read(33)
+            finally:
+                os.close(descriptor)
         else:
             key = secrets.token_bytes(32)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(key)
-        path.chmod(0o600)
+            try:
+                os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(key)
+            except OSError as error:
+                with suppress(OSError):
+                    os.close(descriptor)
+                with suppress(OSError):
+                    path.unlink()
+                raise RuntimeError("setup session key cannot be written safely") from error
         if len(key) != 32:
             raise RuntimeError("setup session key has an invalid length")
         return key
@@ -468,6 +795,48 @@ class SetupSessionSigner:
 
     def verify_csrf(self, token: str, supplied: str | None) -> bool:
         return supplied is not None and hmac.compare_digest(self.csrf_for(token), supplied)
+
+    def issue_owner(
+        self,
+        now: datetime,
+        *,
+        setup_epoch: int,
+        session_epoch: int,
+    ) -> tuple[str, str]:
+        token = _b64(secrets.token_bytes(32))
+        expires_at = int(_timestamp(now)) + self.settings.owner_session_ttl_seconds
+        payload = f"owner.{token}.{expires_at}.{setup_epoch}.{session_epoch}"
+        signature = _b64(hmac.digest(self.key, payload.encode("ascii"), "sha256"))
+        return f"{payload}.{signature}", self.csrf_for(token)
+
+    def verify_owner(
+        self,
+        cookie: str,
+        now: datetime,
+        *,
+        expected_setup_epoch: int,
+        expected_session_epoch: int,
+    ) -> str | None:
+        try:
+            purpose, token, expires_text, setup_text, session_text, supplied_signature = (
+                cookie.split(".", maxsplit=5)
+            )
+            expires_at = int(expires_text)
+            setup_epoch = int(setup_text)
+            session_epoch = int(session_text)
+        except (TypeError, ValueError):
+            return None
+        payload = f"{purpose}.{token}.{expires_at}.{setup_epoch}.{session_epoch}"
+        expected = _b64(hmac.digest(self.key, payload.encode("ascii"), "sha256"))
+        if (
+            purpose != "owner"
+            or setup_epoch != expected_setup_epoch
+            or session_epoch != expected_session_epoch
+            or expires_at < int(_timestamp(now))
+            or not hmac.compare_digest(supplied_signature, expected)
+        ):
+            return None
+        return token
 
 
 def migrate(settings: Settings) -> Engine:

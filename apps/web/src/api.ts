@@ -2,7 +2,8 @@ export type SetupStage =
   | "bootstrap_required"
   | "security_policy_required"
   | "model_required"
-  | "ready";
+  | "ready"
+  | "model_recovery_required";
 
 export interface LocalModelStatus {
   available: boolean;
@@ -22,7 +23,16 @@ export interface SetupStatus {
     action: "bootstrap-reissue" | null;
     reason: "bootstrap_expired" | "attempt_limit_reached" | "setup_session_missing" | null;
   };
+  external_model: {
+    credential_available: boolean;
+    egress_enabled: boolean;
+  };
   local_model: LocalModelStatus;
+}
+
+export interface OwnerSession {
+  authenticated: boolean;
+  csrf_token: string | null;
 }
 
 interface ErrorEnvelope {
