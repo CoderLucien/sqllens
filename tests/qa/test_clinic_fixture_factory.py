@@ -34,6 +34,7 @@ class ClinicFixtureFactoryTest(unittest.TestCase):
 
         expected_ids = {
             "valid_zip",
+            "content_attack_zip",
             "zip_parent_traversal",
             "zip_absolute_path",
             "zip_windows_path",
@@ -53,6 +54,41 @@ class ClinicFixtureFactoryTest(unittest.TestCase):
 
         self.assertEqual({item["id"] for item in manifest["fixtures"]}, expected_ids)
         self.assertEqual(manifest["schemaVersion"], "clinic-corpus/v1")
+
+    def test_content_attack_fixture_covers_untrusted_report_payloads(self) -> None:
+        factory = load_factory()
+        manifest = factory.generate_corpus(self.output)
+        record = next(
+            item for item in manifest["fixtures"] if item["id"] == "content_attack_zip"
+        )
+
+        self.assertEqual(record["expected"], "accept_as_untrusted")
+        with zipfile.ZipFile(self.output / record["file"]) as archive:
+            names = set(archive.namelist())
+            combined = b"\n".join(archive.read(name) for name in archive.namelist())
+
+        self.assertEqual(
+            names,
+            {
+                "reports/summary.html",
+                "exports/findings.csv",
+                "reports/template.txt",
+                "logs/tidb.log",
+                "metrics/labels.json",
+                "config/synthetic-secret.txt",
+            },
+        )
+        for marker in (
+            b"<script>",
+            b"=HYPERLINK(",
+            b"{{7*7}}",
+            b"IGNORE ALL PREVIOUS INSTRUCTIONS",
+            b"QA_CLINIC_EGRESS_CANARY_7F3A",
+            b"QA_CLINIC_SECRET_CANARY_91C2",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+        self.assertNotIn(b".com", combined)
 
     def test_manifest_hashes_and_sizes_match_generated_files(self) -> None:
         factory = load_factory()
