@@ -3,6 +3,10 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -80,6 +84,39 @@ class DiagnosisCaseContractTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "pinnedRevisions"):
             self.validation.validate_revision(self.valid, current)
+
+    def test_ready_case_cannot_transition_back_to_queued(self) -> None:
+        current = copy.deepcopy(self.valid)
+        current["revision"] = 2
+        current["updatedAt"] = "2026-08-31T10:00:02Z"
+        current["workflowState"] = "queued"
+
+        with self.assertRaisesRegex(ValueError, "workflowState"):
+            self.validation.validate_revision(self.valid, current)
+
+    def test_contract_command_rejects_a_malformed_review_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            copied_contracts = Path(temp_dir) / "contracts"
+            shutil.copytree(CONTRACT_DIR, copied_contracts)
+            valid_path = (
+                copied_contracts / "examples" / "diagnosis-case-v1.valid.json"
+            )
+            case = load_json(valid_path)
+            case["reviews"][0]["createdAt"] = "not-a-date"
+            valid_path.write_text(json.dumps(case), encoding="utf-8")
+
+            completed = subprocess.run(
+                [sys.executable, str(copied_contracts / "validate_examples.py")],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(
+            completed.returncode,
+            0,
+            "contract validation accepted an invalid date-time",
+        )
 
 
 if __name__ == "__main__":
