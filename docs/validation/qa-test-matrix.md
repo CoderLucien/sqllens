@@ -165,11 +165,11 @@ strict read-only or zero-impact.
 | ID | Environment | Scenario and assertions | Result |
 |---|---|---|---|
 | `CASE-001` | E1/E2/E3 | All three paths produce the same versioned DiagnosisCase schema and immutable revisions. | `NOT_RUN` |
-| `CASE-002` | E1/E2/E3 | Every conclusion and recommendation references existing evidence IDs; fabricated/dangling IDs are rejected. | `NOT_RUN` |
+| `CASE-002` | E1/E2/E3 | Every conclusion and recommendation references existing evidence IDs; fabricated/dangling IDs are rejected. | `FAIL` |
 | `CASE-003` | E1/E2/E3 | Supporting and contradicting evidence remain distinct; confidence and completeness are independent bounded fields. | `FAIL` |
 | `CASE-004` | E1/E2/E3 | Insufficient or contradictory evidence produces an abstention with minimum next evidence, not a generic recommendation. | `NOT_RUN` |
 | `CASE-005` | E1/E2/E3 | Recommendation includes risk, prerequisites, owner, validation and rollback; no API executes recommendations or production changes. | `NOT_RUN` |
-| `CASE-006` | E1/E2/E3 | Evidence/provider/prompt/policy/redaction revisions and input fingerprints are retained across review and outcome changes. | `NOT_RUN` |
+| `CASE-006` | E1/E2/E3 | Evidence/provider/prompt/policy/redaction revisions and input fingerprints are retained across review and outcome changes. | `FAIL` |
 | `CASE-007` | E1/E2/E3 | Allowed terminal outcome is separate from workflow status and is one of validated-effective, rolled-back, evidence-insufficient, or risk-accepted. | `FAIL` |
 | `CASE-008` | E1/E2/E3 | Concurrent reviews and retries cannot overwrite an immutable revision or lose audit events. | `NOT_RUN` |
 
@@ -281,6 +281,10 @@ Official references:
 - `SEC-010`: [QA-005](defects/QA-005-revision-audit-time-consistency.md) - newly
   appended audit records are not bounded to their revision time window, and
   accepted RFC 3339 input is parsed inconsistently.
+- `CASE-002`, `CASE-006`:
+  [QA-006](defects/QA-006-effect-outcome-without-evidence.md) - effective and
+  rolled-back business outcomes have no machine-validatable link to result
+  evidence.
 
 These are contract-level failures. Product API/database validation remains
 `NOT_RUN` until an executable runtime slice exists.
