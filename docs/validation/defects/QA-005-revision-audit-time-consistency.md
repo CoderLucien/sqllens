@@ -17,6 +17,8 @@ claims.
 
 Expected: every newly appended review/feedback record is later than the prior
 revision's `updatedAt` and no later than the proposed revision's `updatedAt`.
+Records appended together must be chronological. For revision 1, review and
+feedback timestamps must fall between the case's `createdAt` and `updatedAt`.
 The domain owner should define corresponding bounds for other newly appended
 record types where their timestamps have different semantics.
 
@@ -36,6 +38,8 @@ consume.
 ```bash
 python3 -m unittest \
   tests.qa.test_diagnosis_case_contract.DiagnosisCaseContractTest.test_new_audit_records_must_fall_inside_the_revision_time_window \
+  tests.qa.test_diagnosis_case_contract.DiagnosisCaseContractTest.test_initial_audit_records_must_fall_inside_the_case_time_window \
+  tests.qa.test_diagnosis_case_contract.DiagnosisCaseContractTest.test_new_audit_records_are_chronologically_ordered \
   tests.qa.test_diagnosis_case_contract.DiagnosisCaseContractTest.test_schema_valid_lowercase_z_is_compatible_with_revision_validation \
   -v
 ```

@@ -172,6 +172,33 @@ class DiagnosisCaseContractTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "createdAt"):
                     self.validation.validate_revision(self.valid, current)
 
+    def test_initial_audit_records_must_fall_inside_the_case_time_window(self) -> None:
+        for created_at in (
+            "2026-08-31T09:59:59Z",
+            "2026-08-31T10:00:02Z",
+        ):
+            with self.subTest(created_at=created_at):
+                case = copy.deepcopy(self.valid)
+                case["reviews"][0]["createdAt"] = created_at
+
+                with self.assertRaisesRegex(ValueError, "createdAt"):
+                    self.validation.validate_case_semantics(case)
+
+    def test_new_audit_records_are_chronologically_ordered(self) -> None:
+        current = copy.deepcopy(self.valid)
+        current["revision"] = 2
+        current["updatedAt"] = "2026-08-31T10:00:03Z"
+        later = copy.deepcopy(self.valid["feedback"][0])
+        later["feedbackId"] = "fb_0000000000000002"
+        later["createdAt"] = "2026-08-31T10:00:02Z"
+        earlier = copy.deepcopy(self.valid["feedback"][0])
+        earlier["feedbackId"] = "fb_0000000000000003"
+        earlier["createdAt"] = "2026-08-31T10:00:01.500Z"
+        current["feedback"].extend((later, earlier))
+
+        with self.assertRaisesRegex(ValueError, "createdAt|order"):
+            self.validation.validate_revision(self.valid, current)
+
     def test_schema_valid_lowercase_z_is_compatible_with_revision_validation(
         self,
     ) -> None:
