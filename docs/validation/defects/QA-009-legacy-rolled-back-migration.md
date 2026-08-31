@@ -40,11 +40,12 @@ the current-result guard is reached.
 
 ## Required Disposition
 
-Migration must distinguish the pre-freeze source from a current case, either
-through explicit source-version context or an equally fail-closed discriminator.
-Normalize the old rolled-back process record to `pending`, preserve its review
-and feedback history, and do not downgrade a valid current terminal result.
-Document the rule and add positive and negative fixtures. An unconditional
-string alias for `rolled_back` is not acceptable because it would erase a
-current business result.
-
+Migration must distinguish the pre-freeze source from a current case through an
+explicit, fail-closed source revision. The regression uses
+`diagnosis-case/v1@1c3c271` for the old draft and
+`diagnosis-case/v1@business-outcomes-v1` for the current contract; any unknown
+source must be rejected. Normalize the old rolled-back process record to
+`pending`, preserve its review and feedback history, and do not downgrade a
+valid current terminal result. Document the rule and add positive and negative
+fixtures. An unconditional string alias for `rolled_back` is not acceptable
+because it would erase a current business result.
