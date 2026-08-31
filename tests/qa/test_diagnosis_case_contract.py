@@ -145,6 +145,21 @@ class DiagnosisCaseContractTest(unittest.TestCase):
             f"writable_legacy_states={sorted(writable_legacy_states)}",
         )
 
+    def test_effect_outcomes_have_a_machine_validated_evidence_binding(self) -> None:
+        schema = load_json(CONTRACT_DIR / "diagnosis-case-v1.schema.json")
+        case_properties = schema["properties"]
+        feedback_properties = schema["$defs"]["feedback"]["properties"]
+        binding_sites = {
+            "case.outcomeEvidenceIds": "outcomeEvidenceIds" in case_properties,
+            "feedback.evidenceIds": "evidenceIds" in feedback_properties,
+        }
+
+        self.assertTrue(
+            any(binding_sites.values()),
+            "validated-effective and rolled-back outcomes have no field that "
+            f"can bind the result to evidence: {binding_sites}",
+        )
+
     def test_one_evidence_item_cannot_both_support_and_contradict_a_hypothesis(
         self,
     ) -> None:
