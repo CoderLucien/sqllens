@@ -1,0 +1,136 @@
+{
+  "name": "sqllens",
+  "services": {
+    "web-api": {
+      "build": {
+        "context": ".",
+        "dockerfile": "apps/api/Dockerfile"
+      },
+      "image": "${SQLLENS_IMAGE:-sqllens-web-api:dev}",
+      "command": [
+        "web-api"
+      ],
+      "init": true,
+      "restart": "unless-stopped",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "ports": [
+        "127.0.0.1:${SQLLENS_PORT:-8080}:8080"
+      ],
+      "environment": [
+        "SQLLENS_DATA_DIR=/data",
+        "SQLLENS_MODEL_CONTROLLER_URL=http://model-controller:8081"
+      ],
+      "volumes": [
+        "sqllens-data:/data"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=64m"
+      ],
+      "networks": [
+        "app",
+        "model-control"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
+        ],
+        "interval": "5s",
+        "timeout": "3s",
+        "retries": 24,
+        "start_period": "10s"
+      },
+      "cpus": "0.75",
+      "mem_limit": "1024m",
+      "pids_limit": 256,
+      "stop_grace_period": "30s"
+    },
+    "worker": {
+      "profiles": [
+        "async-runtime"
+      ],
+      "image": "${SQLLENS_IMAGE:-sqllens-web-api:dev}",
+      "command": [
+        "worker"
+      ],
+      "init": true,
+      "restart": "unless-stopped",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "environment": [
+        "SQLLENS_DATA_DIR=/data",
+        "SQLLENS_MODEL_CONTROLLER_URL=http://model-controller:8081",
+        "SQLLENS_WORKER_CONCURRENCY=1"
+      ],
+      "volumes": [
+        "sqllens-data:/data"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=256m"
+      ],
+      "networks": [
+        "app",
+        "model-control"
+      ],
+      "cpus": "1.0",
+      "mem_limit": "1536m",
+      "pids_limit": 256,
+      "stop_grace_period": "30s"
+    },
+    "model-controller": {
+      "profiles": [
+        "local-runtime"
+      ],
+      "image": "${SQLLENS_IMAGE:-sqllens-web-api:dev}",
+      "command": [
+        "model-controller"
+      ],
+      "init": true,
+      "restart": "unless-stopped",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "environment": [
+        "SQLLENS_MODEL_MODE=external-idle"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=64m"
+      ],
+      "networks": [
+        "model-control"
+      ],
+      "cpus": "0.25",
+      "mem_limit": "256m",
+      "pids_limit": 128,
+      "stop_grace_period": "15s"
+    }
+  },
+  "volumes": {
+    "sqllens-data": {
+      "name": "sqllens-data"
+    }
+  },
+  "networks": {
+    "app": {},
+    "model-control": {
+      "internal": true
+    }
+  }
+}
