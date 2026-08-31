@@ -37,6 +37,7 @@ Actions:
   check         Run a read-only preflight without changing application state.
   stop          Stop the application and retain its data volume.
   uninstall     Remove application containers and retain data by default.
+  recover-setup Reissue a local one-time code for an interrupted setup.
   diagnostics   Create a privacy-bounded diagnostic archive.
 
 Options:
@@ -60,7 +61,7 @@ compose() {
 parse_args() {
   if [ "$#" -gt 0 ]; then
     case "$1" in
-      start|check|stop|uninstall|diagnostics)
+      start|check|stop|uninstall|recover-setup|diagnostics)
         ACTION=$1
         shift
         ;;
@@ -230,6 +231,16 @@ run_preflight() {
   printf 'Preflight passed\n'
 }
 
+run_recovery_preflight() {
+  detect_platform
+  check_runtime
+  check_disk
+
+  printf 'Platform: %s/%s\n' "$PLATFORM" "$ARCH"
+  printf 'Docker: %s\n' "$DOCKER_VERSION"
+  printf 'Compose: %s\n' "$COMPOSE_VERSION"
+}
+
 release_start_lock() {
   [ "$LOCK_HELD" -eq 1 ] || return 0
   if [ -f "$LOCK_DIR/owner-pid" ]; then
@@ -384,6 +395,19 @@ create_or_reuse_bootstrap_secret() {
   create_bootstrap_secret
 }
 
+create_or_reuse_recovery_secret() {
+  if [ -e "$BOOTSTRAP_FILE" ] || [ -L "$BOOTSTRAP_FILE" ]; then
+    if [ -s "$BOOTSTRAP_FILE" ]; then
+      load_reusable_bootstrap_secret
+      return
+    fi
+    [ -f "$BOOTSTRAP_FILE" ] && [ ! -L "$BOOTSTRAP_FILE" ] ||
+      fail "retained recovery secret is not a regular file; run ./launch.sh diagnostics"
+  fi
+
+  create_bootstrap_secret
+}
+
 ingest_bootstrap_secret() {
   [ -n "$BOOTSTRAP_CODE" ] || return 0
   [ -f "$BOOTSTRAP_FILE" ] && [ ! -L "$BOOTSTRAP_FILE" ] && [ -s "$BOOTSTRAP_FILE" ] ||
@@ -509,9 +533,53 @@ start_action() {
   fi
 }
 
+require_existing_data_volume() {
+  docker volume inspect sqllens-data >/dev/null 2>&1 ||
+    fail "setup recovery requires the retained sqllens-data volume; run ./launch.sh start for a new installation"
+}
+
+reissue_bootstrap_secret() {
+  [ -n "$BOOTSTRAP_CODE" ] ||
+    fail "recovery secret generation failed; run ./launch.sh diagnostics"
+  [ -f "$BOOTSTRAP_FILE" ] && [ ! -L "$BOOTSTRAP_FILE" ] && [ -s "$BOOTSTRAP_FILE" ] ||
+    fail "recovery secret is unavailable for one-shot reissue; run ./launch.sh diagnostics"
+
+  if compose run --rm -T --no-deps web-api bootstrap-reissue < "$BOOTSTRAP_FILE"; then
+    HASH_PERSISTED=1
+    scrub_bootstrap_secret ||
+      fail "runtime reissued the bootstrap hash but the local 0600 secret could not be scrubbed"
+    HASH_PERSISTED=0
+    printf '\nNew one-time initialization code: %s\n' "$BOOTSTRAP_CODE"
+    printf 'Previous initialization codes and setup sessions are no longer valid.\n'
+    return
+  else
+    status=$?
+  fi
+
+  if [ "$status" -eq 73 ]; then
+    scrub_bootstrap_secret ||
+      fail "setup is finalized and the rejected local recovery secret could not be scrubbed"
+    BOOTSTRAP_CODE=
+    printf 'ERROR: setup is finalized; bootstrap recovery is unavailable.\n' >&2
+    exit 73
+  fi
+
+  fail "runtime rejected bootstrap recovery; the 0600 secret was retained for retry; run ./launch.sh diagnostics"
+}
+
+recover_setup_action() {
+  require_existing_data_volume
+  install_start_traps
+  acquire_start_lock
+  require_existing_data_volume
+  compose build web-api
+  create_or_reuse_recovery_secret
+  reissue_bootstrap_secret
+}
+
 stop_action() {
   compose down --remove-orphans
-  printf 'Application stopped. Data retained in Docker volume sqllens-data.\n'
+  printf 'Application stopped. Data and encrypted credentials retained in Docker volumes.\n'
 }
 
 uninstall_action() {
@@ -524,12 +592,12 @@ uninstall_action() {
     validate_purge_local_state
     compose down --remove-orphans --volumes --rmi local
     clear_purge_local_state
-    printf 'Application removed. Data volume removed by explicit request.\n'
+    printf 'Application removed. Data and credential volumes removed by explicit request.\n'
     return
   fi
 
   compose down --remove-orphans --rmi local
-  printf 'Application removed. Data retained in Docker volume sqllens-data.\n'
+  printf 'Application removed. Data and encrypted credentials retained in Docker volumes.\n'
 }
 
 validate_purge_file() {
@@ -586,8 +654,10 @@ diagnostics_action() {
       'name={{.Name}} image={{.Config.Image}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{end}} exit_code={{.State.ExitCode}}' \
       "$container_id" > "$bundle_dir/web-api-state.txt" 2>&1 || true
   fi
-  docker volume inspect --format 'name={{.Name}} driver={{.Driver}}' sqllens-data \
-    > "$bundle_dir/volume.txt" 2>&1 || true
+  {
+    docker volume inspect --format 'name={{.Name}} driver={{.Driver}}' sqllens-data 2>/dev/null || true
+    docker volume inspect --format 'name={{.Name}} driver={{.Driver}}' sqllens-secrets 2>/dev/null || true
+  } > "$bundle_dir/volumes.txt"
 
   chmod 600 "$bundle_dir"/*.txt
   tar -czf "$archive" -C "$diagnostics_root" "$bundle_name"
@@ -613,6 +683,10 @@ case "$ACTION" in
   uninstall)
     check_runtime
     uninstall_action
+    ;;
+  recover-setup)
+    run_recovery_preflight
+    recover_setup_action
     ;;
   diagnostics)
     diagnostics_action

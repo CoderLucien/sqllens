@@ -24,10 +24,12 @@
       ],
       "environment": [
         "SQLLENS_DATA_DIR=/data",
+        "SQLLENS_SECRETS_DIR=/secrets",
         "SQLLENS_MODEL_CONTROLLER_URL=http://model-controller:8081"
       ],
       "volumes": [
-        "sqllens-data:/data"
+        "sqllens-data:/data",
+        "sqllens-secrets:/secrets:rw"
       ],
       "tmpfs": [
         "/tmp:rw,noexec,nosuid,size=64m"
@@ -125,6 +127,9 @@
   "volumes": {
     "sqllens-data": {
       "name": "sqllens-data"
+    },
+    "sqllens-secrets": {
+      "name": "sqllens-secrets"
     }
   },
   "networks": {
