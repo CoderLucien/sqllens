@@ -225,7 +225,11 @@ class DiagnosisCaseContractTest(unittest.TestCase):
             self.validation.validate_case_semantics(case)
 
     def test_effect_outcome_enforces_approval_and_evidence_causal_order(self) -> None:
-        for scenario in ("approval_after_implementation", "evidence_before_implementation"):
+        for scenario in (
+            "approval_after_implementation",
+            "evidence_before_implementation",
+            "evidence_collected_before_observed",
+        ):
             with self.subTest(scenario=scenario):
                 case = copy.deepcopy(self.valid)
                 case["outcome"] = "validated_effective"
@@ -246,6 +250,9 @@ class DiagnosisCaseContractTest(unittest.TestCase):
                 if scenario == "evidence_before_implementation":
                     effect_evidence["observedAt"] = "2026-08-31T10:00:00.300Z"
                     effect_evidence["collectedAt"] = "2026-08-31T10:00:00.400Z"
+                elif scenario == "evidence_collected_before_observed":
+                    effect_evidence["observedAt"] = "2026-08-31T10:00:00.700Z"
+                    effect_evidence["collectedAt"] = "2026-08-31T10:00:00.600Z"
                 else:
                     effect_evidence["observedAt"] = "2026-08-31T10:00:00.600Z"
                     effect_evidence["collectedAt"] = "2026-08-31T10:00:00.700Z"
