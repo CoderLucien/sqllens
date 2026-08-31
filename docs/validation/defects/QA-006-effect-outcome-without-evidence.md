@@ -30,7 +30,7 @@ python3 -m unittest \
 ```
 
 Expected: the serialized contract has a machine-validatable outcome evidence
-binding.
+binding, omitting it is rejected, and dangling evidence IDs are rejected.
 
 Actual: neither `feedback.evidenceIds` nor `case.outcomeEvidenceIds` exists.
 

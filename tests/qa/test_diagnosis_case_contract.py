@@ -160,6 +160,35 @@ class DiagnosisCaseContractTest(unittest.TestCase):
             f"can bind the result to evidence: {binding_sites}",
         )
 
+        case = copy.deepcopy(self.valid)
+        case["outcome"] = "validated_effective"
+        implemented = copy.deepcopy(self.valid["feedback"][0])
+        implemented["feedbackId"] = "fb_0000000000000002"
+        implemented["kind"] = "implemented"
+        validated = copy.deepcopy(self.valid["feedback"][0])
+        validated["feedbackId"] = "fb_0000000000000003"
+        validated["kind"] = "validated"
+        case["feedback"] = [implemented, validated]
+
+        with self.assertRaisesRegex(ValueError, "evidence"):
+            self.validation.validate_references(case)
+            self.validation.validate_case_semantics(case)
+
+    def test_effect_outcome_rejects_dangling_evidence_binding(self) -> None:
+        case = copy.deepcopy(self.valid)
+        case["outcome"] = "validated_effective"
+        implemented = copy.deepcopy(self.valid["feedback"][0])
+        implemented["feedbackId"] = "fb_0000000000000002"
+        implemented["kind"] = "implemented"
+        validated = copy.deepcopy(self.valid["feedback"][0])
+        validated["feedbackId"] = "fb_0000000000000003"
+        validated["kind"] = "validated"
+        validated["evidenceIds"] = ["ev_ffffffffffffffff"]
+        case["feedback"] = [implemented, validated]
+
+        with self.assertRaisesRegex(ValueError, "evidence"):
+            self.validation.validate_references(case)
+
     def test_one_evidence_item_cannot_both_support_and_contradict_a_hypothesis(
         self,
     ) -> None:
