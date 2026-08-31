@@ -75,11 +75,14 @@ for release claims.
 | `SETUP-007` | E1 | Missing GPU/device disables local mode and returns an actionable restart prerequisite; no fabricated hardware result is stored. | `NOT_RUN` |
 | `SETUP-008` | E1 | Finalize is rejected until every mandatory step is complete; successful finalize atomically enables diagnosis APIs. | `NOT_RUN` |
 | `SETUP-009` | E1 | Switching provider revisions drains or cancels pinned jobs; completed cases retain original provider/model/prompt/policy/redaction revisions. | `NOT_RUN` |
+| `SETUP-010` | E1 | The application atomically persists only a verifier for `/run/secrets/bootstrap_code` before readiness; after the launcher clears the host secret, one bootstrap succeeds, replay/concurrent reuse/restart fails, and plaintext is absent from logs, environment, command line, data volume and diagnostic bundles. | `NOT_RUN` |
 | `DEPLOY-001` | E1 | Effective Compose configuration has an enforced aggregate 2 CPU/4 GiB budget and persists only documented volumes. | `NOT_RUN` |
 | `DEPLOY-002` | E1 | Base-mode pull/start downloads no local model weights and creates no weight volume content. | `NOT_RUN` |
 | `DEPLOY-003` | E1 | No application container mounts `/var/run/docker.sock`, a host root, or another broad host path; internal services publish no host ports. | `NOT_RUN` |
 | `DEPLOY-004` | E1 | Restart preserves finalized setup and cases, cleans orphaned temporary jobs, and does not reuse the bootstrap secret. | `NOT_RUN` |
 | `DEPLOY-005` | E0/E1 | Clean bootstrap, lint, typecheck, unit, integration, E2E, build and smoke commands are reproducible from lockfiles and pinned images. | `NOT_RUN` |
+| `DEPLOY-006` | E1 | The image entrypoint supports `migrate` and `web-api`; migration is idempotent and fail-closed, `web-api` listens on `0.0.0.0:8080`, and `GET /healthz` reports ready only after storage and the bootstrap verifier are usable without disclosing internals. | `NOT_RUN` |
+| `DEPLOY-007` | E1 | Base Compose starts no placeholder worker or model-controller; unavailable services are confined to non-default profiles, expose no host ports and remain visibly disabled rather than reported healthy. | `NOT_RUN` |
 
 ## Layer 1: SQL-Only Triage
 
