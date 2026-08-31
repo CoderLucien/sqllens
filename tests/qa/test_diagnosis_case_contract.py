@@ -192,6 +192,78 @@ class DiagnosisCaseContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "evidence"):
             self.validation.validate_references(case)
 
+    def test_effect_outcome_events_must_reference_the_same_recommendation(self) -> None:
+        case = copy.deepcopy(self.valid)
+        case["outcome"] = "validated_effective"
+        second_recommendation = copy.deepcopy(case["recommendations"][0])
+        second_recommendation["recommendationId"] = "rec_0000000000000002"
+        case["recommendations"].append(second_recommendation)
+
+        implemented = copy.deepcopy(self.valid["feedback"][0])
+        implemented["feedbackId"] = "fb_0000000000000002"
+        implemented["kind"] = "implemented"
+        implemented["createdAt"] = "2026-08-31T10:00:00.500Z"
+        implemented["recommendationId"] = "rec_0000000000000001"
+
+        effect_evidence = copy.deepcopy(self.valid["evidence"][0])
+        effect_evidence["evidenceId"] = "ev_0000000000000002"
+        effect_evidence["kind"] = "effect_metric_comparison"
+        effect_evidence["observedAt"] = "2026-08-31T10:00:00.600Z"
+        effect_evidence["collectedAt"] = "2026-08-31T10:00:00.700Z"
+        case["evidence"].append(effect_evidence)
+
+        validated = copy.deepcopy(self.valid["feedback"][0])
+        validated["feedbackId"] = "fb_0000000000000003"
+        validated["kind"] = "validated"
+        validated["createdAt"] = "2026-08-31T10:00:00.800Z"
+        validated["recommendationId"] = "rec_0000000000000002"
+        validated["evidenceIds"] = [effect_evidence["evidenceId"]]
+        case["feedback"] = [implemented, validated]
+
+        with self.assertRaisesRegex(ValueError, "recommendation|same"):
+            self.validation.validate_references(case)
+            self.validation.validate_case_semantics(case)
+
+    def test_effect_outcome_enforces_approval_and_evidence_causal_order(self) -> None:
+        for scenario in ("approval_after_implementation", "evidence_before_implementation"):
+            with self.subTest(scenario=scenario):
+                case = copy.deepcopy(self.valid)
+                case["outcome"] = "validated_effective"
+                case["reviews"][0]["createdAt"] = (
+                    "2026-08-31T10:00:00.900Z"
+                    if scenario == "approval_after_implementation"
+                    else "2026-08-31T10:00:00.200Z"
+                )
+
+                implemented = copy.deepcopy(self.valid["feedback"][0])
+                implemented["feedbackId"] = "fb_0000000000000002"
+                implemented["kind"] = "implemented"
+                implemented["createdAt"] = "2026-08-31T10:00:00.500Z"
+
+                effect_evidence = copy.deepcopy(self.valid["evidence"][0])
+                effect_evidence["evidenceId"] = "ev_0000000000000002"
+                effect_evidence["kind"] = "effect_metric_comparison"
+                if scenario == "evidence_before_implementation":
+                    effect_evidence["observedAt"] = "2026-08-31T10:00:00.300Z"
+                    effect_evidence["collectedAt"] = "2026-08-31T10:00:00.400Z"
+                else:
+                    effect_evidence["observedAt"] = "2026-08-31T10:00:00.600Z"
+                    effect_evidence["collectedAt"] = "2026-08-31T10:00:00.700Z"
+                case["evidence"].append(effect_evidence)
+
+                validated = copy.deepcopy(self.valid["feedback"][0])
+                validated["feedbackId"] = "fb_0000000000000003"
+                validated["kind"] = "validated"
+                validated["createdAt"] = "2026-08-31T10:00:00.800Z"
+                validated["evidenceIds"] = [effect_evidence["evidenceId"]]
+                case["feedback"] = [implemented, validated]
+
+                with self.assertRaisesRegex(
+                    ValueError, "approval|implemented|evidence|order"
+                ):
+                    self.validation.validate_references(case)
+                    self.validation.validate_case_semantics(case)
+
     def test_one_evidence_item_cannot_both_support_and_contradict_a_hypothesis(
         self,
     ) -> None:
