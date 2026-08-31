@@ -24,6 +24,7 @@ STABLE_FIELDS = (
     "sourceLayer",
     "inputFingerprint",
     "createdAt",
+    "pinnedRevisions",
 )
 
 
@@ -32,10 +33,13 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def validate_references(case: dict[str, Any]) -> None:
-    evidence_ids = {item["evidenceId"] for item in case["evidence"]}
-    recommendation_ids = {
-        item["recommendationId"] for item in case["recommendations"]
-    }
+    evidence_ids = require_unique_ids(case["evidence"], "evidenceId", "evidence")
+    require_unique_ids(case["hypotheses"], "hypothesisId", "hypothesis")
+    recommendation_ids = require_unique_ids(
+        case["recommendations"], "recommendationId", "recommendation"
+    )
+    require_unique_ids(case["reviews"], "reviewId", "review")
+    require_unique_ids(case["feedback"], "feedbackId", "feedback")
 
     for hypothesis in case["hypotheses"]:
         referenced = set(hypothesis["supportingEvidenceIds"])
@@ -66,6 +70,15 @@ def validate_references(case: dict[str, Any]) -> None:
             )
 
 
+def require_unique_ids(
+    records: list[dict[str, Any]], key: str, label: str
+) -> set[str]:
+    identifiers = [record[key] for record in records]
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError(f"duplicate {label} ID")
+    return set(identifiers)
+
+
 def validate_revision(previous: dict[str, Any], current: dict[str, Any]) -> None:
     if current["revision"] != previous["revision"] + 1:
         raise ValueError("revision must increase by exactly one")
@@ -94,6 +107,20 @@ def main() -> None:
     validator.validate(valid)
     validate_references(valid)
 
+    no_provenance = copy.deepcopy(valid)
+    no_provenance["recommendations"][0]["evidenceIds"] = []
+    assert any(
+        error.validator == "minItems"
+        for error in validator.iter_errors(no_provenance)
+    )
+
+    missing_model_pin = copy.deepcopy(valid)
+    del missing_model_pin["pinnedRevisions"]["model"]
+    assert any(
+        error.validator == "required" and "model" in error.message
+        for error in validator.iter_errors(missing_model_pin)
+    )
+
     missing_owner = load_json(
         EXAMPLES / "diagnosis-case-v1.invalid-missing-owner.json"
     )
@@ -113,6 +140,28 @@ def main() -> None:
         pass
     else:
         raise AssertionError("dangling references must fail domain validation")
+
+    duplicate_evidence = copy.deepcopy(valid)
+    duplicate_evidence["evidence"].append(copy.deepcopy(valid["evidence"][0]))
+    try:
+        validate_references(duplicate_evidence)
+    except ValueError as error:
+        assert "duplicate evidence" in str(error)
+    else:
+        raise AssertionError("duplicate evidence IDs must fail domain validation")
+
+    duplicate_recommendation = copy.deepcopy(valid)
+    duplicate_recommendation["recommendations"].append(
+        copy.deepcopy(valid["recommendations"][0])
+    )
+    try:
+        validate_references(duplicate_recommendation)
+    except ValueError as error:
+        assert "duplicate recommendation" in str(error)
+    else:
+        raise AssertionError(
+            "duplicate recommendation IDs must fail domain validation"
+        )
 
     next_revision = copy.deepcopy(valid)
     next_revision["revision"] = 2
@@ -143,6 +192,15 @@ def main() -> None:
         pass
     else:
         raise AssertionError("mutating prior records must fail revision validation")
+
+    mutated_pin = copy.deepcopy(next_revision)
+    mutated_pin["pinnedRevisions"]["policy"] = "policy/tampered"
+    try:
+        validate_revision(valid, mutated_pin)
+    except ValueError as error:
+        assert "pinnedRevisions" in str(error)
+    else:
+        raise AssertionError("pinned revisions must be immutable")
 
     print("contract fixtures passed")
 
