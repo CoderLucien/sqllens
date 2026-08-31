@@ -136,7 +136,10 @@ unverified until separately tested.
 - validated-effective and rolled-back results bound to immutable effect
   evidence IDs, not only user comments or process milestones; approval,
   implementation, effect evidence, and terminal feedback must reference the
-  same recommendation and preserve causal time order.
+  same recommendation and preserve causal time order;
+- pre-freeze imports identify their contract revision through trusted bundle
+  metadata; ambiguous legacy rollback records are normalized without
+  downgrading a current evidence-backed rollback.
 
 The two state fields are independently stored but not freely mutable. The legal
 workflow/outcome transitions, cross-field prerequisites, and atomic review or

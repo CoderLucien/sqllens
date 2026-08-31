@@ -83,6 +83,14 @@ LEGACY_DRAFT_OUTCOME_ALIASES = {
     "implemented": "pending",
     "validated": "pending",
 }
+LEGACY_DRAFT_SOURCE_1C3C271 = "diagnosis-case/v1@1c3c271"
+CURRENT_CONTRACT_SOURCE = "diagnosis-case/v1@business-outcomes-v1"
+LEGACY_DRAFT_SOURCE_MIGRATIONS = {
+    LEGACY_DRAFT_SOURCE_1C3C271: {
+        **LEGACY_DRAFT_OUTCOME_ALIASES,
+        "rolled_back": "pending",
+    }
+}
 OUTCOME_EVIDENCE_KINDS = {
     "validated_effective": {"effect_metric_comparison"},
     "rolled_back": {"effect_metric_comparison", "rollback_confirmation"},
@@ -122,11 +130,27 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def migrate_legacy_draft_outcome(case: dict[str, Any]) -> dict[str, Any]:
+def migrate_legacy_draft_outcome(
+    case: dict[str, Any], *, source_contract_revision: str
+) -> dict[str, Any]:
     migrated = copy.deepcopy(case)
-    migrated["outcome"] = LEGACY_DRAFT_OUTCOME_ALIASES.get(
-        case["outcome"], case["outcome"]
-    )
+    if source_contract_revision == CURRENT_CONTRACT_SOURCE:
+        return migrated
+
+    aliases = LEGACY_DRAFT_SOURCE_MIGRATIONS.get(source_contract_revision)
+    if aliases is None:
+        raise ValueError(
+            f"unsupported source contract revision: {source_contract_revision}"
+        )
+    if case.get("schemaVersion") != "diagnosis-case/v1":
+        raise ValueError("legacy draft migration requires diagnosis-case/v1")
+    try:
+        migrated["outcome"] = aliases[case["outcome"]]
+    except KeyError as error:
+        raise ValueError(
+            "source contract contains an unsupported legacy outcome: "
+            f"{case.get('outcome')!r}"
+        ) from error
     return migrated
 
 
@@ -243,17 +267,21 @@ def legacy_case_for_outcome(valid: dict[str, Any], outcome: str) -> dict[str, An
         case["reviews"].append(
             review_record(valid, "rejected", 1, "2026-08-31T10:00:01Z")
         )
-    elif outcome in {"accepted", "implemented", "validated"}:
+    elif outcome in {"accepted", "implemented", "validated", "rolled_back"}:
         case["reviews"].append(
             review_record(valid, "approved", 1, "2026-08-31T10:00:01Z")
         )
-    if outcome in {"implemented", "validated"}:
+    if outcome in {"implemented", "validated", "rolled_back"}:
         case["feedback"].append(
             feedback_record(valid, "implemented", 1, "2026-08-31T10:00:01Z")
         )
     if outcome == "validated":
         case["feedback"].append(
             feedback_record(valid, "validated", 2, "2026-08-31T10:00:01Z")
+        )
+    elif outcome == "rolled_back":
+        case["feedback"].append(
+            feedback_record(valid, "rolled_back", 2, "2026-08-31T10:00:01Z")
         )
     return case
 
@@ -574,6 +602,13 @@ def main() -> None:
         schema["properties"]["outcome"]["x-legacyDraftAliases"]
         == LEGACY_DRAFT_OUTCOME_ALIASES
     )
+    assert schema["properties"]["outcome"]["x-legacyDraftSources"] == {
+        LEGACY_DRAFT_SOURCE_1C3C271: {
+            "outcomeAliases": LEGACY_DRAFT_SOURCE_MIGRATIONS[
+                LEGACY_DRAFT_SOURCE_1C3C271
+            ]
+        }
+    }
     assert set(WORKFLOW_TRANSITIONS) == workflow_states
     assert set().union(*WORKFLOW_TRANSITIONS.values()) == workflow_states
     assert set(OUTCOME_TRANSITIONS) == outcome_states
@@ -589,12 +624,52 @@ def main() -> None:
     for legacy_outcome, expected_outcome in LEGACY_DRAFT_OUTCOME_ALIASES.items():
         legacy = legacy_case_for_outcome(valid, legacy_outcome)
         assert any(error.validator == "enum" for error in validator.iter_errors(legacy))
-        migrated = migrate_legacy_draft_outcome(legacy)
+        migrated = migrate_legacy_draft_outcome(
+            legacy, source_contract_revision=LEGACY_DRAFT_SOURCE_1C3C271
+        )
         assert legacy["outcome"] == legacy_outcome
         assert migrated["outcome"] == expected_outcome
         validator.validate(migrated)
         validate_references(migrated)
         validate_case_semantics(migrated)
+
+    legacy_rolled_back = load_json(
+        EXAMPLES / "diagnosis-case-v1.legacy-1c3c271-rolled-back.json"
+    )
+    validator.validate(legacy_rolled_back)
+    validate_references(legacy_rolled_back)
+    expect_value_error(
+        lambda: validate_case_semantics(legacy_rolled_back),
+        "same recommendation",
+    )
+    migrated_legacy_rollback = migrate_legacy_draft_outcome(
+        legacy_rolled_back,
+        source_contract_revision=LEGACY_DRAFT_SOURCE_1C3C271,
+    )
+    assert legacy_rolled_back["outcome"] == "rolled_back"
+    assert migrated_legacy_rollback["outcome"] == "pending"
+    validator.validate(migrated_legacy_rollback)
+    validate_references(migrated_legacy_rollback)
+    validate_case_semantics(migrated_legacy_rollback)
+
+    current_rolled_back = case_for_outcome(valid, "rolled_back")
+    preserved_current_rollback = migrate_legacy_draft_outcome(
+        current_rolled_back,
+        source_contract_revision=CURRENT_CONTRACT_SOURCE,
+    )
+    assert preserved_current_rollback == current_rolled_back
+    assert preserved_current_rollback is not current_rolled_back
+    validator.validate(preserved_current_rollback)
+    validate_references(preserved_current_rollback)
+    validate_case_semantics(preserved_current_rollback)
+
+    expect_value_error(
+        lambda: migrate_legacy_draft_outcome(
+            legacy_rolled_back,
+            source_contract_revision="diagnosis-case/v1@unknown",
+        ),
+        "unsupported source contract revision",
+    )
 
     no_provenance = copy.deepcopy(valid)
     no_provenance["recommendations"][0]["evidenceIds"] = []

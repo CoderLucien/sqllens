@@ -45,6 +45,18 @@
         "rejected": "pending",
         "implemented": "pending",
         "validated": "pending"
+      },
+      "x-legacyDraftSources": {
+        "diagnosis-case/v1@1c3c271": {
+          "outcomeAliases": {
+            "not_reviewed": "pending",
+            "accepted": "pending",
+            "rejected": "pending",
+            "implemented": "pending",
+            "validated": "pending",
+            "rolled_back": "pending"
+          }
+        }
       }
     },
     "inputFingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },

@@ -10,6 +10,9 @@ The examples serve different assertions:
 - `examples/diagnosis-case-v1.invalid-reference.json` must pass JSON Schema but
   fail domain validation because it contains dangling evidence/recommendation
   references.
+- `examples/diagnosis-case-v1.legacy-1c3c271-rolled-back.json` is a real
+  pre-freeze rollback shape accepted by the `1c3c271` contract and must import
+  as `pending`, not as a current evidence-backed rollback result.
 
 Run the local contract check with:
 
@@ -113,19 +116,27 @@ observation time.
 
 No P0 release persisted the earlier draft outcome vocabulary. For checked-in
 draft artifacts and test data, `migrate_legacy_draft_outcome()` performs a
-non-mutating import normalization before current-schema validation:
+non-mutating import normalization before current-schema validation. The caller
+must pass a trusted `source_contract_revision`; it comes from controlled bundle
+metadata or import configuration, never from an untrusted field in the case.
+Unknown sources fail closed.
 
-| Legacy draft value | Current value |
-| --- | --- |
-| `not_reviewed` | `pending` |
-| `accepted` | `pending` |
-| `rejected` | `pending` |
-| `implemented` | `pending` |
-| `validated` | `pending` |
+| Source contract | Legacy draft value | Current value |
+| --- | --- | --- |
+| `diagnosis-case/v1@1c3c271` | `not_reviewed` | `pending` |
+| `diagnosis-case/v1@1c3c271` | `accepted` | `pending` |
+| `diagnosis-case/v1@1c3c271` | `rejected` | `pending` |
+| `diagnosis-case/v1@1c3c271` | `implemented` | `pending` |
+| `diagnosis-case/v1@1c3c271` | `validated` | `pending` |
+| `diagnosis-case/v1@1c3c271` | `rolled_back` | `pending` |
 
 Reviews and feedback remain intact, so approval and implementation history is
 not lost. Process-only values are deliberately absent from the current enum and
-cannot be written by a current client. This adapter is for pre-freeze import,
+cannot be written by a current client. The old and current contracts both use
+`rolled_back`, but only the current value proves an effect-evidence causal
+chain, so it is downgraded only when the trusted source is exactly `1c3c271`.
+Passing `diagnosis-case/v1@business-outcomes-v1` is an identity operation and
+must preserve a current valid rollback. This adapter is for pre-freeze import,
 not permission to rewrite persisted revisions; any migration after a release
 must create an explicit audited revision.
 
