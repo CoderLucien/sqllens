@@ -285,6 +285,10 @@ Official references:
   [QA-006](defects/QA-006-effect-outcome-without-evidence.md) - effective and
   rolled-back business outcomes have no machine-validatable link to result
   evidence.
+- `CASE-006`, `CASE-007`:
+  [QA-007](defects/QA-007-effect-outcome-causality.md) - approval,
+  implementation, result evidence and terminal feedback can refer to different
+  recommendations or occur out of causal order.
 
 These are contract-level failures. Product API/database validation remains
 `NOT_RUN` until an executable runtime slice exists.
