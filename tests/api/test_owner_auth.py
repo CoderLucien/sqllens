@@ -146,7 +146,8 @@ def test_finalize_creates_owner_and_all_product_apis_default_to_authenticated(
         headers={"Idempotency-Key": "owner-case", "X-CSRF-Token": str(owner_csrf)},
         json={"sql": "SELECT 1"},
     )
-    assert authorized.status_code == 501
+    assert authorized.status_code == 202
+    assert authorized.json()["status"] == "completed"
 
 
 def test_login_is_generic_rate_limited_and_recovers_after_the_window(

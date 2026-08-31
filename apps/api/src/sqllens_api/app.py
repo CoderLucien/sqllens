@@ -15,6 +15,15 @@ from starlette.responses import Response
 
 from sqllens_api.config import Settings
 from sqllens_api.credentials import CredentialUnavailableError, CredentialVault
+from sqllens_api.diagnosis import (
+    DiagnosisStore,
+    IdempotencyConflictError,
+    SqlDiagnosisError,
+    build_case,
+    parse_sql_structure,
+    request_fingerprint,
+    validate_idempotency_key,
+)
 from sqllens_api.errors import ApiError, error_response
 from sqllens_api.provider import (
     HttpxProviderGateway,
@@ -89,6 +98,11 @@ class LoginInput(BaseModel):
     password: SecretStr = Field(min_length=1, max_length=128)
 
 
+class SqlCaseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sql: str
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -118,6 +132,7 @@ def create_app(
     signer = SetupSessionSigner(runtime_settings)
     gateway = provider_gateway or HttpxProviderGateway()
     vault = CredentialVault(runtime_settings.credential_key_path)
+    diagnosis_store = DiagnosisStore(store.engine)
 
     app = FastAPI(
         title="SQLLens P0 API",
@@ -244,13 +259,17 @@ def create_app(
                 "This setup operation is not valid in the current stage.",
             )
 
+    def require_owner_auth(request: Request) -> str:
+        token = current_owner_token(request)
+        if token is None:
+            raise ApiError(401, "AUTH_REQUIRED", "Owner authentication is required.")
+        return token
+
     def require_owner_session(
         request: Request,
         x_csrf_token: Annotated[str | None, Header()] = None,
     ) -> str:
-        token = current_owner_token(request)
-        if token is None:
-            raise ApiError(401, "AUTH_REQUIRED", "Owner authentication is required.")
+        token = require_owner_auth(request)
         if not signer.verify_csrf(token, x_csrf_token):
             raise ApiError(403, "CSRF_INVALID", "The owner request could not be verified.")
         return token
@@ -646,13 +665,68 @@ def create_app(
 
     @app.post("/api/v1/cases/sql")
     async def create_sql_case(
+        payload: SqlCaseInput,
         _owner: Annotated[str, Depends(require_owner_session)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> Response:
-        raise ApiError(
-            501,
-            "FEATURE_NOT_IMPLEMENTED",
-            "SQL diagnosis is not part of this runtime checkpoint.",
+        try:
+            safe_idempotency_key = validate_idempotency_key(idempotency_key)
+            structure = parse_sql_structure(payload.sql)
+        except SqlDiagnosisError as error:
+            raise ApiError(error.status_code, error.code, error.message) from error
+
+        snapshot = store.snapshot()
+        provider = "openai-compatible" if snapshot.model_mode == "external" else None
+        model = snapshot.provider_model if snapshot.model_mode == "external" else None
+        explanation = {"status": "not_requested", "code": None}
+        if snapshot.model_mode == "external" and not provider_credential_available():
+            explanation = {
+                "status": "degraded",
+                "code": "MODEL_CREDENTIAL_UNAVAILABLE",
+            }
+        case_payload = build_case(
+            sql=payload.sql,
+            structure=structure,
+            now=clock(),
+            provider=provider,
+            model=model,
         )
+        fingerprint = request_fingerprint(payload.sql)
+        try:
+            job = diagnosis_store.create_or_get(
+                idempotency_key=safe_idempotency_key,
+                fingerprint=fingerprint,
+                case_payload=case_payload,
+                explanation=explanation,
+                now=clock(),
+            )
+        except IdempotencyConflictError:
+            raise ApiError(
+                409,
+                "IDEMPOTENCY_KEY_CONFLICT",
+                "The Idempotency-Key was already used for another request.",
+            ) from None
+        return JSONResponse(status_code=202, content=job)
+
+    @app.get("/api/v1/jobs/{job_id}")
+    async def get_job(
+        job_id: str,
+        _owner: Annotated[str, Depends(require_owner_auth)],
+    ) -> Response:
+        job = diagnosis_store.get_job(job_id)
+        if job is None:
+            raise ApiError(404, "JOB_NOT_FOUND", "The diagnosis job was not found.")
+        return JSONResponse(content=job)
+
+    @app.get("/api/v1/cases/{case_id}")
+    async def get_case(
+        case_id: str,
+        _owner: Annotated[str, Depends(require_owner_auth)],
+    ) -> Response:
+        case_payload = diagnosis_store.get_case(case_id)
+        if case_payload is None:
+            raise ApiError(404, "CASE_NOT_FOUND", "The diagnosis case was not found.")
+        return JSONResponse(content=case_payload)
 
     web_dist = runtime_settings.web_dist_dir
     if isinstance(web_dist, Path) and (web_dist / "index.html").is_file():
