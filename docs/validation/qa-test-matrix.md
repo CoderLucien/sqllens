@@ -167,7 +167,7 @@ strict read-only or zero-impact.
 | `CASE-001` | E1/E2/E3 | All three paths produce the same versioned DiagnosisCase schema and immutable revisions. | `NOT_RUN` |
 | `CASE-002` | E1/E2/E3 | Every conclusion and recommendation references existing evidence IDs; fabricated/dangling IDs are rejected. | `FAIL` |
 | `CASE-003` | E1/E2/E3 | Supporting and contradicting evidence remain distinct; confidence and completeness are independent bounded fields. | `FAIL` |
-| `CASE-004` | E1/E2/E3 | Insufficient or contradictory evidence produces an abstention with minimum next evidence, not a generic recommendation. | `NOT_RUN` |
+| `CASE-004` | E1/E2/E3 | Insufficient or contradictory evidence produces an abstention with minimum next evidence, not a generic recommendation. | `FAIL` |
 | `CASE-005` | E1/E2/E3 | Recommendation includes risk, prerequisites, owner, validation and rollback; no API executes recommendations or production changes. | `NOT_RUN` |
 | `CASE-006` | E1/E2/E3 | Evidence/provider/prompt/policy/redaction revisions and input fingerprints are retained across review and outcome changes. | `FAIL` |
 | `CASE-007` | E1/E2/E3 | Allowed terminal outcome is separate from workflow status and is one of validated-effective, rolled-back, evidence-insufficient, or risk-accepted. | `FAIL` |
@@ -289,6 +289,9 @@ Official references:
   [QA-007](defects/QA-007-effect-outcome-causality.md) - approval,
   implementation, result evidence and terminal feedback can refer to different
   recommendations or occur out of causal order.
+- `CASE-002`, `CASE-003`, `CASE-004`:
+  [QA-008](defects/QA-008-decided-hypothesis-without-evidence.md) - favored and
+  rejected hypotheses can be persisted without evidence for their polarity.
 
 These are contract-level failures. Product API/database validation remains
 `NOT_RUN` until an executable runtime slice exists.
