@@ -120,7 +120,9 @@ class DiagnosisCaseContractTest(unittest.TestCase):
 
     def test_outcome_contract_can_represent_all_approved_terminal_states(self) -> None:
         schema = load_json(CONTRACT_DIR / "diagnosis-case-v1.schema.json")
-        actual = set(schema["properties"]["outcome"]["enum"])
+        outcome_schema = schema["properties"]["outcome"]
+        actual = set(outcome_schema["enum"])
+        legacy_read_only = set(outcome_schema.get("x-legacyReadOnlyValues", []))
         required = {
             "validated_effective",
             "rolled_back",
@@ -129,13 +131,18 @@ class DiagnosisCaseContractTest(unittest.TestCase):
         }
         process_only = {"accepted", "rejected", "implemented", "validated"}
         missing = required - actual
-        leaked_process_states = process_only & actual
+        unclassified_process_states = (process_only & actual) - legacy_read_only
+        transition_targets = set().union(
+            *self.validation.OUTCOME_TRANSITIONS.values()
+        )
+        writable_legacy_states = legacy_read_only & transition_targets
 
         self.assertFalse(
-            missing or leaked_process_states,
+            missing or unclassified_process_states or writable_legacy_states,
             "DiagnosisCase outcome does not match the approved business-result "
             f"boundary: missing={sorted(missing)}, "
-            f"process_states={sorted(leaked_process_states)}",
+            f"unclassified_process_states={sorted(unclassified_process_states)}, "
+            f"writable_legacy_states={sorted(writable_legacy_states)}",
         )
 
     def test_one_evidence_item_cannot_both_support_and_contradict_a_hypothesis(

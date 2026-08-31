@@ -49,6 +49,8 @@ implementation process states still present in the outcome field.
 
 Before contract freeze, product/domain owners must define outcome names,
 transitions and prerequisites that preserve all four approved results. QA does
-not prescribe whether interim review/implementation milestones remain in this
-field or move entirely to their existing review/feedback records, but every
-completed case must be unambiguous and machine-validatable.
+not require deleting legacy values needed to read an older case, but every
+review/implementation process value retained in the schema must be explicitly
+classified as read-only legacy and excluded from all new revision transition
+targets. New cases and completed cases must use the unambiguous business-result
+states, with process events in their dedicated review/feedback records.
