@@ -162,6 +162,86 @@ class ReleaseBuilderTest(unittest.TestCase):
         self.assertFalse(any("node_modules" in name for name in names))
         self.assertFalse(any("/.git/" in name for name in names))
 
+    def test_end_user_archive_replaces_developer_make_targets_with_bounded_smoke(
+        self,
+    ) -> None:
+        result = self._build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cli_archive = self.output / "sqllens-0.1.0-dev.1-source.tar.gz"
+
+        with tarfile.open(cli_archive, "r:gz") as archive:
+            members = {member.name: member for member in archive.getmembers()}
+            prefix = "sqllens-0.1.0-dev.1"
+            smoke_name = f"{prefix}/release-smoke.sh"
+            notes_name = f"{prefix}/RELEASE-NOTES.txt"
+            self.assertIn(smoke_name, members)
+            self.assertTrue(members[smoke_name].mode & 0o111)
+            self.assertNotIn(f"{prefix}/Makefile", members)
+            self.assertFalse(any("/tests/" in name for name in members))
+            notes_stream = archive.extractfile(members[notes_name])
+            if notes_stream is None:
+                self.fail("release notes are not a regular archive member")
+            notes = notes_stream.read().decode()
+
+        for command in (
+            "shasum -a 256 -c SHA256SUMS",
+            "sha256sum -c SHA256SUMS",
+            "./launch.sh check",
+            "./launch.sh recover-setup",
+            "./launch.sh diagnostics",
+            "./release-smoke.sh",
+            "./launch.sh uninstall --purge-data",
+        ):
+            self.assertIn(command, notes)
+        self.assertIn("sqllens-secrets", notes)
+        self.assertIn("unverified", notes.lower())
+
+    def test_release_smoke_checks_only_bounded_local_runtime_state(self) -> None:
+        result = self._build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cli_archive = self.output / "sqllens-0.1.0-dev.1-source.tar.gz"
+        extracted = self.temp / "extracted"
+        with tarfile.open(cli_archive, "r:gz") as archive:
+            archive.extractall(extracted, filter="data")
+        release = extracted / "sqllens-0.1.0-dev.1"
+        fake_bin = self.temp / "fake-bin"
+        fake_bin.mkdir()
+        docker_log = self.temp / "docker.log"
+        docker = fake_bin / "docker"
+        docker.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$*\" >> {docker_log}\n"
+            'case "$*" in\n'
+            "  *\" ps -q web-api\") printf '%s\\n' container-id ;;\n"
+            "  \"inspect --format {{.State.Running}} container-id\") printf '%s\\n' true ;;\n"
+            "  \"inspect --format {{.State.Health.Status}} container-id\") printf '%s\\n' healthy ;;\n"
+            '  "exec container-id python -c "*) exit 0 ;;\n'
+            "esac\n"
+        )
+        docker.chmod(0o755)
+        environment = os.environ.copy()
+        environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+
+        smoke = subprocess.run(
+            [str(release / "release-smoke.sh")],
+            cwd=release,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(smoke.returncode, 0, smoke.stderr)
+        self.assertIn("Release smoke passed", smoke.stdout)
+        commands = docker_log.read_text()
+        self.assertIn("ps -q web-api", commands)
+        self.assertIn(".State.Running", commands)
+        self.assertIn(".State.Health.Status", commands)
+        self.assertIn("/healthz", commands)
+        self.assertIn("/api/v1/setup/status", commands)
+        self.assertNotIn("logs", commands)
+        self.assertNotIn("env", commands)
+
     def test_build_is_reproducible_with_source_date_epoch(self) -> None:
         first_output = self.temp / "first"
         second_output = self.temp / "second"
