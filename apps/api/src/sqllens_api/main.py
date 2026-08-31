@@ -26,6 +26,7 @@ def ingest_bootstrap_stdin(
     stream: BinaryIO,
     *,
     now: datetime | None = None,
+    replace_existing: bool = False,
 ) -> bool:
     raw = stream.read(_MAX_BOOTSTRAP_INPUT_BYTES + 1)
     if len(raw) > _MAX_BOOTSTRAP_INPUT_BYTES:
@@ -36,26 +37,38 @@ def ingest_bootstrap_stdin(
         raise ValueError("bootstrap input must be ASCII") from error
     if not _BOOTSTRAP_INPUT_PATTERN.fullmatch(code):
         raise ValueError("bootstrap input has an invalid format")
-    return SetupStore(settings).ingest_bootstrap_code(code, now or datetime.now(UTC))
+    store = SetupStore(settings)
+    timestamp = now or datetime.now(UTC)
+    if replace_existing:
+        return store.reissue_bootstrap_code(code, timestamp)
+    return store.ingest_bootstrap_code(code, timestamp)
 
 
 def cli() -> None:
     parser = argparse.ArgumentParser(prog="sqllens-runtime")
     parser.add_argument(
         "command",
-        choices=("web-api", "migrate", "bootstrap-ingest"),
+        choices=("web-api", "migrate", "bootstrap-ingest", "bootstrap-reissue"),
         nargs="?",
         default="web-api",
     )
     args = parser.parse_args()
-    if args.command == "bootstrap-ingest":
+    if args.command in {"bootstrap-ingest", "bootstrap-reissue"}:
         try:
-            created = ingest_bootstrap_stdin(Settings(), sys.stdin.buffer)
+            created = ingest_bootstrap_stdin(
+                Settings(),
+                sys.stdin.buffer,
+                replace_existing=args.command == "bootstrap-reissue",
+            )
         except ValueError:
             print("Bootstrap input is invalid.", file=sys.stderr)
             raise SystemExit(64) from None
+        if args.command == "bootstrap-reissue" and not created:
+            print("Setup is finalized; bootstrap recovery is unavailable.", file=sys.stderr)
+            raise SystemExit(73)
         if created:
-            print("Bootstrap hash persisted.")
+            action = "reissued" if args.command == "bootstrap-reissue" else "persisted"
+            print(f"Bootstrap hash {action}.")
         else:
             print("Bootstrap hash already persisted.")
         return

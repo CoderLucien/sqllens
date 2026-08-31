@@ -245,6 +245,129 @@ def test_expired_bootstrap_code_fails_with_a_generic_error(
     assert "expired" not in response.text.lower()
 
 
+def run_bootstrap_command(
+    settings: Settings,
+    command: str,
+    code: str,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "sqllens_api.main", command],
+        input=f"{code}\n",
+        capture_output=True,
+        check=False,
+        env={**os.environ, "SQLLENS_DATA_DIR": str(settings.data_dir)},
+        text=True,
+    )
+
+
+def test_local_reissue_recovers_expired_or_attempt_limited_codes(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    old_code = issue_bootstrap_code(settings, now=clock())
+    clock.advance(seconds=settings.bootstrap_ttl_seconds + 1)
+    expired_client = TestClient(create_app(settings=settings, clock=clock))
+    assert expired_client.post(
+        "/api/v1/setup/bootstrap", json={"code": old_code}
+    ).status_code == 401
+    assert expired_client.get("/api/v1/setup/status").json()["recovery"] == {
+        "required": True,
+        "action": "bootstrap-reissue",
+        "reason": "bootstrap_expired",
+    }
+
+    replacement = "WXYZ-2345-6789-ABCD"
+    reissued = run_bootstrap_command(settings, "bootstrap-reissue", replacement)
+    assert reissued.returncode == 0
+    assert replacement not in reissued.stdout + reissued.stderr
+    recovered = TestClient(create_app(settings=settings, clock=clock))
+    assert recovered.post(
+        "/api/v1/setup/bootstrap", json={"code": old_code}
+    ).status_code == 401
+    assert recovered.post(
+        "/api/v1/setup/bootstrap", json={"code": replacement}
+    ).status_code == 200
+
+    locked_settings = Settings(data_dir=settings.data_dir.parent / "locked")
+    locked_code = issue_bootstrap_code(locked_settings, now=clock())
+    locked_client = TestClient(create_app(settings=locked_settings, clock=clock))
+    for _ in range(locked_settings.bootstrap_max_attempts):
+        assert locked_client.post(
+            "/api/v1/setup/bootstrap", json={"code": "WRONG-CODE-2345"}
+        ).status_code == 401
+    status = locked_client.get("/api/v1/setup/status").json()
+    assert status["recovery"]["reason"] == "attempt_limit_reached"
+    assert run_bootstrap_command(
+        locked_settings, "bootstrap-reissue", replacement
+    ).returncode == 0
+    after_reissue = TestClient(create_app(settings=locked_settings, clock=clock))
+    assert after_reissue.post(
+        "/api/v1/setup/bootstrap", json={"code": locked_code}
+    ).status_code == 401
+    assert after_reissue.post(
+        "/api/v1/setup/bootstrap", json={"code": replacement}
+    ).status_code == 200
+
+
+def test_reissue_after_cookie_loss_resets_partial_setup_and_invalidates_old_session(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(create_app(settings=settings, clock=clock))
+    old_code, old_csrf = bootstrap_session(client, settings, clock)
+    sessionless = TestClient(create_app(settings=settings, clock=clock))
+    assert sessionless.get("/api/v1/setup/status").json()["recovery"] == {
+        "required": True,
+        "action": "bootstrap-reissue",
+        "reason": "setup_session_missing",
+    }
+
+    replacement = "WXYZ-2345-6789-ABCD"
+    assert run_bootstrap_command(settings, "bootstrap-reissue", replacement).returncode == 0
+    stale_session = client.put(
+        "/api/v1/setup/security-policy",
+        headers={"X-CSRF-Token": old_csrf},
+        json={"external_model_egress": False, "allowed_provider_hosts": []},
+    )
+    assert stale_session.status_code == 401
+    assert stale_session.json()["error"]["code"] == "SETUP_SESSION_REQUIRED"
+
+    restarted = TestClient(create_app(settings=settings, clock=clock))
+    assert restarted.post(
+        "/api/v1/setup/bootstrap", json={"code": old_code}
+    ).status_code == 401
+    assert restarted.post(
+        "/api/v1/setup/bootstrap", json={"code": replacement}
+    ).status_code == 200
+
+
+def test_reissue_fails_closed_after_setup_is_finalized(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(create_app(settings=settings, clock=clock))
+    _, csrf = bootstrap_session(client, settings, clock)
+    assert client.put(
+        "/api/v1/setup/security-policy",
+        headers={"X-CSRF-Token": csrf},
+        json={"external_model_egress": False, "allowed_provider_hosts": []},
+    ).status_code == 200
+    assert client.post(
+        "/api/v1/setup/finalize",
+        headers={"X-CSRF-Token": csrf},
+        json={"mode": "rules"},
+    ).status_code == 200
+
+    replacement = "WXYZ-2345-6789-ABCD"
+    refused = run_bootstrap_command(settings, "bootstrap-reissue", replacement)
+
+    assert refused.returncode == 73
+    assert replacement not in refused.stdout + refused.stderr
+    assert TestClient(create_app(settings=settings, clock=clock)).get(
+        "/api/v1/setup/status"
+    ).json()["state"] == "ready"
+
+
 def test_setup_mutations_require_session_and_csrf(
     settings: Settings,
     clock: MutableClock,

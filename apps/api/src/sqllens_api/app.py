@@ -164,7 +164,11 @@ def create_app(
         x_csrf_token: Annotated[str | None, Header()] = None,
     ) -> str:
         cookie = request.cookies.get(SETUP_COOKIE_NAME)
-        token = signer.verify(cookie, clock()) if cookie else None
+        token = (
+            signer.verify(cookie, clock(), expected_epoch=store.snapshot().setup_epoch)
+            if cookie
+            else None
+        )
         if token is None:
             raise ApiError(
                 401,
@@ -198,13 +202,34 @@ def create_app(
     async def setup_status(request: Request) -> dict[str, object]:
         snapshot = store.snapshot()
         cookie = request.cookies.get(SETUP_COOKIE_NAME)
-        session_token = signer.verify(cookie, clock()) if cookie else None
+        session_token = (
+            signer.verify(cookie, clock(), expected_epoch=snapshot.setup_epoch)
+            if cookie
+            else None
+        )
+        now_value = clock().astimezone(UTC).timestamp()
+        recovery_reason: str | None = None
+        if not snapshot.initialized and snapshot.stage == "bootstrap_required":
+            if (
+                snapshot.bootstrap_expires_at is not None
+                and snapshot.bootstrap_expires_at < now_value
+            ):
+                recovery_reason = "bootstrap_expired"
+            elif snapshot.bootstrap_failed_attempts >= runtime_settings.bootstrap_max_attempts:
+                recovery_reason = "attempt_limit_reached"
+        elif not snapshot.initialized and session_token is None:
+            recovery_reason = "setup_session_missing"
         return {
             "state": snapshot.stage,
             "initialized": snapshot.initialized,
             "bootstrap_hash_persisted": snapshot.bootstrap_persisted,
             "model_mode": snapshot.model_mode,
             "csrf_token": signer.csrf_for(session_token) if session_token else None,
+            "recovery": {
+                "required": recovery_reason is not None,
+                "action": "bootstrap-reissue" if recovery_reason is not None else None,
+                "reason": recovery_reason,
+            },
             "local_model": {
                 "available": False,
                 "verified": False,
@@ -221,7 +246,7 @@ def create_app(
                 "BOOTSTRAP_INVALID",
                 "The initialization code is invalid or unavailable.",
             )
-        cookie, csrf_token = signer.issue(clock())
+        cookie, csrf_token = signer.issue(clock(), epoch=store.snapshot().setup_epoch)
         response = JSONResponse(
             content={"state": "security_policy_required", "csrf_token": csrf_token}
         )

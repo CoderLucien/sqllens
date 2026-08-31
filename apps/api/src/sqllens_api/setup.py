@@ -45,6 +45,7 @@ setup_state = Table(
     Column("bootstrap_expires_at", Float),
     Column("bootstrap_consumed_at", Float),
     Column("bootstrap_failed_attempts", Integer, nullable=False, default=0),
+    Column("setup_epoch", Integer, nullable=False, default=1),
     Column("external_model_egress", Boolean),
     Column("allowed_provider_hosts", Text),
     Column("send_sql_text", Boolean, nullable=False, default=False),
@@ -106,6 +107,10 @@ class SetupSnapshot:
     provider_verified_at: float | None
     model_mode: str | None
     bootstrap_persisted: bool
+    bootstrap_expires_at: float | None
+    bootstrap_consumed_at: float | None
+    bootstrap_failed_attempts: int
+    setup_epoch: int
 
 
 class SetupStore:
@@ -126,6 +131,13 @@ class SetupStore:
         metadata.create_all(self.engine)
         now = datetime.now(UTC).timestamp()
         with self.engine.begin() as connection:
+            existing_columns = {
+                row[1] for row in connection.exec_driver_sql("PRAGMA table_info(setup_state)")
+            }
+            if "setup_epoch" not in existing_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE setup_state ADD COLUMN setup_epoch INTEGER NOT NULL DEFAULT 1"
+                )
             exists = connection.execute(
                 select(setup_state.c.id).where(setup_state.c.id == _STATE_ID)
             ).first()
@@ -135,6 +147,7 @@ class SetupStore:
                         id=_STATE_ID,
                         stage="bootstrap_required",
                         bootstrap_failed_attempts=0,
+                        setup_epoch=1,
                         send_sql_text=False,
                         updated_at=now,
                     )
@@ -161,6 +174,10 @@ class SetupStore:
             provider_verified_at=row["provider_verified_at"],
             model_mode=row["model_mode"],
             bootstrap_persisted=row["bootstrap_hash"] is not None,
+            bootstrap_expires_at=row["bootstrap_expires_at"],
+            bootstrap_consumed_at=row["bootstrap_consumed_at"],
+            bootstrap_failed_attempts=row["bootstrap_failed_attempts"],
+            setup_epoch=row["setup_epoch"],
         )
 
     def is_ready(self) -> bool:
@@ -219,6 +236,41 @@ class SetupStore:
             )
         return result.rowcount == 1
 
+    def reissue_bootstrap_code(self, code: str, now: datetime) -> bool:
+        normalized = normalize_bootstrap_code(code)
+        if len(normalized) < 12:
+            raise ValueError("bootstrap code must contain at least 12 valid characters")
+        salt = secrets.token_bytes(16)
+        now_value = _timestamp(now)
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.finalized_at.is_(None),
+                )
+                .values(
+                    stage="bootstrap_required",
+                    bootstrap_hash=_derive_code_hash(normalized, salt),
+                    bootstrap_salt=_b64(salt),
+                    bootstrap_expires_at=now_value + self.settings.bootstrap_ttl_seconds,
+                    bootstrap_consumed_at=None,
+                    bootstrap_failed_attempts=0,
+                    setup_epoch=setup_state.c.setup_epoch + 1,
+                    external_model_egress=None,
+                    allowed_provider_hosts=None,
+                    send_sql_text=False,
+                    policy_committed_at=None,
+                    provider_status=None,
+                    provider_base_url=None,
+                    provider_model=None,
+                    provider_verified_at=None,
+                    model_mode=None,
+                    updated_at=now_value,
+                )
+            )
+        return result.rowcount == 1
+
     def consume_bootstrap_code(self, code: str, now: datetime) -> bool:
         now_value = _timestamp(now)
         with self.engine.connect() as connection:
@@ -231,14 +283,15 @@ class SetupStore:
         expected_hash = row["bootstrap_hash"]
         if salt_value is None or expected_hash is None:
             return False
+        if (
+            row["bootstrap_consumed_at"] is not None
+            or row["bootstrap_expires_at"] is None
+            or row["bootstrap_expires_at"] < now_value
+            or row["bootstrap_failed_attempts"] >= self.settings.bootstrap_max_attempts
+        ):
+            return False
         candidate_hash = _derive_code_hash(code, _decode_b64(salt_value))
-        eligible = (
-            row["bootstrap_consumed_at"] is None
-            and row["bootstrap_expires_at"] is not None
-            and row["bootstrap_expires_at"] >= now_value
-            and row["bootstrap_failed_attempts"] < self.settings.bootstrap_max_attempts
-            and hmac.compare_digest(candidate_hash, expected_hash)
-        )
+        eligible = hmac.compare_digest(candidate_hash, expected_hash)
         if eligible:
             with self.engine.begin() as connection:
                 result = connection.execute(
@@ -365,24 +418,27 @@ class SetupSessionSigner:
             raise RuntimeError("setup session key has an invalid length")
         return key
 
-    def issue(self, now: datetime) -> tuple[str, str]:
+    def issue(self, now: datetime, *, epoch: int) -> tuple[str, str]:
         token = _b64(secrets.token_bytes(32))
         expires_at = int(_timestamp(now)) + self.settings.setup_session_ttl_seconds
-        payload = f"{token}.{expires_at}"
+        payload = f"{token}.{expires_at}.{epoch}"
         signature = _b64(hmac.digest(self.key, payload.encode("ascii"), "sha256"))
         cookie = f"{payload}.{signature}"
         return cookie, self.csrf_for(token)
 
-    def verify(self, cookie: str, now: datetime) -> str | None:
+    def verify(self, cookie: str, now: datetime, *, expected_epoch: int) -> str | None:
         try:
-            token, expires_text, supplied_signature = cookie.split(".", maxsplit=2)
+            token, expires_text, epoch_text, supplied_signature = cookie.split(".", maxsplit=3)
             expires_at = int(expires_text)
+            epoch = int(epoch_text)
         except (TypeError, ValueError):
             return None
-        payload = f"{token}.{expires_at}"
+        payload = f"{token}.{expires_at}.{epoch}"
         expected = _b64(hmac.digest(self.key, payload.encode("ascii"), "sha256"))
-        if expires_at < int(_timestamp(now)) or not hmac.compare_digest(
-            supplied_signature, expected
+        if (
+            epoch != expected_epoch
+            or expires_at < int(_timestamp(now))
+            or not hmac.compare_digest(supplied_signature, expected)
         ):
             return None
         return token
