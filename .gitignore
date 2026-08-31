@@ -8,7 +8,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.data/
+*.egg-info/
 node_modules/
+*.tsbuildinfo
 dist/
 build/
 coverage/
