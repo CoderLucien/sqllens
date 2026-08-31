@@ -134,6 +134,50 @@ class DiagnosisCaseContractTest(unittest.TestCase):
             f"{sorted(required - actual)}",
         )
 
+    def test_one_evidence_item_cannot_both_support_and_contradict_a_hypothesis(
+        self,
+    ) -> None:
+        case = copy.deepcopy(self.valid)
+        evidence_id = case["hypotheses"][0]["supportingEvidenceIds"][0]
+        case["hypotheses"][0]["contradictingEvidenceIds"] = [evidence_id]
+
+        with self.assertRaisesRegex(ValueError, "supporting|contradicting|overlap"):
+            self.validation.validate_references(case)
+
+    def test_new_audit_records_must_fall_inside_the_revision_time_window(self) -> None:
+        for created_at in (
+            "2026-08-31T09:59:59Z",
+            "2026-08-31T10:00:03Z",
+        ):
+            with self.subTest(created_at=created_at):
+                current = copy.deepcopy(self.valid)
+                current["revision"] = 2
+                current["updatedAt"] = "2026-08-31T10:00:02Z"
+                feedback = copy.deepcopy(self.valid["feedback"][0])
+                feedback["feedbackId"] = "fb_0000000000000002"
+                feedback["createdAt"] = created_at
+                current["feedback"].append(feedback)
+
+                with self.assertRaisesRegex(ValueError, "createdAt"):
+                    self.validation.validate_revision(self.valid, current)
+
+    def test_schema_valid_lowercase_z_is_compatible_with_revision_validation(
+        self,
+    ) -> None:
+        current = copy.deepcopy(self.valid)
+        current["revision"] = 2
+        current["updatedAt"] = "2026-08-31T10:00:02z"
+
+        self.assertTrue(
+            self.validation.FORMAT_CHECKER.conforms(
+                current["updatedAt"], "date-time"
+            )
+        )
+        try:
+            self.validation.validate_revision(self.valid, current)
+        except ValueError as error:
+            self.fail(f"schema-valid date-time failed revision validation: {error}")
+
 
 if __name__ == "__main__":
     unittest.main()
