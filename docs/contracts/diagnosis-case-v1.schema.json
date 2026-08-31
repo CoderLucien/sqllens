@@ -31,7 +31,21 @@
       "enum": ["queued", "collecting", "analyzing", "ready", "failed", "cancelled"]
     },
     "outcome": {
-      "enum": ["not_reviewed", "accepted", "rejected", "implemented", "validated", "rolled_back"]
+      "description": "Business result. A completed case has exactly one of the four terminal outcomes; pending is the only non-terminal value.",
+      "enum": [
+        "pending",
+        "validated_effective",
+        "rolled_back",
+        "evidence_insufficient",
+        "risk_accepted"
+      ],
+      "x-legacyDraftAliases": {
+        "not_reviewed": "pending",
+        "accepted": "pending",
+        "rejected": "pending",
+        "implemented": "pending",
+        "validated": "pending"
+      }
     },
     "inputFingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "createdAt": { "type": "string", "format": "date-time" },
@@ -222,7 +236,9 @@
       "properties": {
         "reviewId": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" },
         "reviewer": { "$ref": "#/$defs/actor" },
-        "decision": { "enum": ["approved", "rejected", "needs_changes"] },
+        "decision": {
+          "enum": ["approved", "rejected", "needs_changes", "risk_accepted"]
+        },
         "createdAt": { "type": "string", "format": "date-time" },
         "comment": { "type": "string", "maxLength": 4096 },
         "recommendationIds": {
@@ -241,13 +257,28 @@
         "feedbackId": { "type": "string", "pattern": "^fb_[a-z0-9]{16,64}$" },
         "actor": { "$ref": "#/$defs/actor" },
         "kind": {
-          "enum": ["useful", "not_useful", "incorrect", "implemented", "validated", "rolled_back"]
+          "enum": [
+            "useful",
+            "not_useful",
+            "incorrect",
+            "implemented",
+            "validated",
+            "rolled_back",
+            "evidence_insufficient"
+          ]
         },
         "createdAt": { "type": "string", "format": "date-time" },
         "comment": { "type": "string", "maxLength": 4096 },
         "recommendationId": {
           "type": ["string", "null"],
           "pattern": "^rec_[a-z0-9]{16,64}$"
+        },
+        "evidenceIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
         }
       }
     }

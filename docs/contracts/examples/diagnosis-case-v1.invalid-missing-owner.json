@@ -4,7 +4,7 @@
   "revision": 1,
   "sourceLayer": "sql",
   "workflowState": "ready",
-  "outcome": "not_reviewed",
+  "outcome": "pending",
   "inputFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
   "createdAt": "2026-08-31T10:00:00Z",
   "updatedAt": "2026-08-31T10:00:01Z",

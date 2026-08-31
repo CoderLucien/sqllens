@@ -4,7 +4,7 @@
   "revision": 1,
   "sourceLayer": "sql",
   "workflowState": "ready",
-  "outcome": "accepted",
+  "outcome": "pending",
   "inputFingerprint": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
   "createdAt": "2026-08-31T10:00:00Z",
   "updatedAt": "2026-08-31T10:00:01Z",

@@ -2,7 +2,7 @@
 
 `diagnosis-case-v1.schema.json` defines the serializable P0 case envelope.
 
-The examples serve two different assertions:
+The examples serve different assertions:
 
 - `examples/diagnosis-case-v1.valid.json` must validate.
 - `examples/diagnosis-case-v1.invalid-missing-owner.json` must fail because a
@@ -23,11 +23,15 @@ Contract validation has four mandatory layers:
    `Draft202012Validator(schema)` without a format checker is not equivalent and
    must not be used at a persistence boundary.
 2. Run referential-integrity and unique-ID checks for evidence, hypotheses,
-   recommendations, reviews, and feedback.
+   recommendations, reviews, and feedback. Supporting and contradicting
+   evidence sets for one hypothesis must be disjoint. A `favored` hypothesis
+   must cite supporting evidence, and a `rejected` hypothesis must cite
+   contradicting evidence; `candidate` and `unresolved` may remain unproven.
 3. Run the single-revision outcome prerequisites below.
 4. For an update, validate the prior and proposed revisions together, including
    immutable fields, append-only collections, monotonic time, legal state
-   transitions, and a newly appended event for each outcome change.
+   transitions, audit-record time windows, and a newly appended event for each
+   outcome change.
 
 JSON Schema alone cannot prove that referenced IDs exist in the same case or
 that a transition from a prior revision is legal. `validate_examples.py`
@@ -54,31 +58,87 @@ re-analysis creates a new job/case instead of rewinding the audit history.
 
 ## Outcome State Machine
 
-`workflowState` and `outcome` remain separate axes, but they are not arbitrary:
-any outcome other than `not_reviewed` requires `workflowState=ready`.
+`workflowState` describes processing. `outcome` describes the business result;
+review decisions and implementation milestones stay in append-only `reviews`
+and `feedback`. Any outcome other than `pending` requires
+`workflowState=ready`.
 
 | Current outcome | Allowed next outcomes |
 | --- | --- |
-| `not_reviewed` | `not_reviewed`, `accepted`, `rejected` |
-| `accepted` | `accepted`, `rejected`, `implemented` |
-| `rejected` | `rejected`, `accepted` |
-| `implemented` | `implemented`, `validated`, `rolled_back` |
-| `validated` | `validated`, `rolled_back` |
+| `pending` | `pending`, `validated_effective`, `rolled_back`, `evidence_insufficient`, `risk_accepted` |
+| `validated_effective` | `validated_effective` |
 | `rolled_back` | `rolled_back` |
+| `evidence_insufficient` | `evidence_insufficient` |
+| `risk_accepted` | `risk_accepted` |
 
 Outcome prerequisites are cumulative:
 
 | Outcome | Required records in the case |
 | --- | --- |
-| `not_reviewed` | None |
-| `accepted` | An `approved` review |
-| `rejected` | A `rejected` review |
-| `implemented` | An `approved` review and `implemented` feedback |
-| `validated` | An `approved` review plus `implemented` and `validated` feedback |
-| `rolled_back` | An `approved` review plus `implemented` and `rolled_back` feedback |
+| `pending` | None |
+| `validated_effective` | An `approved` review, `implemented` feedback, and linked `validated` feedback citing `effect_metric_comparison` evidence |
+| `rolled_back` | An `approved` review, `implemented` feedback, and linked `rolled_back` feedback citing both `effect_metric_comparison` and `rollback_confirmation` evidence |
+| `evidence_insufficient` | `insufficient` completeness, non-empty missing-evidence details, no recommendations, and `evidence_insufficient` feedback |
+| `risk_accepted` | A `risk_accepted` review linked to at least one recommendation |
 
-When the outcome changes, the proposed revision must append the corresponding
-trigger in that same revision: an `approved`/`rejected` review or an
-`implemented`/`validated`/`rolled_back` feedback record. A record copied from an
-older revision cannot authorize a new transition. The fixture runner exhaustively
-checks every allowed and forbidden pair in both state machines.
+The four business outcomes are terminal; re-analysis creates a new case rather
+than rewriting the completed result. A transition from `pending` must append its
+trigger in that same revision: linked `validated`/`rolled_back` feedback,
+`evidence_insufficient` feedback, or a linked `risk_accepted` review. A record
+copied from an older revision cannot authorize a new transition, and an unbound
+new record cannot reuse an older record's recommendation or evidence bindings.
+The fixture runner exhaustively checks every allowed and forbidden pair in both
+state machines.
+
+Effect outcomes cannot be grounded only by a comment or recommendation ID.
+Their terminal feedback has a non-empty `evidenceIds` binding; domain validation
+rejects empty, dangling, or policy-inappropriate evidence kinds. The P0 policy
+requires a metric comparison for both effect outcomes and separate rollback
+confirmation for `rolled_back`.
+
+Each effect result must form one causal chain for the same recommendation:
+
+```text
+approved review <= implemented feedback <= result evidence observedAt
+                <= result evidence collectedAt <= terminal feedback
+                <= case updatedAt
+```
+
+Records attached to different recommendations cannot be combined to satisfy a
+terminal outcome. Only evidence kinds required by the result policy participate
+in this causal-order check; other cited diagnostic evidence retains its own
+observation time.
+
+## Draft Compatibility
+
+No P0 release persisted the earlier draft outcome vocabulary. For checked-in
+draft artifacts and test data, `migrate_legacy_draft_outcome()` performs a
+non-mutating import normalization before current-schema validation:
+
+| Legacy draft value | Current value |
+| --- | --- |
+| `not_reviewed` | `pending` |
+| `accepted` | `pending` |
+| `rejected` | `pending` |
+| `implemented` | `pending` |
+| `validated` | `pending` |
+
+Reviews and feedback remain intact, so approval and implementation history is
+not lost. Process-only values are deliberately absent from the current enum and
+cannot be written by a current client. This adapter is for pre-freeze import,
+not permission to rewrite persisted revisions; any migration after a release
+must create an explicit audited revision.
+
+## Audit Time Window
+
+For every new review or feedback record in revision `N`:
+
+```text
+revision[N-1].updatedAt < record.createdAt <= revision[N].updatedAt
+```
+
+The format checker and revision comparator share the same RFC 3339 parser,
+including lower-case `t`/`z`. Evidence `observedAt` and `collectedAt` are not
+forced into this window because imported evidence can legitimately predate the
+case; its freshness, coverage, source, and integrity fields retain that
+separate provenance meaning.

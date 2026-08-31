@@ -124,11 +124,19 @@ unverified until separately tested.
 - case ID, source layer, status, input fingerprint, and timestamps;
 - evidence items with stable IDs, source, collection time, coverage/freshness,
   sensitivity, and integrity metadata;
-- competing hypotheses with supporting and contradicting evidence IDs;
+- competing hypotheses with supporting and contradicting evidence IDs; favored
+  conclusions require supporting evidence and rejected alternatives require
+  contradicting evidence, while candidate/unresolved states preserve abstention;
 - evidence completeness and calibrated confidence as separate fields;
 - recommendations with risk, prerequisites, validation, rollback, and owner;
 - append-only review and user-feedback records with independent decisions;
-- outcome fields independent from workflow state.
+- processing workflow independent from a business outcome that is either
+  pending or one of: validated effective, rolled back, evidence insufficient,
+  or risk accepted;
+- validated-effective and rolled-back results bound to immutable effect
+  evidence IDs, not only user comments or process milestones; approval,
+  implementation, effect evidence, and terminal feedback must reference the
+  same recommendation and preserve causal time order.
 
 The two state fields are independently stored but not freely mutable. The legal
 workflow/outcome transitions, cross-field prerequisites, and atomic review or
