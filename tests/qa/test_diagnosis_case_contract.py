@@ -192,6 +192,26 @@ class DiagnosisCaseContractTest(unittest.TestCase):
         self.validation.validate_references(migrated_current)
         self.validation.validate_case_semantics(migrated_current)
 
+        damaged_current = copy.deepcopy(legacy)
+        migrated_damaged_current = self.validation.migrate_legacy_draft_outcome(
+            damaged_current,
+            source_contract_revision=(
+                "diagnosis-case/v1@business-outcomes-v1"
+            ),
+        )
+        self.assertEqual(
+            migrated_damaged_current["outcome"],
+            "rolled_back",
+            "current invalid data must be rejected, not silently downgraded",
+        )
+        self.validator.validate(migrated_damaged_current)
+        self.validation.validate_references(migrated_damaged_current)
+        with self.assertRaisesRegex(
+            ValueError,
+            "rolled_back|evidence|causal|approval",
+        ):
+            self.validation.validate_case_semantics(migrated_damaged_current)
+
         with self.assertRaisesRegex(
             ValueError,
             "source_contract_revision|unknown|unsupported",
@@ -200,6 +220,9 @@ class DiagnosisCaseContractTest(unittest.TestCase):
                 current,
                 source_contract_revision="diagnosis-case/v1@unknown",
             )
+
+        with self.assertRaises(TypeError):
+            self.validation.migrate_legacy_draft_outcome(current)
 
     def test_effect_outcomes_have_a_machine_validated_evidence_binding(self) -> None:
         schema = load_json(CONTRACT_DIR / "diagnosis-case-v1.schema.json")

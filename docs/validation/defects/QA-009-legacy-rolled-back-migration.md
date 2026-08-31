@@ -1,8 +1,9 @@
 # QA-009: Legacy Rolled-Back Draft Cannot Be Imported
 
-Status: OPEN
+Status: RESOLVED at contract layer; runtime integration retest pending
 Severity: Medium
 Detected against: `main@c7fbe83`
+Resolved in: `main@c0e99d6`
 Owner: contract/domain owner (`#t8`), not QA
 Regression tests: `tests/qa/test_diagnosis_case_contract.py`
 
@@ -49,3 +50,18 @@ source must be rejected. Normalize the old rolled-back process record to
 valid current terminal result. Document the rule and add positive and negative
 fixtures. An unconditional string alias for `rolled_back` is not acceptable
 because it would erase a current business result.
+
+## Independent Retest
+
+QA rebased the source-aware red test onto `main@c0e99d6` and verified:
+
+- trusted `diagnosis-case/v1@1c3c271` input normalizes old `rolled_back` to
+  `pending` while preserving audit records;
+- `diagnosis-case/v1@business-outcomes-v1` keeps a valid current
+  `rolled_back` unchanged;
+- a damaged current rollback is not silently downgraded and is rejected by
+  current semantic validation;
+- missing and unknown source revisions fail closed.
+
+The focused regression, all 19 contract tests and the 57-test QA suite pass.
+Runtime import and persistence remain blocked until executable code exists.

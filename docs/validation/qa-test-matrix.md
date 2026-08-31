@@ -170,7 +170,7 @@ strict read-only or zero-impact.
 | `CASE-004` | E1/E2/E3 | Insufficient or contradictory evidence produces an abstention with minimum next evidence, not a generic recommendation. | `BLOCKED` |
 | `CASE-005` | E1/E2/E3 | Recommendation includes risk, prerequisites, owner, validation and rollback; no API executes recommendations or production changes. | `NOT_RUN` |
 | `CASE-006` | E1/E2/E3 | Evidence/provider/prompt/policy/redaction revisions and input fingerprints are retained across review and outcome changes. | `BLOCKED` |
-| `CASE-007` | E1/E2/E3 | Allowed terminal outcome is separate from workflow status and is one of validated-effective, rolled-back, evidence-insufficient, or risk-accepted. | `FAIL` |
+| `CASE-007` | E1/E2/E3 | Allowed terminal outcome is separate from workflow status and is one of validated-effective, rolled-back, evidence-insufficient, or risk-accepted. | `BLOCKED` |
 | `CASE-008` | E1/E2/E3 | Concurrent reviews and retries cannot overwrite an immutable revision or lose audit events. | `NOT_RUN` |
 
 ## Cross-Cutting Security
@@ -274,16 +274,16 @@ Official references:
 
 ## Current Open Defects
 
-- `CASE-007`:
-  [QA-009](defects/QA-009-legacy-rolled-back-migration.md) - a valid pre-freeze
-  rolled-back draft is not normalized before the stronger current result
-  semantics are applied.
+No open contract-fixture defect remains on `main@c0e99d6`. Runtime findings
+remain possible because the product implementation has not been delivered.
 
 ## Resolved At Contract Layer
 
 - [QA-003](defects/QA-003-terminal-outcome-vocabulary.md) through
   [QA-008](defects/QA-008-decided-hypothesis-without-evidence.md) pass their
   independent contract regressions on `main@c7fbe83`.
+- [QA-009](defects/QA-009-legacy-rolled-back-migration.md) passes its
+  source-aware migration regression on `main@c0e99d6`.
 
 The affected product API/database cases remain `BLOCKED`, not `PASS`, until an
 executable runtime slice invokes all validation layers atomically.
