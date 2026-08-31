@@ -5,7 +5,6 @@ import shutil
 import subprocess
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
@@ -28,7 +27,9 @@ class ComposeContractTest(unittest.TestCase):
         for service_name, service in self.compose["services"].items():
             self.assertFalse(service.get("privileged", False), service_name)
             self.assertEqual(service["cap_drop"], ["ALL"], service_name)
-            self.assertIn("no-new-privileges:true", service["security_opt"], service_name)
+            self.assertIn(
+                "no-new-privileges:true", service["security_opt"], service_name
+            )
             self.assertTrue(service["read_only"], service_name)
 
             for mount in service.get("volumes", []):
@@ -45,7 +46,7 @@ class ComposeContractTest(unittest.TestCase):
         self.assertLessEqual(memory_total, 4096)
         self.assertNotIn("model-weights", self.compose.get("volumes", {}))
 
-    def test_long_running_web_has_no_bootstrap_secret_mount_or_environment(self) -> None:
+    def test_web_and_one_shot_jobs_have_a_dedicated_credential_volume(self) -> None:
         self.assertNotIn("secrets", self.compose)
         web = self.compose["services"]["web-api"]
         self.assertNotIn("secrets", web)
@@ -53,6 +54,29 @@ class ComposeContractTest(unittest.TestCase):
             any("BOOTSTRAP" in value for value in web["environment"]),
             web["environment"],
         )
+        self.assertIn("SQLLENS_SECRETS_DIR=/secrets", web["environment"])
+        self.assertIn("sqllens-secrets:/secrets:rw", web["volumes"])
+        self.assertEqual(
+            self.compose["volumes"]["sqllens-secrets"],
+            {"name": "sqllens-secrets"},
+        )
+
+        for service_name in ("worker", "model-controller"):
+            service = self.compose["services"][service_name]
+            self.assertFalse(
+                any(
+                    mount.startswith("sqllens-secrets:")
+                    for mount in service.get("volumes", [])
+                ),
+                service_name,
+            )
+            self.assertFalse(
+                any(
+                    "SQLLENS_SECRETS_DIR" in value
+                    for value in service.get("environment", [])
+                ),
+                service_name,
+            )
 
     def test_default_compose_only_starts_the_web_api(self) -> None:
         services = self.compose["services"]
@@ -68,7 +92,9 @@ class ComposeContractTest(unittest.TestCase):
         self.assertIn("http://127.0.0.1:8080/healthz", command[-1])
         self.assertNotIn("/api/v1/health", command[-1])
 
-    @unittest.skipUnless(shutil.which("docker"), "docker is required to resolve Compose paths")
+    @unittest.skipUnless(
+        shutil.which("docker"), "docker is required to resolve Compose paths"
+    )
     def test_build_context_resolves_to_the_release_root(self) -> None:
         environment = os.environ.copy()
         environment["SQLLENS_BOOTSTRAP_FILE"] = "/dev/null"
@@ -92,15 +118,21 @@ class ComposeContractTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        resolved = pathlib.Path(json.loads(result.stdout)["services"]["web-api"]["build"]["context"])
+        resolved = pathlib.Path(
+            json.loads(result.stdout)["services"]["web-api"]["build"]["context"]
+        )
         self.assertEqual(resolved, ROOT.resolve())
 
-    def test_model_controller_is_internal_only_and_always_idle_in_external_mode(self) -> None:
+    def test_model_controller_is_internal_only_and_always_idle_in_external_mode(
+        self,
+    ) -> None:
         controller = self.compose["services"]["model-controller"]
 
         self.assertEqual(controller["networks"], ["model-control"])
         self.assertTrue(self.compose["networks"]["model-control"]["internal"])
-        self.assertEqual(controller["environment"], ["SQLLENS_MODEL_MODE=external-idle"])
+        self.assertEqual(
+            controller["environment"], ["SQLLENS_MODEL_MODE=external-idle"]
+        )
         self.assertEqual(controller["command"], ["model-controller"])
 
 

@@ -9,7 +9,6 @@ import tempfile
 import textwrap
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 LAUNCHER = ROOT / "launch.sh"
 
@@ -28,6 +27,9 @@ class PosixLauncherTest(unittest.TestCase):
         self.handshake_started_file = self.temp / "handshake-started"
         self.release_handshake_file = self.temp / "release-handshake"
         self.ingested_secret_file = self.temp / "ingested-secret"
+        self.reissued_secret_file = self.temp / "reissued-secret"
+        self.reissue_started_file = self.temp / "reissue-started"
+        self.release_reissue_file = self.temp / "release-reissue"
         self.openssl_counter_file = self.temp / "openssl-called"
         self.state_dir = self.temp / "state"
 
@@ -51,6 +53,14 @@ class PosixLauncherTest(unittest.TestCase):
                 fi
                 cat > {self.ingested_secret_file}
                 ;;
+              *" run --rm -T --no-deps web-api bootstrap-reissue")
+                cat > {self.reissued_secret_file}
+                if [ "${{SQLLENS_FAKE_BLOCK_REISSUE:-0}}" = 1 ]; then
+                  : > {self.reissue_started_file}
+                  while [ ! -f {self.release_reissue_file} ]; do /bin/sleep 0.01; done
+                fi
+                exit "${{SQLLENS_FAKE_REISSUE_STATUS:-0}}"
+                ;;
               *" build web-api") exit 0 ;;
               *" up -d --no-build") : > {self.running_file} ;;
               *" down --remove-orphans"*) rm -f {self.running_file} ;;
@@ -64,6 +74,11 @@ class PosixLauncherTest(unittest.TestCase):
               "port container-id 8080/tcp")
                 printf '127.0.0.1:%s\\n' "${{SQLLENS_FAKE_PUBLISHED_PORT:-8080}}"
                 ;;
+              "volume inspect sqllens-data")
+                [ "${{SQLLENS_FAKE_DATA_VOLUME_MISSING:-0}}" != 1 ]
+                ;;
+              "volume inspect --format "*" sqllens-data") printf '%s\\n' 'name=sqllens-data driver=local' ;;
+              "volume inspect --format "*" sqllens-secrets") printf '%s\\n' 'name=sqllens-secrets driver=local' ;;
               "exec container-id python -c "*)
                 if [ "${{SQLLENS_FAKE_BLOCK_HANDSHAKE:-0}}" = 1 ]; then
                   : > {self.handshake_started_file}
@@ -89,9 +104,9 @@ class PosixLauncherTest(unittest.TestCase):
             if [ -f {self.openssl_counter_file} ]; then
               printf '%s\\n' 'fedcba9876543210fedcba9876543210'
             else
-              : > {self.openssl_counter_file}
               printf '%s\\n' '0123456789abcdef0123456789abcdef'
             fi
+            printf 'called\\n' >> {self.openssl_counter_file}
             """,
         )
         self._write_executable("sleep", "#!/bin/sh\nexit 0\n")
@@ -254,7 +269,9 @@ class PosixLauncherTest(unittest.TestCase):
         self.assertIn("/api/v1/setup/status", commands)
         self.assertIn("bootstrap_hash_persisted", commands)
         self.assertIn("is True", commands)
-        self.assertLess(commands.index("build web-api"), commands.index("run --rm web-api migrate"))
+        self.assertLess(
+            commands.index("build web-api"), commands.index("run --rm web-api migrate")
+        )
         self.assertLess(
             commands.index("run --rm web-api migrate"),
             commands.index("run --rm -T --no-deps web-api bootstrap-ingest"),
@@ -346,7 +363,9 @@ class PosixLauncherTest(unittest.TestCase):
             self.fail("first launcher did not reach migration")
 
         second = self._run("start")
-        secret_during_first_start = (self.state_dir / "bootstrap-code").read_text().strip()
+        secret_during_first_start = (
+            (self.state_dir / "bootstrap-code").read_text().strip()
+        )
         self.release_migrate_file.touch()
         first_stdout, first_stderr = first.communicate(timeout=5)
 
@@ -405,7 +424,9 @@ class PosixLauncherTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("bootstrap hash persistence", result.stderr)
         bootstrap_file = self.state_dir / "bootstrap-code"
-        self.assertEqual(bootstrap_file.read_text().strip(), "0123456789abcdef0123456789abcdef")
+        self.assertEqual(
+            bootstrap_file.read_text().strip(), "0123456789abcdef0123456789abcdef"
+        )
         self.assertEqual(stat.S_IMODE(bootstrap_file.stat().st_mode), 0o600)
 
     def test_failed_stdin_ingest_keeps_the_secret_for_recovery(self) -> None:
@@ -416,7 +437,9 @@ class PosixLauncherTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         bootstrap_file = self.state_dir / "bootstrap-code"
-        self.assertEqual(bootstrap_file.read_text().strip(), "0123456789abcdef0123456789abcdef")
+        self.assertEqual(
+            bootstrap_file.read_text().strip(), "0123456789abcdef0123456789abcdef"
+        )
         self.assertEqual(stat.S_IMODE(bootstrap_file.stat().st_mode), 0o600)
         self.assertFalse(self.running_file.exists())
 
@@ -452,7 +475,9 @@ class PosixLauncherTest(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("No new initialization code was generated", second.stdout)
         commands = self.command_log.read_text()
-        self.assertEqual(commands.count("run --rm -T --no-deps web-api bootstrap-ingest"), 1)
+        self.assertEqual(
+            commands.count("run --rm -T --no-deps web-api bootstrap-ingest"), 1
+        )
         self.assertEqual(commands.count("build web-api"), 2)
 
     def test_stopped_retry_reuses_the_retained_bootstrap_secret(self) -> None:
@@ -484,7 +509,9 @@ class PosixLauncherTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("mode 0600", result.stderr)
-        self.assertEqual(bootstrap_file.read_text().strip(), "0123456789abcdef0123456789abcdef")
+        self.assertEqual(
+            bootstrap_file.read_text().strip(), "0123456789abcdef0123456789abcdef"
+        )
 
     def test_start_rejects_a_malformed_retained_secret(self) -> None:
         self._write_uname("Linux", "x86_64")
@@ -500,6 +527,135 @@ class PosixLauncherTest(unittest.TestCase):
         self.assertIn("invalid", result.stderr)
         self.assertEqual(bootstrap_file.read_text().strip(), "not-a-valid-code")
 
+    def test_recover_setup_reissues_for_a_running_instance_and_scrubs_the_host_code(
+        self,
+    ) -> None:
+        self._write_uname("Linux", "x86_64")
+        self._write_lsof(port_is_busy=False)
+        started = self._run("start")
+
+        recovered = self._run("recover-setup")
+
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        replacement = "fedcba9876543210fedcba9876543210"
+        self.assertIn(replacement, recovered.stdout)
+        self.assertEqual(self.reissued_secret_file.read_text().strip(), replacement)
+        bootstrap_file = self.state_dir / "bootstrap-code"
+        self.assertEqual(bootstrap_file.read_text(), "")
+        self.assertEqual(stat.S_IMODE(bootstrap_file.stat().st_mode), 0o600)
+        commands = self.command_log.read_text()
+        self.assertIn("run --rm -T --no-deps web-api bootstrap-reissue", commands)
+        self.assertNotIn(replacement, commands)
+
+    def test_recover_setup_works_while_stopped_without_starting_the_web_service(
+        self,
+    ) -> None:
+        self._write_uname("Linux", "x86_64")
+        self._write_lsof(port_is_busy=False)
+        self.assertEqual(self._run("start").returncode, 0)
+        self.assertEqual(self._run("stop").returncode, 0)
+
+        recovered = self._run("recover-setup")
+
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertFalse(self.running_file.exists())
+        self.assertIn("fedcba9876543210fedcba9876543210", recovered.stdout)
+        self.assertEqual(
+            self.command_log.read_text().count(
+                "run --rm -T --no-deps web-api bootstrap-reissue"
+            ),
+            1,
+        )
+
+    def test_failed_recovery_retains_and_reuses_the_same_code(self) -> None:
+        self._write_uname("Linux", "x86_64")
+        self._write_lsof(port_is_busy=False)
+        self.assertEqual(self._run("start").returncode, 0)
+
+        failed = self._run(
+            "recover-setup",
+            extra_env={"SQLLENS_FAKE_REISSUE_STATUS": "1"},
+        )
+        retained = (self.state_dir / "bootstrap-code").read_text().strip()
+        retry = self._run("recover-setup")
+
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertNotIn(retained, failed.stdout + failed.stderr)
+        self.assertEqual(retained, "fedcba9876543210fedcba9876543210")
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertIn(retained, retry.stdout)
+        self.assertEqual(self.reissued_secret_file.read_text().strip(), retained)
+        self.assertEqual(
+            self.openssl_counter_file.read_text().splitlines(), ["called", "called"]
+        )
+        self.assertEqual((self.state_dir / "bootstrap-code").read_text(), "")
+
+    def test_concurrent_recovery_does_not_replace_the_first_reissued_code(self) -> None:
+        self._write_uname("Linux", "x86_64")
+        self._write_lsof(port_is_busy=False)
+        self.assertEqual(self._run("start").returncode, 0)
+        first = self._popen(
+            "recover-setup",
+            extra_env={"SQLLENS_FAKE_BLOCK_REISSUE": "1"},
+        )
+        for _ in range(200):
+            if self.reissue_started_file.exists():
+                break
+            import time
+
+            time.sleep(0.01)
+        else:
+            first.kill()
+            self.fail("first recovery did not reach bootstrap reissue")
+
+        second = self._run("recover-setup")
+        code_during_first = (self.state_dir / "bootstrap-code").read_text().strip()
+        self.release_reissue_file.touch()
+        first_stdout, first_stderr = first.communicate(timeout=5)
+
+        self.assertEqual(first.returncode, 0, first_stderr)
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("startup is already in progress", second.stderr)
+        self.assertEqual(code_during_first, "fedcba9876543210fedcba9876543210")
+        self.assertIn(code_during_first, first_stdout)
+        self.assertEqual(
+            self.openssl_counter_file.read_text().splitlines(), ["called", "called"]
+        )
+
+    def test_recover_setup_fails_closed_after_setup_is_finalized(self) -> None:
+        self._write_uname("Linux", "x86_64")
+        self._write_lsof(port_is_busy=False)
+        self.assertEqual(self._run("start").returncode, 0)
+
+        refused = self._run(
+            "recover-setup",
+            extra_env={"SQLLENS_FAKE_REISSUE_STATUS": "73"},
+        )
+
+        self.assertEqual(refused.returncode, 73)
+        self.assertIn("finalized", refused.stderr.lower())
+        self.assertNotIn(
+            "fedcba9876543210fedcba9876543210", refused.stdout + refused.stderr
+        )
+        self.assertEqual((self.state_dir / "bootstrap-code").read_text(), "")
+
+    def test_recover_setup_requires_an_existing_data_volume_without_creating_state(
+        self,
+    ) -> None:
+        self._write_uname("Linux", "x86_64")
+        self._write_lsof(port_is_busy=False)
+
+        refused = self._run(
+            "recover-setup",
+            extra_env={"SQLLENS_FAKE_DATA_VOLUME_MISSING": "1"},
+        )
+
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("sqllens-data", refused.stderr)
+        self.assertFalse(self.state_dir.exists())
+        self.assertNotIn("bootstrap-reissue", self.command_log.read_text())
+
     def test_stop_retains_the_named_data_volume(self) -> None:
         self._write_uname("Linux", "x86_64")
         self._write_lsof(port_is_busy=False)
@@ -510,7 +666,7 @@ class PosixLauncherTest(unittest.TestCase):
         commands = self.command_log.read_text()
         self.assertIn("down --remove-orphans", commands)
         self.assertNotIn("--volumes", commands)
-        self.assertIn("Data retained", result.stdout)
+        self.assertIn("Data and encrypted credentials retained", result.stdout)
 
     def test_uninstall_only_removes_data_with_explicit_purge_flag(self) -> None:
         self._write_uname("Linux", "x86_64")
@@ -524,10 +680,12 @@ class PosixLauncherTest(unittest.TestCase):
         commands = self.command_log.read_text()
         self.assertIn("down --remove-orphans --rmi local", commands)
         self.assertIn("down --remove-orphans --volumes --rmi local", commands)
-        self.assertIn("Data retained", retained.stdout)
-        self.assertIn("Data volume removed", purged.stdout)
+        self.assertIn("Data and encrypted credentials retained", retained.stdout)
+        self.assertIn("Data and credential volumes removed", purged.stdout)
 
-    def test_purge_clears_bootstrap_state_and_fresh_start_creates_a_new_code(self) -> None:
+    def test_purge_clears_bootstrap_state_and_fresh_start_creates_a_new_code(
+        self,
+    ) -> None:
         self._write_uname("Linux", "x86_64")
         self._write_lsof(port_is_busy=False)
         first = self._run("start")
@@ -618,7 +776,15 @@ class PosixLauncherTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             container_id = container_file.read_text().strip()
             secret_absent = subprocess.run(
-                [real_docker, "exec", container_id, "test", "!", "-e", "/run/secrets/bootstrap_code"],
+                [
+                    real_docker,
+                    "exec",
+                    container_id,
+                    "test",
+                    "!",
+                    "-e",
+                    "/run/secrets/bootstrap_code",
+                ],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -656,6 +822,7 @@ class PosixLauncherTest(unittest.TestCase):
             self.assertTrue(any(name.endswith("system.txt") for name in names))
             self.assertTrue(any(name.endswith("containers.txt") for name in names))
             self.assertTrue(any(name.endswith("compose.txt") for name in names))
+            self.assertTrue(any(name.endswith("volumes.txt") for name in names))
             self.assertFalse(any(name.endswith("logs.txt") for name in names))
             self.assertFalse(any(name.endswith("environment.txt") for name in names))
             contents = b"".join(
@@ -664,7 +831,11 @@ class PosixLauncherTest(unittest.TestCase):
                 if member.isfile()
             )
         self.assertNotIn(b"0123456789abcdef0123456789abcdef", contents)
-        self.assertEqual(bootstrap_file.read_text().strip(), "0123456789abcdef0123456789abcdef")
+        self.assertIn(b"name=sqllens-secrets driver=local", contents)
+        self.assertNotIn(b"credential.key", contents)
+        self.assertEqual(
+            bootstrap_file.read_text().strip(), "0123456789abcdef0123456789abcdef"
+        )
 
 
 if __name__ == "__main__":
