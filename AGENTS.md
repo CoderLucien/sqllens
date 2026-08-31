@@ -34,8 +34,8 @@ choosing one. Update the design/ADR first when an approved decision changes.
   `test/p0-acceptance`. QA does not sign off its own product implementation.
 - `swat-reviwer`: read-only independent review of the primary checkout and
   review context unless explicitly assigned a correction.
-- `swat-rd2`: intended owner of cross-platform release task `#t16` after its
-  Team duty proposal is approved; do not treat the pending role as active.
+- `swat-rd2`: owner of cross-platform release task `#t16` on
+  `/root/sqllens-rd2`, branch `feature/cross-platform-release`.
 
 Do not edit another owner's worktree or overwrite unrelated changes. Coordinate
 shared contracts and merge order through `swat-mgr` before editing the same
