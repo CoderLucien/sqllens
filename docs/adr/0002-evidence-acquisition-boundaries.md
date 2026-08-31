@@ -30,6 +30,23 @@ P0 never performs DML, `EXPLAIN ANALYZE`, recommendation execution, or automatic
 Plan Replayer capture. Ordinary `EXPLAIN` is rejected when the relevant TiDB
 version or SQL construct may execute work during optimization.
 
+P0 retains the approved one-click Plan Replayer generation capability as a
+separate privileged workflow. It is not part of default diagnosis collection.
+Before execution, the UI and API must present:
+
+- the exact operation and target statement digest;
+- the metadata/statistics categories and identifiers that may enter the archive;
+- required TiDB privileges and the authenticated operator;
+- execution timeout, concurrency, temporary disk, and archive-size budgets;
+- the cancellation and kill-switch behavior;
+- the sensitivity warning and destination/retention policy.
+
+Only an authorized DBA/Admin can confirm the immutable preflight revision. The
+job is bounded, cancellable, fully audited, and fails closed on any version,
+privilege, policy, or budget mismatch. It never runs as an LLM tool call or an
+automatic response to a diagnosis. The captured archive then crosses into the
+same bounded imported-evidence boundary as an uploaded archive.
+
 Clinic URL reading is disabled until an official read API, supported auth scope,
 and test environment are available. Browser automation, SSO credential storage,
 and generic arbitrary-URL fetching are prohibited.
@@ -49,5 +66,6 @@ noise or resource thresholds are exceeded.
 
 - Layer and evidence completeness are visible in every case.
 - Missing or stale evidence lowers confidence or forces abstention.
-- Active collection features require a separate privileged workflow and review.
-- Clinic URL mode and production Plan Replayer capture remain outside P0.
+- The approved Plan Replayer capture requires the separate privileged workflow;
+  any other active collection feature requires a new scope and review.
+- Clinic URL mode remains outside P0.

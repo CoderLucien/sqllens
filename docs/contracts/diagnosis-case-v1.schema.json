@@ -18,6 +18,8 @@
     "evidence",
     "hypotheses",
     "recommendations",
+    "reviews",
+    "feedback",
     "pinnedRevisions"
   ],
   "properties": {
@@ -62,6 +64,16 @@
       "type": "array",
       "maxItems": 32,
       "items": { "$ref": "#/$defs/recommendation" }
+    },
+    "reviews": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/review" }
+    },
+    "feedback": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/feedback" }
     },
     "pinnedRevisions": {
       "type": "object",
@@ -149,6 +161,7 @@
         "validation",
         "rollback",
         "evidenceIds",
+        "owner",
         "requiresHumanApproval"
       ],
       "properties": {
@@ -179,7 +192,54 @@
           "maxItems": 128,
           "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
         },
+        "owner": { "$ref": "#/$defs/actor" },
         "requiresHumanApproval": { "const": true }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "displayName"],
+      "properties": {
+        "kind": { "enum": ["user", "team", "role"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewId", "reviewer", "decision", "createdAt", "comment"],
+      "properties": {
+        "reviewId": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" },
+        "reviewer": { "$ref": "#/$defs/actor" },
+        "decision": { "enum": ["approved", "rejected", "needs_changes"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "comment": { "type": "string", "maxLength": 4096 },
+        "recommendationIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 32,
+          "items": { "type": "string", "pattern": "^rec_[a-z0-9]{16,64}$" }
+        }
+      }
+    },
+    "feedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feedbackId", "actor", "kind", "createdAt", "comment"],
+      "properties": {
+        "feedbackId": { "type": "string", "pattern": "^fb_[a-z0-9]{16,64}$" },
+        "actor": { "$ref": "#/$defs/actor" },
+        "kind": {
+          "enum": ["useful", "not_useful", "incorrect", "implemented", "validated", "rolled_back"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "comment": { "type": "string", "maxLength": 4096 },
+        "recommendationId": {
+          "type": ["string", "null"],
+          "pattern": "^rec_[a-z0-9]{16,64}$"
+        }
       }
     }
   }

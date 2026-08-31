@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "diagnosis-case/v1",
+  "caseId": "case_0000000000000002",
+  "revision": 1,
+  "sourceLayer": "sql",
+  "workflowState": "ready",
+  "outcome": "not_reviewed",
+  "inputFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "createdAt": "2026-08-31T10:00:00Z",
+  "updatedAt": "2026-08-31T10:00:01Z",
+  "evidenceCompleteness": {
+    "score": 0.4,
+    "classification": "partial",
+    "missing": ["schema"]
+  },
+  "evidence": [],
+  "hypotheses": [],
+  "recommendations": [
+    {
+      "recommendationId": "rec_0000000000000002",
+      "title": "Collect more evidence",
+      "rationale": "The case is incomplete.",
+      "risk": "low",
+      "prerequisites": [],
+      "validation": ["Re-run diagnosis after collection"],
+      "rollback": ["Remove the temporary connector"],
+      "evidenceIds": [],
+      "requiresHumanApproval": true
+    }
+  ],
+  "reviews": [],
+  "feedback": [],
+  "pinnedRevisions": {
+    "ruleSet": "rules/v1",
+    "policy": "policy/v1",
+    "redaction": "redaction/v1",
+    "provider": null,
+    "model": null,
+    "modelArtifact": null,
+    "prompt": null
+  }
+}

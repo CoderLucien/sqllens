@@ -35,10 +35,11 @@ rollback guidance. The product must abstain when evidence is insufficient.
    remains disabled unless an official, testable read API and supported auth
    contract are available. Browser scraping and stored plaintext passwords are
    prohibited.
-7. P0 may import an existing Plan Replayer archive. Capturing one from a live
-   cluster is an explicit privileged operation outside the default read-only
-   path. Replaying a plan requires a version-matched external sandbox and does
-   not prove runtime performance.
+7. P0 may import an existing Plan Replayer archive or generate one through a
+   separate, explicitly authorized privileged workflow. Capture is outside the
+   default read-only path and must preview its actions, fields, privileges, and
+   resource budget before a DBA/Admin confirms it. Replaying a plan requires a
+   version-matched external sandbox and does not prove runtime performance.
 
 ## Product Paths
 
@@ -61,6 +62,11 @@ statistics health, ordinary plans, configuration, and metrics.
 P0 never runs DML or `EXPLAIN ANALYZE`. Ordinary `EXPLAIN` is version-gated and
 rejected for constructs that TiDB may execute while optimizing, including
 unsafe scalar-subquery cases.
+
+An optional Plan Replayer capture is an active P0 workflow, never an automatic
+side effect of diagnosis. It requires an Admin/DBA permission, preflight preview,
+explicit confirmation, bounded execution, audit events, cancellation, and a
+kill switch. The resulting archive enters the same imported-evidence boundary.
 
 ### Layer 3: Historical Clinic Evidence
 
@@ -115,6 +121,7 @@ GPU returns a precise restart prerequisite instead of attempting host control.
 - competing hypotheses with supporting and contradicting evidence IDs;
 - evidence completeness and calibrated confidence as separate fields;
 - recommendations with risk, prerequisites, validation, rollback, and owner;
+- append-only review and user-feedback records with independent decisions;
 - outcome fields independent from workflow state.
 
 Jobs pin provider, model artifact/revision, prompt version, policy version, and
@@ -130,10 +137,12 @@ an atomic configuration revision becomes active.
 - `POST /api/v1/setup/finalize`
 - `POST /api/v1/cases/sql`
 - `POST /api/v1/cases/workload`
+- `POST /api/v1/plan-replayer/captures`
 - `POST /api/v1/imports/clinic`
 - `GET /api/v1/jobs/{job_id}`
 - `GET /api/v1/cases/{case_id}`
 - `POST /api/v1/cases/{case_id}/reviews`
+- `POST /api/v1/cases/{case_id}/feedback`
 
 All errors use one versioned envelope with stable codes. Async creation returns
 `202` plus a job resource. Idempotency keys are required for job-producing
@@ -262,7 +271,8 @@ Always:
 Ask first:
 
 - enable a new outbound host or data field;
-- add an active production collection action;
+- add an active production collector beyond the approved, privileged Plan
+  Replayer capture workflow;
 - change stored sensitive-data categories, auth, or retention;
 - change the public API or DiagnosisCase schema.
 

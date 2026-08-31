@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "diagnosis-case/v1",
+  "caseId": "case_0000000000000003",
+  "revision": 1,
+  "sourceLayer": "sql",
+  "workflowState": "ready",
+  "outcome": "accepted",
+  "inputFingerprint": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "createdAt": "2026-08-31T10:00:00Z",
+  "updatedAt": "2026-08-31T10:00:01Z",
+  "evidenceCompleteness": {
+    "score": 0.5,
+    "classification": "partial",
+    "missing": ["runtime_metrics"]
+  },
+  "evidence": [],
+  "hypotheses": [
+    {
+      "hypothesisId": "hyp_0000000000000003",
+      "statement": "This deliberately references evidence that is not present.",
+      "confidence": 0.5,
+      "supportingEvidenceIds": ["ev_9999999999999999"],
+      "contradictingEvidenceIds": [],
+      "status": "candidate"
+    }
+  ],
+  "recommendations": [],
+  "reviews": [
+    {
+      "reviewId": "rev_0000000000000003",
+      "reviewer": {
+        "kind": "user",
+        "id": "user-1",
+        "displayName": "DBA reviewer"
+      },
+      "decision": "approved",
+      "createdAt": "2026-08-31T10:00:01Z",
+      "comment": "This deliberately references a missing recommendation.",
+      "recommendationIds": ["rec_9999999999999999"]
+    }
+  ],
+  "feedback": [],
+  "pinnedRevisions": {
+    "ruleSet": "rules/v1",
+    "policy": "policy/v1",
+    "redaction": "redaction/v1",
+    "provider": null,
+    "model": null,
+    "modelArtifact": null,
+    "prompt": null
+  }
+}
