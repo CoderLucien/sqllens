@@ -130,6 +130,11 @@ unverified until separately tested.
 - append-only review and user-feedback records with independent decisions;
 - outcome fields independent from workflow state.
 
+The two state fields are independently stored but not freely mutable. The legal
+workflow/outcome transitions, cross-field prerequisites, and atomic review or
+feedback triggers are the executable contract documented in
+`docs/contracts/README.md`.
+
 Jobs pin provider, model artifact/revision, prompt version, policy version, and
 redaction version at creation. Model switching drains or cancels old jobs before
 an atomic configuration revision becomes active.
