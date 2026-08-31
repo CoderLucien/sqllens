@@ -229,6 +229,18 @@ h1 {
   line-height: 22px;
 }
 
+.recovery-command {
+  display: block;
+  width: min(100%, 520px);
+  padding: 12px 14px;
+  border: 1px solid #c9d0d7;
+  border-radius: 6px;
+  color: #1f394e;
+  background: #f3f6f8;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .setup-form {
   display: grid;
   max-width: 520px;

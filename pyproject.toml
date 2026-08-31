@@ -25,7 +25,6 @@ dev = [
 
 [project.scripts]
 sqllens-api = "sqllens_api.main:run"
-sqllens-bootstrap = "sqllens_api.bootstrap:main"
 
 [tool.setuptools.packages.find]
 where = ["apps/api/src"]
