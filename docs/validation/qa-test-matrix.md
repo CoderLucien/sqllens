@@ -1,6 +1,6 @@
 # SQLLens P0 QA Test Matrix
 
-Status: baseline v1, execution not started
+Status: baseline v1, execution in progress
 Owner: `#t14` / swat-qa
 Specification: `docs/superpowers/specs/2026-08-31-sqllens-p0-design.md`
 
@@ -75,12 +75,12 @@ for release claims.
 | `SETUP-007` | E1 | Missing GPU/device disables local mode and returns an actionable restart prerequisite; no fabricated hardware result is stored. | `NOT_RUN` |
 | `SETUP-008` | E1 | Finalize is rejected until every mandatory step is complete; successful finalize atomically enables diagnosis APIs. | `NOT_RUN` |
 | `SETUP-009` | E1 | Switching provider revisions drains or cancels pinned jobs; completed cases retain original provider/model/prompt/policy/redaction revisions. | `NOT_RUN` |
-| `SETUP-010` | E1 | The application atomically persists only a verifier for `/run/secrets/bootstrap_code` before readiness; after the launcher clears the host secret, one bootstrap succeeds, replay/concurrent reuse/restart fails, and plaintext is absent from logs, environment, command line, data volume and diagnostic bundles. | `NOT_RUN` |
+| `SETUP-010` | E1 | The application atomically persists only a verifier for `/run/secrets/bootstrap_code` before readiness; after the launcher clears the host secret, one bootstrap succeeds, replay/concurrent reuse/restart fails, and plaintext is absent from logs, environment, command line, data volume and diagnostic bundles. | `FAIL` |
 | `DEPLOY-001` | E1 | Effective Compose configuration has an enforced aggregate 2 CPU/4 GiB budget and persists only documented volumes. | `NOT_RUN` |
 | `DEPLOY-002` | E1 | Base-mode pull/start downloads no local model weights and creates no weight volume content. | `NOT_RUN` |
 | `DEPLOY-003` | E1 | No application container mounts `/var/run/docker.sock`, a host root, or another broad host path; internal services publish no host ports. | `NOT_RUN` |
 | `DEPLOY-004` | E1 | Restart preserves finalized setup and cases, cleans orphaned temporary jobs, and does not reuse the bootstrap secret. | `NOT_RUN` |
-| `DEPLOY-005` | E0/E1 | Clean bootstrap, lint, typecheck, unit, integration, E2E, build and smoke commands are reproducible from lockfiles and pinned images. | `NOT_RUN` |
+| `DEPLOY-005` | E0/E1 | Clean bootstrap, lint, typecheck, unit, integration, E2E, build and smoke commands are reproducible from lockfiles and pinned images. | `FAIL` |
 | `DEPLOY-006` | E1 | The image entrypoint supports `migrate` and `web-api`; migration is idempotent and fail-closed, `web-api` listens on `0.0.0.0:8080`, and `GET /healthz` reports ready only after storage and the bootstrap verifier are usable without disclosing internals. | `NOT_RUN` |
 | `DEPLOY-007` | E1 | Base Compose starts no placeholder worker or model-controller; unavailable services are confined to non-default profiles, expose no host ports and remain visibly disabled rather than reported healthy. | `NOT_RUN` |
 
@@ -278,12 +278,22 @@ Official references:
 ## Current Open Defects
 
 No open contract-fixture defect remains on `main@c0e99d6`. The first release
-skeleton has two open launcher findings:
+skeleton has four open findings against `7bbb8da`:
 
-- [QA-010](defects/QA-010-check-truncates-bootstrap-secret.md): High bootstrap
-  truncation and concurrent-start race on `cbfd26e`.
-- [QA-011](defects/QA-011-diagnostics-command-missing.md): Medium failure path
-  recommends an action the launcher does not implement on `cbfd26e`.
+- [QA-012](defects/QA-012-mounted-bootstrap-secret-survives-scrub.md): High;
+  host pathname replacement leaves the plaintext code visible in-container.
+- [QA-013](defects/QA-013-compose-build-context-escapes-release-root.md): High;
+  Compose resolves the image build context outside the release and cannot
+  locate the frozen Dockerfile.
+- [QA-014](defects/QA-014-purge-leaves-stale-bootstrap-marker.md): Medium;
+  explicit data purge leaves host state that prevents clean reinstall.
+- [QA-015](defects/QA-015-repeated-start-reports-wrong-port.md): Medium;
+  a repeated start can report a URL for an unpublished port.
+
+[QA-010](defects/QA-010-check-truncates-bootstrap-secret.md) and
+[QA-011](defects/QA-011-diagnostics-command-missing.md) pass their launcher
+regressions on `7bbb8da`. Their closure does not satisfy the separate runtime
+and real-container gates above.
 
 ## Resolved At Contract Layer
 

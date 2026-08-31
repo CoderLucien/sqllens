@@ -1,6 +1,6 @@
 # QA-010: Read-Only Preflight Truncates Bootstrap Secret
 
-Status: OPEN
+Status: RESOLVED in launcher scope on `feature/cross-platform-release@7bbb8da`
 Severity: High
 Detected against: `feature/cross-platform-release@cbfd26e`
 Owner: cross-platform release owner (`#t16`), not QA
@@ -52,9 +52,21 @@ Actual: the command succeeds and the final size is `0`.
   secret byte-for-byte unchanged and do not create state on a clean host. Add
   concurrent double-start and repeated-start regressions as well.
 - Retain the separate container integration gate: `start` may clear the host
-  secret only after `/healthz` proves the application persisted its verifier;
-  one bootstrap succeeds and replay fails after cleanup and restart.
+  secret only after `GET /api/v1/setup/status` returns HTTP 200 with JSON
+  boolean `bootstrap_hash_persisted` strictly equal to `true`; one bootstrap
+  succeeds and replay fails after cleanup and restart.
 
-This finding blocks the launcher from entering the integrated release
-candidate. It does not invalidate the independently passing Compose contract
-or static preflight tests.
+This finding blocked `cbfd26e` from entering the integrated release candidate.
+It did not invalidate the independently passing Compose contract or static
+preflight tests.
+
+## Resolution Evidence
+
+QA independently reran the original sentinel reproduction against `7bbb8da`.
+Successful and failed `check` calls left the existing file unchanged, and a
+successful check on a clean path did not create the state directory. The
+release suite also passed 28/28 including concurrent and retained-secret
+cases.
+
+The later Docker bind-mount cleanup defect is tracked separately as QA-012;
+closing this finding does not sign off the container secret lifecycle.
