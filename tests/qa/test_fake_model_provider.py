@@ -110,6 +110,42 @@ class FakeModelProviderTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(content["evidenceIds"], ["ev_9999999999999999"])
 
+    def test_oversized_response_exceeds_the_fixture_output_budget(self) -> None:
+        status, body, headers = self.request("fixture/oversized-content")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertGreater(len(body), self.module.OVERSIZED_RESPONSE_BYTES)
+        envelope = json.loads(body)
+        content = json.loads(envelope["choices"][0]["message"]["content"])
+        self.assertGreaterEqual(
+            len(content["summary"]), self.module.OVERSIZED_RESPONSE_BYTES
+        )
+
+    def test_schema_valid_unsafe_display_text_is_preserved_for_ui_testing(self) -> None:
+        status, body, _ = self.request("fixture/unsafe-display-text")
+        envelope = json.loads(body)
+        content = json.loads(envelope["choices"][0]["message"]["content"])
+
+        self.assertEqual(status, 200)
+        self.assertEqual(content["schemaVersion"], "model-explanation/v1")
+        self.assertEqual(content["evidenceIds"], ["ev_0000000000000001"])
+        for marker in ("<script>", "{{7*7}}", "IGNORE PREVIOUS INSTRUCTIONS"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, content["summary"])
+
+    def test_transport_content_type_and_encoding_failures_are_distinct(self) -> None:
+        status, wrong_type, headers = self.request("fixture/wrong-content-type")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn(b"synthetic wrong content type", wrong_type)
+
+        status, invalid_utf8, headers = self.request("fixture/invalid-utf8")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json")
+        with self.assertRaises(UnicodeDecodeError):
+            invalid_utf8.decode("utf-8")
+
     def test_timeout_mode_exceeds_the_client_deadline(self) -> None:
         with self.assertRaises(TimeoutError):
             self.request("fixture/timeout", timeout=0.02)
