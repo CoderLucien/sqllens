@@ -151,9 +151,12 @@ ratio, byte, time, disk, path, link, type, cancellation, and cleanup budgets.
 
 **Acceptance criteria:** base and GPU override share one release manifest;
 2C4G mode pulls no weights; app has no Docker Socket; internal services are not
-published; local mode refuses unavailable devices.
+published; local mode refuses unavailable devices. Release images cover
+`linux/amd64` and `linux/arm64`, and launchers preserve the three-step deployment
+journey without manual configuration or migration commands.
 
-**Verification:** clean low-resource install, network inspection, restart and
+**Verification:** Mac/Linux/Windows clean low-resource install, network
+inspection, restart/upgrade/uninstall/data retention, failure remediation, and
 mode-switch state tests.
 
 **Dependencies:** Tasks 3-9.
@@ -216,7 +219,8 @@ or block release.
 ### Task 15: Release decision and validation guide
 
 **Acceptance criteria:** a clean-room operator can repeat install, test, and
-benchmark commands; known blockers and unsupported claims are visible.
+benchmark commands; a new-machine user reaches the Web App in exactly three
+visible steps; known blockers and unsupported claims are visible.
 
 **Verification:** reviewer repeats the guide from a clean checkout.
 
@@ -252,3 +256,4 @@ blockers, the next one-hour target, and revised remaining ETA.
 | False confidence from LLM | Unsafe recommendations | evidence binding, competing hypotheses, abstention, no execution API |
 | TiDB version/privilege drift | Connector breakage/impact | versioned query matrix and fail-closed preflight |
 | SQLLens name collision | Public launch risk | working code name only; rename/brand gate before GitHub release |
+| Cross-platform environment unavailable | Cannot claim Mac/Windows/Linux support | require real clean-install evidence; mark missing hosts unverified |

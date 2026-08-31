@@ -13,6 +13,7 @@
 - [ ] `#t11`: Layer 1 SQL diagnosis and unified DiagnosisCase.
 - [ ] `#t12`: Layer 2 Prometheus/TiDB bounded evidence path.
 - [ ] `#t13`: Layer 3 Clinic archive/report import and hostile-input controls.
+- [ ] `#t16`: Cross-platform three-step deployment and multi-architecture release.
 
 ## QA
 
@@ -30,3 +31,5 @@
 - [ ] No critical/high security or correctness findings remain.
 - [ ] Unsupported Clinic URL and unqualified local model are not marketed.
 - [ ] Public repository name has passed the naming/brand decision.
+- [ ] Mac/Linux/Windows external-model paths pass real three-step clean install;
+      multi-architecture images, upgrade, uninstall, and data retention pass.

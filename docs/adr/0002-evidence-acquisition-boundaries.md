@@ -47,6 +47,14 @@ privilege, policy, or budget mismatch. It never runs as an LLM tool call or an
 automatic response to a diagnosis. The captured archive then crosses into the
 same bounded imported-evidence boundary as an uploaded archive.
 
+The completed archive is addressed by an opaque job ID, not a filesystem path.
+Download requires a single-use, short-TTL token scoped to that archive and
+authenticated operator. The response includes an integrity digest and a
+content-disposition filename with no cluster identifiers. The temporary package
+is deleted on cancellation/failure, after successful single-use download, or at
+the configured short retention deadline, whichever happens first; cleanup is
+idempotent and audited. Tokens and package paths never enter normal logs.
+
 Clinic URL reading is disabled until an official read API, supported auth scope,
 and test environment are available. Browser automation, SSO credential storage,
 and generic arbitrary-URL fetching are prohibited.

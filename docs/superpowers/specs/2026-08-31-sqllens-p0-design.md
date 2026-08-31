@@ -99,6 +99,12 @@ startup command selects that override before Docker starts. Web setup then
 selects external or local inference. Switching to local mode without an exposed
 GPU returns a precise restart prerequisite instead of attempting host control.
 
+P0 publishes `linux/amd64` and `linux/arm64` images and exposes the same browser
+Web App on Mac, Linux, and Windows. External-model mode is the cross-platform
+baseline. Local GPU support is gated by exact host/runtime qualification; Linux
+NVIDIA is the first target, while macOS Apple GPU and Windows WSL2 GPU remain
+unverified until separately tested.
+
 ### Technology Baseline
 
 - Python `3.12`, FastAPI, Pydantic v2, SQLAlchemy 2, SQLite.
@@ -180,17 +186,19 @@ POSTs. The application exposes no API to execute recommendations.
 
 ## Setup Journey
 
-1. Preflight checks Docker, storage, architecture, and optional GPU exposure.
-2. User starts the package and opens `/setup` on the allowed interface.
-3. User consumes the one-time bootstrap secret and creates the first admin.
-4. User commits retention, TLS, egress, redaction, and audit policy.
-5. User selects external inference or an available local runtime and runs a
-   structured-output probe against non-sensitive fixture data.
-6. User optionally configures Prometheus and TiDB connectors and imports a
-   sample Clinic package.
-7. Built-in fixtures run end to end and report each subsystem as `verified`,
-   `declared`, or `unverified`.
-8. Setup finalization enables diagnosis APIs. A failed step is resumable.
+The visible deployment journey has three steps:
+
+1. Install Docker Desktop on Mac/Windows, or Docker Engine plus Compose on Linux.
+2. Download one release archive and double-click its launcher or run one command.
+   The launcher performs platform/artifact/port/disk/migration preflight, starts
+   services, and prints the local URL plus a one-time initialization code.
+3. Open the Web URL, enter the code, select a model mode, commit security/data
+   policy and optional connectors, run the self-test, and enter the home page.
+
+There are no hidden `.env`/Compose edits, migration commands, token-file lookups,
+or extra product commands on the supported happy path. Inside step 3, Web setup
+is resumable and reports each subsystem as `verified`, `declared`, or
+`unverified`. Diagnosis APIs stay disabled until setup finalization.
 
 ## Commands
 
@@ -296,6 +304,9 @@ Never:
    automated tests and an independent QA/Reviewer report.
 6. Local-model mode is either qualified on real target hardware or visibly
    marked `unverified` and excluded from release claims.
+7. Mac, Linux, and Windows each pass a real three-step clean install in external
+   mode, including restart, upgrade, uninstall, data retention, and failure
+   remediation; published images cover `linux/amd64` and `linux/arm64`.
 
 ## Known Blockers
 
