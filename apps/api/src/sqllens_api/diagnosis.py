@@ -15,6 +15,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlglot import exp
 from sqlglot.errors import ErrorLevel, SqlglotError
 
+from sqllens_api.provider import (
+    ModelEvidence,
+    ModelEvidenceCompleteness,
+    ModelHypothesis,
+    ModelRankingPayload,
+)
+
 MAX_SQL_BYTES = 65_536
 MAX_IDEMPOTENCY_KEY_LENGTH = 128
 PARSER_REVISION = "sqlglot/mysql@30.17.0"
@@ -142,7 +149,7 @@ def validate_idempotency_key(value: str | None) -> str:
 
 
 def parse_sql_structure(sql: str) -> SqlStructure:
-    if len(sql.encode("utf-8")) > MAX_SQL_BYTES:
+    if len(sql) > MAX_SQL_BYTES or len(sql.encode("utf-8")) > MAX_SQL_BYTES:
         raise SqlDiagnosisError(
             413,
             "SQL_INPUT_TOO_LARGE",
@@ -275,6 +282,7 @@ def build_case(
     now: datetime,
     provider: str | None,
     model: str | None,
+    prompt: str | None = None,
 ) -> dict[str, Any]:
     timestamp = _rfc3339(now)
     case_id = _identifier("case")
@@ -356,9 +364,52 @@ def build_case(
             "provider": provider,
             "model": model,
             "modelArtifact": None,
-            "prompt": None,
+            "prompt": prompt,
         },
     }
+
+
+def build_model_ranking_payload(case_payload: dict[str, Any]) -> ModelRankingPayload:
+    completeness = cast(dict[str, Any], case_payload["evidenceCompleteness"])
+    evidence = cast(list[dict[str, Any]], case_payload["evidence"])
+    hypotheses = cast(list[dict[str, Any]], case_payload["hypotheses"])
+    return ModelRankingPayload(
+        evidence_completeness=ModelEvidenceCompleteness(
+            score=cast(float, completeness["score"]),
+            classification=cast(
+                Literal["insufficient", "partial", "sufficient"],
+                completeness["classification"],
+            ),
+            missing=cast(list[str], completeness["missing"]),
+        ),
+        evidence=[
+            ModelEvidence(
+                evidence_id=cast(str, item["evidenceId"]),
+                kind=cast(str, item["kind"]),
+                sensitivity="metadata",
+                summary=cast(str, item["summary"]),
+            )
+            for item in evidence
+        ],
+        hypotheses=[
+            ModelHypothesis(
+                hypothesis_id=cast(str, item["hypothesisId"]),
+                statement=cast(str, item["statement"]),
+                confidence=cast(float, item["confidence"]),
+                evidence_ids=cast(list[str], item["supportingEvidenceIds"]),
+            )
+            for item in hypotheses
+        ],
+    )
+
+
+def apply_model_ranking(case_payload: dict[str, Any], ranked_ids: list[str]) -> bool:
+    hypotheses = cast(list[dict[str, Any]], case_payload["hypotheses"])
+    by_id = {cast(str, item["hypothesisId"]): item for item in hypotheses}
+    if len(ranked_ids) != len(hypotheses) or set(ranked_ids) != set(by_id):
+        return False
+    case_payload["hypotheses"] = [by_id[hypothesis_id] for hypothesis_id in ranked_ids]
+    return True
 
 
 def _build_hypotheses(structure: SqlStructure, evidence_id: str) -> list[dict[str, Any]]:
@@ -442,6 +493,16 @@ class DiagnosisStore:
                 raise
             return self._resolve_replay(concurrent, fingerprint)
         return job_payload
+
+    def resolve_idempotency(
+        self,
+        idempotency_key: str,
+        fingerprint: str,
+    ) -> dict[str, Any] | None:
+        existing = self._job_by_idempotency_key(idempotency_key)
+        if existing is None:
+            return None
+        return self._resolve_replay(existing, fingerprint)
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self.engine.connect() as connection:

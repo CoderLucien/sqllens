@@ -19,16 +19,24 @@ from sqllens_api.diagnosis import (
     DiagnosisStore,
     IdempotencyConflictError,
     SqlDiagnosisError,
+    apply_model_ranking,
     build_case,
+    build_model_ranking_payload,
     parse_sql_structure,
     request_fingerprint,
     validate_idempotency_key,
 )
 from sqllens_api.errors import ApiError, error_response
 from sqllens_api.provider import (
+    MODEL_EGRESS_POLICY,
+    MODEL_PROMPT_REVISION,
+    MODEL_RANKING_REQUEST_SCHEMA,
     HttpxProviderGateway,
+    ModelExplanationGateway,
+    ModelExplanationRequest,
     ProviderGateway,
     ProviderProbeRequest,
+    UnavailableModelExplanationGateway,
 )
 from sqllens_api.setup import (
     OWNER_COOKIE_NAME,
@@ -126,11 +134,19 @@ def create_app(
     settings: Settings | None = None,
     clock: Clock = _utc_now,
     provider_gateway: ProviderGateway | None = None,
+    explanation_gateway: ModelExplanationGateway | None = None,
 ) -> FastAPI:
     runtime_settings = settings or Settings()
     store = SetupStore(runtime_settings)
     signer = SetupSessionSigner(runtime_settings)
-    gateway = provider_gateway or HttpxProviderGateway()
+    default_gateway = HttpxProviderGateway() if provider_gateway is None else None
+    gateway = provider_gateway or default_gateway
+    assert gateway is not None
+    model_gateway = (
+        explanation_gateway
+        or default_gateway
+        or UnavailableModelExplanationGateway()
+    )
     vault = CredentialVault(runtime_settings.credential_key_path)
     diagnosis_store = DiagnosisStore(store.engine)
 
@@ -675,23 +691,76 @@ def create_app(
         except SqlDiagnosisError as error:
             raise ApiError(error.status_code, error.code, error.message) from error
 
+        fingerprint = request_fingerprint(payload.sql)
+        try:
+            existing_job = diagnosis_store.resolve_idempotency(
+                safe_idempotency_key,
+                fingerprint,
+            )
+        except IdempotencyConflictError:
+            raise ApiError(
+                409,
+                "IDEMPOTENCY_KEY_CONFLICT",
+                "The Idempotency-Key was already used for another request.",
+            ) from None
+        if existing_job is not None:
+            return JSONResponse(status_code=202, content=existing_job)
+
         snapshot = store.snapshot()
-        provider = "openai-compatible" if snapshot.model_mode == "external" else None
-        model = snapshot.provider_model if snapshot.model_mode == "external" else None
-        explanation = {"status": "not_requested", "code": None}
-        if snapshot.model_mode == "external" and not provider_credential_available():
-            explanation = {
-                "status": "degraded",
-                "code": "MODEL_CREDENTIAL_UNAVAILABLE",
-            }
+        external_mode = snapshot.model_mode == "external"
+        provider = "openai-compatible" if external_mode else None
+        model = snapshot.provider_model if external_mode else None
         case_payload = build_case(
             sql=payload.sql,
             structure=structure,
             now=clock(),
             provider=provider,
             model=model,
+            prompt=MODEL_PROMPT_REVISION if external_mode else None,
         )
-        fingerprint = request_fingerprint(payload.sql)
+        explanation: dict[str, str | None] = {
+            "status": "not_requested",
+            "code": None,
+            "policy": "rules-only/v1",
+            "payloadSchema": None,
+            "payloadDigest": None,
+        }
+        if external_mode:
+            ranking_payload = build_model_ranking_payload(case_payload)
+            explanation = {
+                "status": "degraded",
+                "code": "MODEL_CREDENTIAL_UNAVAILABLE",
+                "policy": MODEL_EGRESS_POLICY,
+                "payloadSchema": MODEL_RANKING_REQUEST_SCHEMA,
+                "payloadDigest": ranking_payload.digest(),
+            }
+            try:
+                provider_request = stored_provider_request()
+            except ApiError as error:
+                explanation["code"] = error.code
+            else:
+                if (
+                    snapshot.external_model_egress is not True
+                    or provider_request.provider_host not in snapshot.allowed_provider_hosts
+                ):
+                    explanation["code"] = "MODEL_EGRESS_POLICY_DENIED"
+                else:
+                    model_result = await model_gateway.explain(
+                        ModelExplanationRequest(
+                            provider=provider_request,
+                            payload=ranking_payload,
+                        )
+                    )
+                    if model_result.status == "applied" and apply_model_ranking(
+                        case_payload,
+                        model_result.ranked_hypothesis_ids,
+                    ):
+                        explanation["status"] = "applied"
+                        explanation["code"] = None
+                    else:
+                        explanation["code"] = (
+                            model_result.code or "MODEL_OUTPUT_INVALID"
+                        )
         try:
             job = diagnosis_store.create_or_get(
                 idempotency_key=safe_idempotency_key,

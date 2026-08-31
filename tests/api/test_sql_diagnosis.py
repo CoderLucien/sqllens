@@ -10,7 +10,12 @@ from fastapi.testclient import TestClient
 from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
-from sqllens_api.provider import ProviderProbeRequest, ProviderProbeResult
+from sqllens_api.provider import (
+    ModelExplanationRequest,
+    ModelExplanationResult,
+    ProviderProbeRequest,
+    ProviderProbeResult,
+)
 
 OWNER_PASSWORD = "correct-horse-battery-staple"
 
@@ -31,6 +36,29 @@ class VerifiedProviderGateway:
             model=request.model or "demo-model",
             latency_ms=8,
         )
+
+
+class ReverseModelExplanationGateway:
+    def __init__(self) -> None:
+        self.requests: list[ModelExplanationRequest] = []
+
+    async def explain(self, request: ModelExplanationRequest) -> ModelExplanationResult:
+        self.requests.append(request)
+        hypothesis_ids = [item.hypothesis_id for item in request.payload.hypotheses]
+        return ModelExplanationResult(
+            status="applied",
+            ranked_hypothesis_ids=list(reversed(hypothesis_ids)),
+        )
+
+
+class FixedModelExplanationGateway:
+    def __init__(self, result: ModelExplanationResult) -> None:
+        self.result = result
+        self.requests: list[ModelExplanationRequest] = []
+
+    async def explain(self, request: ModelExplanationRequest) -> ModelExplanationResult:
+        self.requests.append(request)
+        return self.result
 
 
 @pytest.fixture
@@ -137,7 +165,13 @@ def test_sql_input_creates_auditable_persisted_job_and_case(
 
     assert re.fullmatch(r"job_[a-z0-9]{16,64}", str(job["jobId"]))
     assert re.fullmatch(r"case_[a-z0-9]{16,64}", str(job["caseId"]))
-    assert job["explanation"] == {"status": "not_requested", "code": None}
+    assert job["explanation"] == {
+        "status": "not_requested",
+        "code": None,
+        "policy": "rules-only/v1",
+        "payloadSchema": None,
+        "payloadDigest": None,
+    }
     assert case["schemaVersion"] == "diagnosis-case/v1"
     assert case["sourceLayer"] == "sql"
     assert case["workflowState"] == "ready"
@@ -332,8 +366,149 @@ def test_external_model_unavailability_degrades_to_deterministic_evidence(
     assert job["explanation"] == {
         "status": "degraded",
         "code": "MODEL_CREDENTIAL_UNAVAILABLE",
+        "policy": "model-egress/metadata-only-v1",
+        "payloadSchema": "sqllens-model-ranking-request/v1",
+        "payloadDigest": job["explanation"]["payloadDigest"],
     }
+    assert re.fullmatch(r"sha256:[a-f0-9]{64}", str(job["explanation"]["payloadDigest"]))
     assert case["workflowState"] == "ready"
     assert case["evidence"]
     assert case["pinnedRevisions"]["provider"] == "openai-compatible"
     assert case["pinnedRevisions"]["model"] == "demo-model"
+    assert case["pinnedRevisions"]["prompt"] == "sql-hypothesis-rank/v1"
+
+
+def test_external_model_ranks_only_redacted_hypotheses_and_idempotency_avoids_replay(
+    settings: Settings,
+    clock: FixedClock,
+) -> None:
+    ranker = ReverseModelExplanationGateway()
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=VerifiedProviderGateway(),
+            explanation_gateway=ranker,
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=VerifiedProviderGateway(),
+            explanation_gateway=ranker,
+        )
+    )
+    owner_csrf = login(client)
+    sql = (
+        "SELECT customer_id, COUNT(*) FROM secret_orders "
+        "JOIN secret_accounts USING (customer_id) "
+        "WHERE status = 'top-secret-literal' GROUP BY customer_id"
+    )
+
+    first_job, first_case = create_case(
+        client,
+        sql,
+        owner_csrf,
+        idempotency_key="external-ranked",
+    )
+    replay_job, replay_case = create_case(
+        client,
+        sql,
+        owner_csrf,
+        idempotency_key="external-ranked",
+    )
+
+    assert replay_job == first_job
+    assert replay_case == first_case
+    assert len(ranker.requests) == 1
+    request = ranker.requests[0]
+    outbound = request.payload.model_dump_json()
+    assert "secret_orders" not in outbound
+    assert "secret_accounts" not in outbound
+    assert "customer_id" not in outbound
+    assert "top-secret-literal" not in outbound
+    assert "probe-only-secret" not in outbound
+    assert all(item.sensitivity == "metadata" for item in request.payload.evidence)
+    original_ids = [item.hypothesis_id for item in request.payload.hypotheses]
+    assert [item["hypothesisId"] for item in first_case["hypotheses"]] == list(
+        reversed(original_ids)
+    )
+    assert first_job["explanation"]["status"] == "applied"
+    assert first_job["explanation"]["code"] is None
+    assert re.fullmatch(
+        r"sha256:[a-f0-9]{64}",
+        str(first_job["explanation"]["payloadDigest"]),
+    )
+    assert first_case["pinnedRevisions"]["prompt"] == "sql-hypothesis-rank/v1"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "MODEL_TIMEOUT",
+        "MODEL_RATE_LIMITED",
+        "MODEL_RESPONSE_LIMIT_EXCEEDED",
+        "MODEL_OUTPUT_INVALID",
+        "MODEL_UNAVAILABLE",
+    ],
+)
+def test_external_model_failures_keep_deterministic_case(
+    settings: Settings,
+    clock: FixedClock,
+    code: str,
+) -> None:
+    ranker = FixedModelExplanationGateway(
+        ModelExplanationResult(status="degraded", code=code)
+    )
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=VerifiedProviderGateway(),
+            explanation_gateway=ranker,
+        )
+    )
+    owner_csrf = complete_setup(client, settings, clock, mode="external")
+
+    job, case = create_case(
+        client,
+        "SELECT * FROM orders WHERE state = 'pending'",
+        owner_csrf,
+        idempotency_key=f"degraded-{code}",
+    )
+
+    assert job["status"] == "completed"
+    assert job["explanation"]["status"] == "degraded"
+    assert job["explanation"]["code"] == code
+    assert case["workflowState"] == "ready"
+    assert case["evidenceCompleteness"]["classification"] == "insufficient"
+    assert all(item["status"] == "candidate" for item in case["hypotheses"])
+
+
+def test_unknown_model_hypothesis_id_is_rejected_without_changing_case(
+    settings: Settings,
+    clock: FixedClock,
+) -> None:
+    ranker = FixedModelExplanationGateway(
+        ModelExplanationResult(
+            status="applied",
+            ranked_hypothesis_ids=["hyp_0000000000000000"],
+        )
+    )
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=VerifiedProviderGateway(),
+            explanation_gateway=ranker,
+        )
+    )
+    owner_csrf = complete_setup(client, settings, clock, mode="external")
+
+    job, case = create_case(client, "SELECT * FROM orders", owner_csrf)
+
+    assert job["explanation"]["status"] == "degraded"
+    assert job["explanation"]["code"] == "MODEL_OUTPUT_INVALID"
+    assert all(item["status"] == "candidate" for item in case["hypotheses"])
