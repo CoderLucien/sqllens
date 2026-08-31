@@ -1,5 +1,8 @@
 import json
+import os
 import pathlib
+import shutil
+import subprocess
 import unittest
 
 
@@ -42,14 +45,14 @@ class ComposeContractTest(unittest.TestCase):
         self.assertLessEqual(memory_total, 4096)
         self.assertNotIn("model-weights", self.compose.get("volumes", {}))
 
-    def test_bootstrap_code_uses_a_file_secret(self) -> None:
-        self.assertEqual(
-            self.compose["secrets"]["bootstrap_code"]["file"],
-            "${SQLLENS_BOOTSTRAP_FILE:?launcher must set SQLLENS_BOOTSTRAP_FILE}",
-        )
+    def test_long_running_web_has_no_bootstrap_secret_mount_or_environment(self) -> None:
+        self.assertNotIn("secrets", self.compose)
         web = self.compose["services"]["web-api"]
-        self.assertEqual(web["secrets"], ["bootstrap_code"])
-        self.assertIn("SQLLENS_BOOTSTRAP_CODE_FILE=/run/secrets/bootstrap_code", web["environment"])
+        self.assertNotIn("secrets", web)
+        self.assertFalse(
+            any("BOOTSTRAP" in value for value in web["environment"]),
+            web["environment"],
+        )
 
     def test_default_compose_only_starts_the_web_api(self) -> None:
         services = self.compose["services"]
@@ -64,6 +67,33 @@ class ComposeContractTest(unittest.TestCase):
 
         self.assertIn("http://127.0.0.1:8080/healthz", command[-1])
         self.assertNotIn("/api/v1/health", command[-1])
+
+    @unittest.skipUnless(shutil.which("docker"), "docker is required to resolve Compose paths")
+    def test_build_context_resolves_to_the_release_root(self) -> None:
+        environment = os.environ.copy()
+        environment["SQLLENS_BOOTSTRAP_FILE"] = "/dev/null"
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--project-directory",
+                str(ROOT),
+                "-f",
+                str(ROOT / "deploy" / "compose.json"),
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolved = pathlib.Path(json.loads(result.stdout)["services"]["web-api"]["build"]["context"])
+        self.assertEqual(resolved, ROOT.resolve())
 
     def test_model_controller_is_internal_only_and_always_idle_in_external_mode(self) -> None:
         controller = self.compose["services"]["model-controller"]

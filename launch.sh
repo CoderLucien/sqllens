@@ -8,6 +8,10 @@ STATE_DIR=${SQLLENS_STATE_DIR:-"$HOME/.sqllens"}
 BOOTSTRAP_FILE="$STATE_DIR/bootstrap-code"
 HASH_MARKER="$STATE_DIR/bootstrap-hash-persisted"
 LOCK_DIR="$STATE_DIR/start.lock"
+PORT_EXPLICIT=0
+if [ "${SQLLENS_PORT+x}" = x ]; then
+  PORT_EXPLICIT=1
+fi
 PORT=${SQLLENS_PORT:-8080}
 MODE=external
 ACTION=start
@@ -17,6 +21,7 @@ ARCH=
 DOCKER_VERSION=
 COMPOSE_VERSION=
 CONTAINER_ID=
+PUBLISHED_PORT=
 ALREADY_RUNNING=0
 LOCK_HELD=0
 HASH_PERSISTED=0
@@ -136,6 +141,28 @@ managed_web_running() {
   return 0
 }
 
+read_managed_port() {
+  published=$(docker port "$CONTAINER_ID" 8080/tcp 2>/dev/null | sed -n '1p') ||
+    fail "could not read the managed Web App port; run ./launch.sh diagnostics"
+  actual_port=${published##*:}
+  case "$actual_port" in
+    ''|*[!0-9]*)
+      fail "managed Web App has no valid published port; run ./launch.sh diagnostics"
+      ;;
+  esac
+  [ "$actual_port" -ge 1024 ] && [ "$actual_port" -le 65535 ] ||
+    fail "managed Web App has an invalid published port; run ./launch.sh diagnostics"
+  PUBLISHED_PORT=$actual_port
+}
+
+adopt_managed_port() {
+  read_managed_port
+  if [ "$PORT_EXPLICIT" -eq 1 ] && [ "$PORT" -ne "$PUBLISHED_PORT" ]; then
+    fail "managed Web App is already running at http://127.0.0.1:$PUBLISHED_PORT; requested port $PORT differs; use the existing URL or run ./launch.sh stop before SQLLENS_PORT=$PORT ./launch.sh start"
+  fi
+  PORT=$PUBLISHED_PORT
+}
+
 check_port() {
   case "$PORT" in
     ''|*[!0-9]*) fail "SQLLENS_PORT must be a number between 1024 and 65535" ;;
@@ -144,6 +171,7 @@ check_port() {
     fail "SQLLENS_PORT must be a number between 1024 and 65535"
 
   if managed_web_running; then
+    adopt_managed_port
     ALREADY_RUNNING=1
     return
   fi
@@ -203,7 +231,7 @@ run_preflight() {
 }
 
 release_start_lock() {
-  [ "$LOCK_HELD" -eq 1 ] || return
+  [ "$LOCK_HELD" -eq 1 ] || return 0
   if [ -f "$LOCK_DIR/owner-pid" ]; then
     unlink "$LOCK_DIR/owner-pid" 2>/dev/null || true
   fi
@@ -212,11 +240,10 @@ release_start_lock() {
 }
 
 scrub_bootstrap_secret() {
-  scrub_file="$STATE_DIR/.bootstrap-scrub.$$"
-  umask 077
-  : > "$scrub_file" || return 1
-  chmod 600 "$scrub_file" || return 1
-  mv -f "$scrub_file" "$BOOTSTRAP_FILE" || return 1
+  [ -f "$BOOTSTRAP_FILE" ] && [ ! -L "$BOOTSTRAP_FILE" ] || return 1
+  : > "$BOOTSTRAP_FILE" || return 1
+  chmod 600 "$BOOTSTRAP_FILE" || return 1
+  [ ! -s "$BOOTSTRAP_FILE" ] || return 1
   return 0
 }
 
@@ -225,8 +252,10 @@ on_exit() {
   trap - 0 1 2 3 15
 
   if [ "$HASH_PERSISTED" -eq 1 ]; then
-    scrub_bootstrap_secret ||
-      printf 'WARNING: bootstrap hash is persisted but the host secret could not be scrubbed\n' >&2
+    if ! scrub_bootstrap_secret; then
+      printf 'ERROR: bootstrap hash is persisted but the mounted secret could not be scrubbed\n' >&2
+      status=1
+    fi
   fi
   if [ -n "$TEMP_SECRET" ] && [ -f "$TEMP_SECRET" ]; then
     unlink "$TEMP_SECRET" 2>/dev/null || true
@@ -311,7 +340,6 @@ create_bootstrap_secret() {
   chmod 600 "$TEMP_SECRET"
   mv -f "$TEMP_SECRET" "$BOOTSTRAP_FILE"
   TEMP_SECRET=
-  export SQLLENS_BOOTSTRAP_FILE="$BOOTSTRAP_FILE"
 }
 
 load_reusable_bootstrap_secret() {
@@ -329,7 +357,6 @@ load_reusable_bootstrap_secret() {
   esac
   [ "${#BOOTSTRAP_CODE}" -eq 32 ] ||
     fail "retained bootstrap secret has an invalid length; run ./launch.sh diagnostics"
-  export SQLLENS_BOOTSTRAP_FILE="$BOOTSTRAP_FILE"
 }
 
 create_or_reuse_bootstrap_secret() {
@@ -339,7 +366,6 @@ create_or_reuse_bootstrap_secret() {
       return
     fi
     if [ -f "$HASH_MARKER" ] && [ "$(sed -n '1p' "$HASH_MARKER")" = v1 ]; then
-      export SQLLENS_BOOTSTRAP_FILE="$BOOTSTRAP_FILE"
       return
     fi
     fail "existing bootstrap secret is empty without a persistence marker; run ./launch.sh diagnostics"
@@ -352,11 +378,18 @@ create_or_reuse_bootstrap_secret() {
     chmod 600 "$TEMP_SECRET"
     mv -f "$TEMP_SECRET" "$BOOTSTRAP_FILE"
     TEMP_SECRET=
-    export SQLLENS_BOOTSTRAP_FILE="$BOOTSTRAP_FILE"
     return
   fi
 
   create_bootstrap_secret
+}
+
+ingest_bootstrap_secret() {
+  [ -n "$BOOTSTRAP_CODE" ] || return 0
+  [ -f "$BOOTSTRAP_FILE" ] && [ ! -L "$BOOTSTRAP_FILE" ] && [ -s "$BOOTSTRAP_FILE" ] ||
+    fail "bootstrap secret is unavailable for one-shot ingest; run ./launch.sh diagnostics"
+  compose run --rm -T --no-deps web-api bootstrap-ingest < "$BOOTSTRAP_FILE" ||
+    fail "runtime rejected bootstrap ingest; the 0600 secret was retained; run ./launch.sh diagnostics"
 }
 
 write_hash_marker() {
@@ -456,14 +489,17 @@ start_action() {
   acquire_start_lock
 
   if managed_web_running; then
+    adopt_managed_port
     wait_for_health
     print_running_url
     return
   fi
 
   create_or_reuse_bootstrap_secret
+  compose build web-api
   compose run --rm web-api migrate
-  compose up -d --build
+  ingest_bootstrap_secret
+  compose up -d --no-build
   wait_for_health
   wait_for_bootstrap_hash
   if [ -n "$BOOTSTRAP_CODE" ]; then
@@ -480,13 +516,44 @@ stop_action() {
 
 uninstall_action() {
   if [ "$PURGE_DATA" -eq 1 ]; then
+    if [ -L "$STATE_DIR" ]; then
+      fail "local state directory is a symbolic link; run ./launch.sh diagnostics"
+    fi
+    install_start_traps
+    acquire_start_lock
+    validate_purge_local_state
     compose down --remove-orphans --volumes --rmi local
+    clear_purge_local_state
     printf 'Application removed. Data volume removed by explicit request.\n'
     return
   fi
 
   compose down --remove-orphans --rmi local
   printf 'Application removed. Data retained in Docker volume sqllens-data.\n'
+}
+
+validate_purge_file() {
+  path=$1
+  label=$2
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    [ -f "$path" ] && [ ! -L "$path" ] ||
+      fail "$label is not a regular file; run ./launch.sh diagnostics"
+  fi
+}
+
+validate_purge_local_state() {
+  validate_purge_file "$BOOTSTRAP_FILE" "bootstrap secret"
+  validate_purge_file "$HASH_MARKER" "bootstrap persistence marker"
+}
+
+clear_purge_local_state() {
+  for path in "$BOOTSTRAP_FILE" "$HASH_MARKER"; do
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      unlink "$path" || fail "data was removed but local bootstrap state could not be cleared"
+    fi
+  done
+  release_start_lock
+  rmdir "$STATE_DIR" 2>/dev/null || true
 }
 
 diagnostics_action() {
@@ -530,10 +597,6 @@ diagnostics_action() {
 }
 
 parse_args "$@"
-
-# Read-only actions use a non-secret placeholder only for Compose interpolation.
-# The real secret path is exported exclusively after start holds the lock.
-export SQLLENS_BOOTSTRAP_FILE=/dev/null
 
 case "$ACTION" in
   check)
