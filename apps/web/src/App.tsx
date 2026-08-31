@@ -7,6 +7,7 @@ import {
   Cloud,
   Cpu,
   Database,
+  FileSearch,
   KeyRound,
   LoaderCircle,
   LogIn,
@@ -20,6 +21,7 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { ApiClientError, apiRequest, OwnerSession, SetupStage, SetupStatus } from "./api";
+import { DiagnosisWorkspace } from "./DiagnosisWorkspace";
 import "./styles.css";
 
 const EMPTY_STATUS: SetupStatus = {
@@ -101,6 +103,7 @@ export function App() {
   });
 
   const activeIndex = useMemo(() => stageIndex(status.state), [status.state]);
+  const diagnosisReady = status.state === "ready" && ownerSession.authenticated;
 
   async function loadStatus() {
     setLoading(true);
@@ -306,31 +309,54 @@ export function App() {
         </div>
       </header>
 
-      <div className="workspace">
-        <aside className="step-rail" aria-label="初始化进度">
-          <p className="rail-title">初始化</p>
-          <ol>
-            {STEPS.map((step, index) => {
-              const complete = index < activeIndex;
-              const active = index === activeIndex;
-              return (
-                <li className={active ? "active" : complete ? "complete" : ""} key={step.stage}>
-                  <span className="step-index" aria-hidden="true">
-                    {complete ? <Check size={15} /> : index + 1}
+      <div className={diagnosisReady ? "workspace workspace-diagnosis" : "workspace"}>
+        {diagnosisReady ? (
+          <aside className="diagnosis-rail" aria-label="工作台导航">
+            <p className="rail-title">工作台</p>
+            <nav aria-label="诊断类型">
+              <ul>
+                <li>
+                  <span aria-current="page" className="diagnosis-nav-active">
+                    <FileSearch aria-hidden="true" size={18} />
+                    SQL 诊断
                   </span>
-                  <span>{step.label}</span>
                 </li>
-              );
-            })}
-          </ol>
-          <div className="rail-boundary">
-            <LockKeyhole aria-hidden="true" size={17} />
-            <span>默认仅监听本机</span>
-          </div>
-        </aside>
+              </ul>
+            </nav>
+            <div className="diagnosis-boundary">
+              <LockKeyhole aria-hidden="true" size={17} />
+              <div>
+                <strong>Owner 会话</strong>
+                <span>仅监听本机</span>
+              </div>
+            </div>
+          </aside>
+        ) : (
+          <aside className="step-rail" aria-label="初始化进度">
+            <p className="rail-title">初始化</p>
+            <ol>
+              {STEPS.map((step, index) => {
+                const complete = index < activeIndex;
+                const active = index === activeIndex;
+                return (
+                  <li className={active ? "active" : complete ? "complete" : ""} key={step.stage}>
+                    <span className="step-index" aria-hidden="true">
+                      {complete ? <Check size={15} /> : index + 1}
+                    </span>
+                    <span>{step.label}</span>
+                  </li>
+                );
+              })}
+            </ol>
+            <div className="rail-boundary">
+              <LockKeyhole aria-hidden="true" size={17} />
+              <span>默认仅监听本机</span>
+            </div>
+          </aside>
+        )}
 
-        <main className="setup-main">
-          <div className="setup-content">
+        <main className={diagnosisReady ? "diagnosis-main" : "setup-main"}>
+          <div className={diagnosisReady ? "diagnosis-content" : "setup-content"}>
             {loading ? (
               <div className="loading-state" role="status">
                 <LoaderCircle className="spin" aria-hidden="true" size={24} />
@@ -610,21 +636,14 @@ export function App() {
                   </section>
                 )}
 
-                {status.state === "ready" && ownerSession.authenticated && (
-                  <section aria-labelledby="ready-title">
-                    <div className="section-icon section-icon-success">
-                      <Check aria-hidden="true" size={22} />
-                    </div>
-                    <p className="eyebrow">初始化完成</p>
-                    <h1 id="ready-title">诊断工作台已就绪</h1>
-                    <p className="section-summary">
-                      当前模式：{status.model_mode === "external" ? "外部模型" : "本地规则"}
-                    </p>
-                    <div className="ready-band">
-                      <Activity aria-hidden="true" size={20} />
-                      <span>运行状态正常</span>
-                    </div>
-                  </section>
+                {diagnosisReady && (
+                  <DiagnosisWorkspace
+                    csrfToken={ownerSession.csrf_token ?? ""}
+                    modelMode={status.model_mode ?? "rules"}
+                    onAuthRequired={() => {
+                      setOwnerSession({ authenticated: false, csrf_token: null });
+                    }}
+                  />
                 )}
 
                 {status.state !== "ready" && <LocalModeStatus />}

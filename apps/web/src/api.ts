@@ -35,6 +35,94 @@ export interface OwnerSession {
   csrf_token: string | null;
 }
 
+export type ExplanationStatus = "not_requested" | "applied" | "degraded";
+
+export interface DiagnosisExplanation {
+  status: ExplanationStatus;
+  code: string | null;
+  policy: string;
+  payloadSchema: string | null;
+  payloadDigest: string | null;
+}
+
+export interface DiagnosisJob {
+  jobId: string;
+  caseId: string;
+  status: "completed";
+  explanation: DiagnosisExplanation;
+}
+
+export interface DiagnosisEvidence {
+  evidenceId: string;
+  kind: string;
+  source: string;
+  observedAt: string;
+  collectedAt: string;
+  freshness: string;
+  coverage: number;
+  sensitivity: string;
+  integrityDigest: string;
+  summary: string;
+}
+
+export interface DiagnosisHypothesis {
+  hypothesisId: string;
+  statement: string;
+  confidence: number;
+  supportingEvidenceIds: string[];
+  contradictingEvidenceIds: string[];
+  status: "candidate" | "supported" | "rejected";
+}
+
+export interface DiagnosisRecommendation {
+  recommendationId: string;
+  title: string;
+  rationale: string;
+  risk: "low" | "medium" | "high" | "critical";
+  prerequisites: string[];
+  validation: string[];
+  rollback: string[];
+  evidenceIds: string[];
+  owner: {
+    kind: string;
+    id: string;
+    displayName: string;
+  };
+  requiresHumanApproval: boolean;
+}
+
+export interface DiagnosisCase {
+  schemaVersion: "diagnosis-case/v1";
+  caseId: string;
+  revision: number;
+  sourceLayer: "sql";
+  workflowState: "ready";
+  outcome: "pending";
+  inputFingerprint: string;
+  createdAt: string;
+  updatedAt: string;
+  evidenceCompleteness: {
+    score: number;
+    classification: "insufficient" | "partial" | "sufficient";
+    missing: string[];
+  };
+  evidence: DiagnosisEvidence[];
+  hypotheses: DiagnosisHypothesis[];
+  recommendations: DiagnosisRecommendation[];
+  reviews: unknown[];
+  feedback: unknown[];
+  pinnedRevisions: {
+    ruleSet: string;
+    parser: string;
+    policy: string;
+    redaction: string;
+    provider: string | null;
+    model: string | null;
+    modelArtifact: string | null;
+    prompt: string | null;
+  };
+}
+
 interface ErrorEnvelope {
   error?: {
     code?: string;
