@@ -127,11 +127,15 @@ class DiagnosisCaseContractTest(unittest.TestCase):
             "evidence_insufficient",
             "risk_accepted",
         }
+        process_only = {"accepted", "rejected", "implemented", "validated"}
+        missing = required - actual
+        leaked_process_states = process_only & actual
 
-        self.assertTrue(
-            required <= actual,
-            f"DiagnosisCase outcome is missing approved terminal states: "
-            f"{sorted(required - actual)}",
+        self.assertFalse(
+            missing or leaked_process_states,
+            "DiagnosisCase outcome does not match the approved business-result "
+            f"boundary: missing={sorted(missing)}, "
+            f"process_states={sorted(leaked_process_states)}",
         )
 
     def test_one_evidence_item_cannot_both_support_and_contradict_a_hypothesis(

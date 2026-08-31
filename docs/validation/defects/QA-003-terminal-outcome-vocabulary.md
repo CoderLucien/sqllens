@@ -42,7 +42,8 @@ python3 -m unittest \
 Expected: the schema can represent all four approved terminal results.
 
 Actual: the test reports missing `validated_effective`,
-`evidence_insufficient`, and `risk_accepted`.
+`evidence_insufficient`, and `risk_accepted`, and reports the review/
+implementation process states still present in the outcome field.
 
 ## Required Disposition
 
