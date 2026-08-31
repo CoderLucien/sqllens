@@ -123,6 +123,9 @@ class DiagnosisCaseContractTest(unittest.TestCase):
         outcome_schema = schema["properties"]["outcome"]
         actual = set(outcome_schema["enum"])
         legacy_read_only = set(outcome_schema.get("x-legacyReadOnlyValues", []))
+        legacy_read_only.update(
+            outcome_schema.get("x-legacyDraftAliases", {}).keys()
+        )
         required = {
             "validated_effective",
             "rolled_back",
