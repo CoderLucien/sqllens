@@ -51,6 +51,20 @@ class ComposeContractTest(unittest.TestCase):
         self.assertEqual(web["secrets"], ["bootstrap_code"])
         self.assertIn("SQLLENS_BOOTSTRAP_CODE_FILE=/run/secrets/bootstrap_code", web["environment"])
 
+    def test_default_compose_only_starts_the_web_api(self) -> None:
+        services = self.compose["services"]
+
+        self.assertNotIn("profiles", services["web-api"])
+        self.assertNotIn("depends_on", services["web-api"])
+        self.assertEqual(services["worker"]["profiles"], ["async-runtime"])
+        self.assertEqual(services["model-controller"]["profiles"], ["local-runtime"])
+
+    def test_web_healthcheck_uses_the_frozen_endpoint(self) -> None:
+        command = self.compose["services"]["web-api"]["healthcheck"]["test"]
+
+        self.assertIn("http://127.0.0.1:8080/healthz", command[-1])
+        self.assertNotIn("/api/v1/health", command[-1])
+
     def test_model_controller_is_internal_only_and_always_idle_in_external_mode(self) -> None:
         controller = self.compose["services"]["model-controller"]
 
