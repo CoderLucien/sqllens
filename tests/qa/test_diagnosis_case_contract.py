@@ -118,6 +118,22 @@ class DiagnosisCaseContractTest(unittest.TestCase):
             "contract validation accepted an invalid date-time",
         )
 
+    def test_outcome_contract_can_represent_all_approved_terminal_states(self) -> None:
+        schema = load_json(CONTRACT_DIR / "diagnosis-case-v1.schema.json")
+        actual = set(schema["properties"]["outcome"]["enum"])
+        required = {
+            "validated_effective",
+            "rolled_back",
+            "evidence_insufficient",
+            "risk_accepted",
+        }
+
+        self.assertTrue(
+            required <= actual,
+            f"DiagnosisCase outcome is missing approved terminal states: "
+            f"{sorted(required - actual)}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
