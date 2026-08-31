@@ -1,9 +1,11 @@
 # QA-007: Effect Outcome Events Are Not One Causal Change Chain
 
-**Status:** OPEN  
-**Severity:** High  
-**Release impact:** Blocks `validated_effective` and `rolled_back` outcome
-integrity.
+Status: RESOLVED at contract layer; runtime integration retest pending
+Severity: High
+Detected against: `main@1c3c271`
+Resolved in: `main@c7fbe83`
+Owner: contract/domain owner (`#t8`), not QA
+Regression tests: `tests/qa/test_diagnosis_case_contract.py`
 
 ## Requirement
 
@@ -37,7 +39,14 @@ python3 -m unittest \
 
 Expected: both malformed change chains are rejected.
 
-Actual: no exception is raised by the current contract semantics.
+Actual at detection: no exception is raised by the contract semantics.
+
+## Independent Retest
+
+On `main@c7fbe83`, QA verified the same-recommendation constraint and the full
+approval, implementation, observation, collection and terminal-feedback time
+chain. Cross-recommendation and three out-of-order variants are rejected.
+Runtime event creation and atomic persistence remain blocked.
 
 ## Required Disposition
 

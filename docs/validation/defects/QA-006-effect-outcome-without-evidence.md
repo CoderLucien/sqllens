@@ -1,9 +1,11 @@
 # QA-006: Effect Outcomes Have No Evidence Binding
 
-**Status:** OPEN  
-**Severity:** High  
-**Release impact:** Blocks the evidence-first DiagnosisCase contract and the
-change-effect closure journey.
+Status: RESOLVED at contract layer; runtime integration retest pending
+Severity: High
+Detected against: `main@1c3c271`
+Resolved in: `main@c7fbe83`
+Owner: contract/domain owner (`#t8`), not QA
+Regression tests: `tests/qa/test_diagnosis_case_contract.py`
 
 ## Requirement
 
@@ -32,7 +34,15 @@ python3 -m unittest \
 Expected: the serialized contract has a machine-validatable outcome evidence
 binding, omitting it is rejected, and dangling evidence IDs are rejected.
 
-Actual: neither `feedback.evidenceIds` nor `case.outcomeEvidenceIds` exists.
+Actual at detection: neither `feedback.evidenceIds` nor
+`case.outcomeEvidenceIds` exists.
+
+## Independent Retest
+
+On `main@c7fbe83`, QA verified non-empty terminal-feedback evidence bindings,
+dangling-reference rejection and outcome-specific evidence kinds for
+`validated_effective` and `rolled_back`. These are contract checks only; the
+runtime effect collector and persistence path remain blocked.
 
 ## Required Disposition
 

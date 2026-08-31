@@ -148,6 +148,42 @@ class DiagnosisCaseContractTest(unittest.TestCase):
             f"writable_legacy_states={sorted(writable_legacy_states)}",
         )
 
+    def test_legacy_rolled_back_is_normalized_without_downgrading_current_result(
+        self,
+    ) -> None:
+        legacy = copy.deepcopy(self.valid)
+        legacy["outcome"] = "rolled_back"
+
+        implemented = copy.deepcopy(self.valid["feedback"][0])
+        implemented["feedbackId"] = "fb_0000000000000002"
+        implemented["kind"] = "implemented"
+        rolled_back = copy.deepcopy(self.valid["feedback"][0])
+        rolled_back["feedbackId"] = "fb_0000000000000003"
+        rolled_back["kind"] = "rolled_back"
+        legacy["feedback"] = [implemented, rolled_back]
+
+        migrated_legacy = self.validation.migrate_legacy_draft_outcome(legacy)
+        self.assertEqual(
+            migrated_legacy["outcome"],
+            "pending",
+            "a pre-freeze rolled_back record cannot satisfy the stronger "
+            "current effect-evidence semantics",
+        )
+        self.validator.validate(migrated_legacy)
+        self.validation.validate_references(migrated_legacy)
+        self.validation.validate_case_semantics(migrated_legacy)
+
+        current = self.validation.case_for_outcome(self.valid, "rolled_back")
+        migrated_current = self.validation.migrate_legacy_draft_outcome(current)
+        self.assertEqual(
+            migrated_current["outcome"],
+            "rolled_back",
+            "migration must not downgrade a current, evidence-backed result",
+        )
+        self.validator.validate(migrated_current)
+        self.validation.validate_references(migrated_current)
+        self.validation.validate_case_semantics(migrated_current)
+
     def test_effect_outcomes_have_a_machine_validated_evidence_binding(self) -> None:
         schema = load_json(CONTRACT_DIR / "diagnosis-case-v1.schema.json")
         case_properties = schema["properties"]

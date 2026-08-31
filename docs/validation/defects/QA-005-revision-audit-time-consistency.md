@@ -1,8 +1,11 @@
 # QA-005: Revision Audit Times Are Not Consistently Enforced
 
-**Status:** OPEN  
-**Severity:** Medium  
-**Release impact:** Blocks audit-ordering claims for the contract baseline.
+Status: RESOLVED at contract layer; runtime integration retest pending
+Severity: Medium
+Detected against: `main@1c3c271`
+Resolved in: `main@c7fbe83`
+Owner: contract/domain owner (`#t8`), not QA
+Regression tests: `tests/qa/test_diagnosis_case_contract.py`
 
 ## QA-005A: Appended Audit Records Can Be Backdated Or Future-Dated
 
@@ -44,7 +47,14 @@ python3 -m unittest \
   -v
 ```
 
-Expected: both tests pass.
+Expected: all focused tests pass.
 
-Actual: the time-window test raises no validation error, and the lower-case
+Actual at detection: the time-window test raises no validation error, and the lower-case
 `z` path raises `ValueError: Invalid isoformat string`.
+
+## Independent Retest
+
+On `main@c7fbe83`, QA verified initial and appended audit windows, chronological
+append order, malformed RFC 3339 rejection and lower-case `z` compatibility.
+The focused regressions and warning-as-error contract command pass. Runtime
+audit ordering remains blocked until the persistence path exists.

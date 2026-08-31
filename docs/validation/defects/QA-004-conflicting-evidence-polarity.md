@@ -1,9 +1,11 @@
 # QA-004: One Evidence Item Can Both Support And Contradict A Hypothesis
 
-**Status:** OPEN  
-**Severity:** High  
-**Release impact:** Blocks the evidence-integrity portion of the
-`DiagnosisCaseV1` contract.
+Status: RESOLVED at contract layer; runtime integration retest pending
+Severity: High
+Detected against: `main@1c3c271`
+Resolved in: `main@c7fbe83`
+Owner: contract/domain owner (`#t8`), not QA
+Regression tests: `tests/qa/test_diagnosis_case_contract.py`
 
 ## Requirement
 
@@ -29,7 +31,14 @@ python3 -m unittest \
 
 Expected: domain validation rejects the overlap.
 
-Actual: no exception is raised.
+Actual at detection: no exception is raised.
+
+## Independent Retest
+
+On `main@c7fbe83`, the unchanged QA regression rejects an evidence ID present
+in both polarity arrays. The authoritative fixture command also exercises the
+negative case. Runtime persistence remains blocked until executable code calls
+the same reference and semantic validation atomically.
 
 ## Required Disposition
 

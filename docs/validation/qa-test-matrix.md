@@ -165,11 +165,11 @@ strict read-only or zero-impact.
 | ID | Environment | Scenario and assertions | Result |
 |---|---|---|---|
 | `CASE-001` | E1/E2/E3 | All three paths produce the same versioned DiagnosisCase schema and immutable revisions. | `NOT_RUN` |
-| `CASE-002` | E1/E2/E3 | Every conclusion and recommendation references existing evidence IDs; fabricated/dangling IDs are rejected. | `FAIL` |
-| `CASE-003` | E1/E2/E3 | Supporting and contradicting evidence remain distinct; confidence and completeness are independent bounded fields. | `FAIL` |
-| `CASE-004` | E1/E2/E3 | Insufficient or contradictory evidence produces an abstention with minimum next evidence, not a generic recommendation. | `FAIL` |
+| `CASE-002` | E1/E2/E3 | Every conclusion and recommendation references existing evidence IDs; fabricated/dangling IDs are rejected. | `BLOCKED` |
+| `CASE-003` | E1/E2/E3 | Supporting and contradicting evidence remain distinct; confidence and completeness are independent bounded fields. | `BLOCKED` |
+| `CASE-004` | E1/E2/E3 | Insufficient or contradictory evidence produces an abstention with minimum next evidence, not a generic recommendation. | `BLOCKED` |
 | `CASE-005` | E1/E2/E3 | Recommendation includes risk, prerequisites, owner, validation and rollback; no API executes recommendations or production changes. | `NOT_RUN` |
-| `CASE-006` | E1/E2/E3 | Evidence/provider/prompt/policy/redaction revisions and input fingerprints are retained across review and outcome changes. | `FAIL` |
+| `CASE-006` | E1/E2/E3 | Evidence/provider/prompt/policy/redaction revisions and input fingerprints are retained across review and outcome changes. | `BLOCKED` |
 | `CASE-007` | E1/E2/E3 | Allowed terminal outcome is separate from workflow status and is one of validated-effective, rolled-back, evidence-insufficient, or risk-accepted. | `FAIL` |
 | `CASE-008` | E1/E2/E3 | Concurrent reviews and retries cannot overwrite an immutable revision or lose audit events. | `NOT_RUN` |
 
@@ -186,7 +186,7 @@ strict read-only or zero-impact.
 | `SEC-007` | E1 | Error envelopes expose stable codes but no stack, SQL literals, credential, token, internal path or provider body. | `NOT_RUN` |
 | `SEC-008` | E0 | Locked dependencies and final images pass native audits, secret scan, vulnerability scan and SBOM generation under the release policy. | `NOT_RUN` |
 | `SEC-009` | E1 | Outbound destinations, redirects, proxies and DNS resolution follow committed allowlists; private/reserved endpoints cannot be reached by user-controlled input. | `NOT_RUN` |
-| `SEC-010` | E1 | Audit events are append-only/ordered, identify actor/action/policy/outcome, and avoid raw sensitive payloads. | `FAIL` |
+| `SEC-010` | E1 | Audit events are append-only/ordered, identify actor/action/policy/outcome, and avoid raw sensitive payloads. | `BLOCKED` |
 
 ## 2C4G Performance Qualification
 
@@ -274,27 +274,19 @@ Official references:
 
 ## Current Open Defects
 
-- `CASE-007`: [QA-003](defects/QA-003-terminal-outcome-vocabulary.md) - the
-  contract cannot represent all four approved terminal business outcomes.
-- `CASE-003`: [QA-004](defects/QA-004-conflicting-evidence-polarity.md) - one
-  evidence ID can simultaneously support and contradict a hypothesis.
-- `SEC-010`: [QA-005](defects/QA-005-revision-audit-time-consistency.md) - newly
-  appended audit records are not bounded to their revision time window, and
-  accepted RFC 3339 input is parsed inconsistently.
-- `CASE-002`, `CASE-006`:
-  [QA-006](defects/QA-006-effect-outcome-without-evidence.md) - effective and
-  rolled-back business outcomes have no machine-validatable link to result
-  evidence.
-- `CASE-006`, `CASE-007`:
-  [QA-007](defects/QA-007-effect-outcome-causality.md) - approval,
-  implementation, result evidence and terminal feedback can refer to different
-  recommendations or occur out of causal order.
-- `CASE-002`, `CASE-003`, `CASE-004`:
-  [QA-008](defects/QA-008-decided-hypothesis-without-evidence.md) - favored and
-  rejected hypotheses can be persisted without evidence for their polarity.
+- `CASE-007`:
+  [QA-009](defects/QA-009-legacy-rolled-back-migration.md) - a valid pre-freeze
+  rolled-back draft is not normalized before the stronger current result
+  semantics are applied.
 
-These are contract-level failures. Product API/database validation remains
-`NOT_RUN` until an executable runtime slice exists.
+## Resolved At Contract Layer
+
+- [QA-003](defects/QA-003-terminal-outcome-vocabulary.md) through
+  [QA-008](defects/QA-008-decided-hypothesis-without-evidence.md) pass their
+  independent contract regressions on `main@c7fbe83`.
+
+The affected product API/database cases remain `BLOCKED`, not `PASS`, until an
+executable runtime slice invokes all validation layers atomically.
 
 ## Current Blocking Inputs
 

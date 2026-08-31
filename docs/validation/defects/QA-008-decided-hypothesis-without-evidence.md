@@ -1,8 +1,11 @@
 # QA-008: Decided Hypotheses Can Have No Evidence For Their Polarity
 
-**Status:** OPEN  
-**Severity:** High  
-**Release impact:** Blocks evidence-first case conclusions.
+Status: RESOLVED at contract layer; runtime integration retest pending
+Severity: High
+Detected against: `main@1c3c271`
+Resolved in: `main@c7fbe83`
+Owner: contract/domain owner (`#t8`), not QA
+Regression tests: `tests/qa/test_diagnosis_case_contract.py`
 
 ## Requirement
 
@@ -32,7 +35,14 @@ python3 -m unittest \
 
 Expected: both malformed hypotheses are rejected.
 
-Actual: neither path raises an error.
+Actual at detection: neither path raises an error.
+
+## Independent Retest
+
+On `main@c7fbe83`, QA verified that `favored` requires supporting evidence and
+`rejected` requires contradicting evidence, while candidate and unresolved
+hypotheses retain their abstention behavior. Runtime model-output persistence
+remains blocked.
 
 ## Required Disposition
 

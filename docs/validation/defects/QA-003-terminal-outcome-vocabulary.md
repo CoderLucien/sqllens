@@ -1,9 +1,11 @@
 # QA-003: DiagnosisCase Cannot Represent Approved Terminal Outcomes
 
-**Status:** OPEN  
-**Severity:** High  
-**Release impact:** Blocks the `DiagnosisCaseV1` contract freeze and P0
-acceptance.
+Status: RESOLVED at contract layer; runtime integration retest pending
+Severity: High
+Detected against: `main@1c3c271`
+Resolved in: `main@c7fbe83`
+Owner: contract/domain owner (`#t8`), not QA
+Regression tests: `tests/qa/test_diagnosis_case_contract.py`
 
 ## Requirement
 
@@ -41,9 +43,17 @@ python3 -m unittest \
 
 Expected: the schema can represent all four approved terminal results.
 
-Actual: the test reports missing `validated_effective`,
+Actual at detection: the test reports missing `validated_effective`,
 `evidence_insufficient`, and `risk_accepted`, and reports the review/
 implementation process states still present in the outcome field.
+
+## Independent Retest
+
+On `main@c7fbe83`, QA verified all four terminal outcomes, all 25 outcome
+transition pairs, same-revision trigger requirements and five non-mutating
+legacy draft aliases. The focused test and independent adversarial matrix pass.
+The production persistence/API path does not exist yet, so runtime acceptance
+remains blocked.
 
 ## Required Disposition
 
