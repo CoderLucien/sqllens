@@ -281,6 +281,24 @@ class DiagnosisCaseContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "supporting|contradicting|overlap"):
             self.validation.validate_references(case)
 
+    def test_decided_hypotheses_require_evidence_for_their_polarity(self) -> None:
+        for status, required_field in (
+            ("favored", "supportingEvidenceIds"),
+            ("rejected", "contradictingEvidenceIds"),
+        ):
+            with self.subTest(status=status):
+                case = copy.deepcopy(self.valid)
+                hypothesis = case["hypotheses"][0]
+                hypothesis["status"] = status
+                hypothesis["confidence"] = 1
+                hypothesis[required_field] = []
+
+                with self.assertRaisesRegex(
+                    ValueError, "hypothesis|supporting|contradicting|evidence"
+                ):
+                    self.validation.validate_references(case)
+                    self.validation.validate_case_semantics(case)
+
     def test_new_audit_records_must_fall_inside_the_revision_time_window(self) -> None:
         for created_at in (
             "2026-08-31T09:59:59Z",
