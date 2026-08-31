@@ -17,6 +17,11 @@ export interface SetupStatus {
   bootstrap_hash_persisted: boolean;
   model_mode: "external" | "rules" | null;
   csrf_token: string | null;
+  recovery: {
+    required: boolean;
+    action: "bootstrap-reissue" | null;
+    reason: "bootstrap_expired" | "attempt_limit_reached" | "setup_session_missing" | null;
+  };
   local_model: LocalModelStatus;
 }
 

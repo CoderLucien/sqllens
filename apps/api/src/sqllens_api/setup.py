@@ -184,30 +184,13 @@ class SetupStore:
         return self.snapshot().initialized
 
     def issue_bootstrap_code(self, now: datetime, *, code: str | None = None) -> str:
-        snapshot = self.snapshot()
-        if snapshot.initialized:
-            raise RuntimeError("setup is already finalized")
         normalized = normalize_bootstrap_code(code or "")
         if code is None:
             normalized = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(16))
         if len(normalized) < 12:
             raise ValueError("bootstrap code must contain at least 12 valid characters")
-        salt = secrets.token_bytes(16)
-        now_value = _timestamp(now)
-        with self.engine.begin() as connection:
-            connection.execute(
-                update(setup_state)
-                .where(setup_state.c.id == _STATE_ID)
-                .values(
-                    stage="bootstrap_required",
-                    bootstrap_hash=_derive_code_hash(normalized, salt),
-                    bootstrap_salt=_b64(salt),
-                    bootstrap_expires_at=now_value + self.settings.bootstrap_ttl_seconds,
-                    bootstrap_consumed_at=None,
-                    bootstrap_failed_attempts=0,
-                    updated_at=now_value,
-                )
-            )
+        if not self.reissue_bootstrap_code(normalized, now):
+            raise RuntimeError("setup is already finalized")
         return format_bootstrap_code(normalized)
 
     def ingest_bootstrap_code(self, code: str, now: datetime) -> bool:
@@ -271,7 +254,7 @@ class SetupStore:
             )
         return result.rowcount == 1
 
-    def consume_bootstrap_code(self, code: str, now: datetime) -> bool:
+    def consume_bootstrap_code(self, code: str, now: datetime) -> int | None:
         now_value = _timestamp(now)
         with self.engine.connect() as connection:
             row = (
@@ -282,14 +265,15 @@ class SetupStore:
         salt_value = row["bootstrap_salt"]
         expected_hash = row["bootstrap_hash"]
         if salt_value is None or expected_hash is None:
-            return False
+            return None
         if (
-            row["bootstrap_consumed_at"] is not None
+            row["stage"] != "bootstrap_required"
+            or row["bootstrap_consumed_at"] is not None
             or row["bootstrap_expires_at"] is None
             or row["bootstrap_expires_at"] < now_value
             or row["bootstrap_failed_attempts"] >= self.settings.bootstrap_max_attempts
         ):
-            return False
+            return None
         candidate_hash = _derive_code_hash(code, _decode_b64(salt_value))
         eligible = hmac.compare_digest(candidate_hash, expected_hash)
         if eligible:
@@ -298,6 +282,10 @@ class SetupStore:
                     update(setup_state)
                     .where(
                         setup_state.c.id == _STATE_ID,
+                        setup_state.c.stage == "bootstrap_required",
+                        setup_state.c.bootstrap_hash == expected_hash,
+                        setup_state.c.bootstrap_salt == salt_value,
+                        setup_state.c.setup_epoch == row["setup_epoch"],
                         setup_state.c.bootstrap_consumed_at.is_(None),
                         setup_state.c.bootstrap_expires_at >= now_value,
                         setup_state.c.bootstrap_failed_attempts
@@ -309,18 +297,27 @@ class SetupStore:
                         updated_at=now_value,
                     )
                 )
-            return result.rowcount == 1
+            return row["setup_epoch"] if result.rowcount == 1 else None
         if row["bootstrap_consumed_at"] is None and row["bootstrap_expires_at"] >= now_value:
             with self.engine.begin() as connection:
                 connection.execute(
                     update(setup_state)
-                    .where(setup_state.c.id == _STATE_ID)
+                    .where(
+                        setup_state.c.id == _STATE_ID,
+                        setup_state.c.stage == "bootstrap_required",
+                        setup_state.c.bootstrap_hash == expected_hash,
+                        setup_state.c.bootstrap_salt == salt_value,
+                        setup_state.c.setup_epoch == row["setup_epoch"],
+                        setup_state.c.bootstrap_consumed_at.is_(None),
+                        setup_state.c.bootstrap_failed_attempts
+                        == row["bootstrap_failed_attempts"],
+                    )
                     .values(
                         bootstrap_failed_attempts=setup_state.c.bootstrap_failed_attempts + 1,
                         updated_at=now_value,
                     )
                 )
-        return False
+        return None
 
     def save_policy(
         self,
@@ -335,9 +332,14 @@ class SetupStore:
             raise RuntimeError("security policy is not valid in the current setup stage")
         now_value = _timestamp(now)
         with self.engine.begin() as connection:
-            connection.execute(
+            result = connection.execute(
                 update(setup_state)
-                .where(setup_state.c.id == _STATE_ID)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.stage == "security_policy_required",
+                    setup_state.c.setup_epoch == snapshot.setup_epoch,
+                    setup_state.c.finalized_at.is_(None),
+                )
                 .values(
                     stage="model_required",
                     external_model_egress=external_model_egress,
@@ -351,6 +353,8 @@ class SetupStore:
                     updated_at=now_value,
                 )
             )
+        if result.rowcount != 1:
+            raise RuntimeError("security policy state changed concurrently")
 
     def save_provider_probe(
         self,
@@ -364,9 +368,15 @@ class SetupStore:
         if snapshot.stage != "model_required" or snapshot.initialized:
             raise RuntimeError("provider probe is not valid in the current setup stage")
         with self.engine.begin() as connection:
-            connection.execute(
+            write_result = connection.execute(
                 update(setup_state)
-                .where(setup_state.c.id == _STATE_ID)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.stage == "model_required",
+                    setup_state.c.setup_epoch == snapshot.setup_epoch,
+                    setup_state.c.finalized_at.is_(None),
+                    setup_state.c.policy_committed_at == snapshot.policy_committed_at,
+                )
                 .values(
                     provider_status=result.status,
                     provider_base_url=request.base_url,
@@ -375,6 +385,8 @@ class SetupStore:
                     updated_at=_timestamp(now),
                 )
             )
+        if write_result.rowcount != 1:
+            raise RuntimeError("provider state changed concurrently")
 
     def finalize(self, mode: Literal["external", "rules"], now: datetime) -> None:
         snapshot = self.snapshot()
@@ -386,9 +398,15 @@ class SetupStore:
             raise RuntimeError("a verified external provider is required")
         now_value = _timestamp(now)
         with self.engine.begin() as connection:
-            connection.execute(
+            result = connection.execute(
                 update(setup_state)
-                .where(setup_state.c.id == _STATE_ID)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.stage == "model_required",
+                    setup_state.c.setup_epoch == snapshot.setup_epoch,
+                    setup_state.c.finalized_at.is_(None),
+                    setup_state.c.policy_committed_at == snapshot.policy_committed_at,
+                )
                 .values(
                     stage="ready",
                     model_mode=mode,
@@ -396,6 +414,8 @@ class SetupStore:
                     updated_at=now_value,
                 )
             )
+        if result.rowcount != 1:
+            raise RuntimeError("finalize state changed concurrently")
 
 
 class SetupSessionSigner:

@@ -240,13 +240,14 @@ def create_app(
 
     @app.post("/api/v1/setup/bootstrap")
     async def bootstrap(payload: BootstrapInput) -> Response:
-        if not store.consume_bootstrap_code(payload.code, clock()):
+        consumed_epoch = store.consume_bootstrap_code(payload.code, clock())
+        if consumed_epoch is None:
             raise ApiError(
                 401,
                 "BOOTSTRAP_INVALID",
                 "The initialization code is invalid or unavailable.",
             )
-        cookie, csrf_token = signer.issue(clock(), epoch=store.snapshot().setup_epoch)
+        cookie, csrf_token = signer.issue(clock(), epoch=consumed_epoch)
         response = JSONResponse(
             content={"state": "security_policy_required", "csrf_token": csrf_token}
         )
@@ -322,7 +323,14 @@ def create_app(
                 result.code or "PROVIDER_UNAVAILABLE",
                 result.message or "Provider did not pass the bounded health check.",
             )
-        store.save_provider_probe(payload, result, clock())
+        try:
+            store.save_provider_probe(payload, result, clock())
+        except RuntimeError as error:
+            raise ApiError(
+                409,
+                "SETUP_STATE_CHANGED",
+                "Setup state changed while the provider was being verified.",
+            ) from error
         return JSONResponse(content=result.model_dump(exclude_none=True))
 
     @app.post("/api/v1/setup/finalize")

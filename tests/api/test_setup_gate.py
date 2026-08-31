@@ -3,12 +3,14 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqllens_api import setup as setup_state_module
 from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
@@ -339,6 +341,44 @@ def test_reissue_after_cookie_loss_resets_partial_setup_and_invalidates_old_sess
     assert restarted.post(
         "/api/v1/setup/bootstrap", json={"code": replacement}
     ).status_code == 200
+
+
+def test_reissue_wins_against_an_old_code_request_already_computing_its_hash(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SetupStore(settings)
+    old_code = store.issue_bootstrap_code(clock(), code="ABCD-EFGH-JKLM-NPQR")
+    old_epoch = store.snapshot().setup_epoch
+    replacement = "WXYZ-2345-6789-ABCD"
+    hashing_started = threading.Event()
+    allow_old_hash_to_finish = threading.Event()
+    original_derive = setup_state_module._derive_code_hash
+
+    def controlled_derive(code: str, salt: bytes) -> str:
+        if setup_state_module.normalize_bootstrap_code(code) == (
+            setup_state_module.normalize_bootstrap_code(old_code)
+        ):
+            hashing_started.set()
+            assert allow_old_hash_to_finish.wait(timeout=5)
+        return original_derive(code, salt)
+
+    monkeypatch.setattr(setup_state_module, "_derive_code_hash", controlled_derive)
+    consumed_epochs: list[int | None] = []
+    old_request = threading.Thread(
+        target=lambda: consumed_epochs.append(store.consume_bootstrap_code(old_code, clock()))
+    )
+    old_request.start()
+    assert hashing_started.wait(timeout=5)
+
+    assert store.reissue_bootstrap_code(replacement, clock()) is True
+    allow_old_hash_to_finish.set()
+    old_request.join(timeout=5)
+
+    assert not old_request.is_alive()
+    assert consumed_epochs == [None]
+    assert store.consume_bootstrap_code(replacement, clock()) == old_epoch + 1
 
 
 def test_reissue_fails_closed_after_setup_is_finalized(

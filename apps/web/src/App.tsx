@@ -12,6 +12,7 @@ import {
   LockKeyhole,
   RefreshCw,
   ShieldCheck
+  ,Terminal
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -24,6 +25,11 @@ const EMPTY_STATUS: SetupStatus = {
   bootstrap_hash_persisted: false,
   model_mode: null,
   csrf_token: null,
+  recovery: {
+    required: false,
+    action: null,
+    reason: null
+  },
   local_model: {
     available: false,
     verified: false,
@@ -233,7 +239,22 @@ export function App() {
             ) : (
               <>
                 {error && <ErrorBanner message={error} />}
-                {status.state === "bootstrap_required" && (
+                {status.recovery.required && (
+                  <section aria-labelledby="recovery-title">
+                    <div className="section-icon"><Terminal aria-hidden="true" size={22} /></div>
+                    <p className="eyebrow">需要本机恢复</p>
+                    <h1 id="recovery-title">重新签发初始化码</h1>
+                    <p className="section-summary">
+                      当前凭据或初始化会话已不可继续。请在 Release 目录执行：
+                    </p>
+                    <code className="recovery-command">./launch.sh recover-setup</code>
+                    <button className="button button-secondary" onClick={() => void loadStatus()} type="button">
+                      <RefreshCw size={18} />
+                      已恢复，重新检查
+                    </button>
+                  </section>
+                )}
+                {!status.recovery.required && status.state === "bootstrap_required" && (
                   <section aria-labelledby="bootstrap-title">
                     <div className="section-icon"><KeyRound aria-hidden="true" size={22} /></div>
                     <p className="eyebrow">步骤 1 / 3</p>
@@ -260,7 +281,7 @@ export function App() {
                   </section>
                 )}
 
-                {status.state === "security_policy_required" && (
+                {!status.recovery.required && status.state === "security_policy_required" && (
                   <section aria-labelledby="policy-title">
                     <div className="section-icon"><ShieldCheck aria-hidden="true" size={22} /></div>
                     <p className="eyebrow">步骤 2 / 3</p>
@@ -288,7 +309,7 @@ export function App() {
                   </section>
                 )}
 
-                {status.state === "model_required" && (
+                {!status.recovery.required && status.state === "model_required" && (
                   <section aria-labelledby="model-title">
                     <div className="section-icon"><Cloud aria-hidden="true" size={22} /></div>
                     <p className="eyebrow">步骤 3 / 3</p>

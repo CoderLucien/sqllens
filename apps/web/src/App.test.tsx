@@ -8,6 +8,7 @@ const bootstrapStatus = {
   initialized: false,
   model_mode: null,
   csrf_token: null,
+  recovery: { required: false, action: null, reason: null },
   local_model: {
     available: false,
     verified: false,
@@ -60,5 +61,27 @@ describe("setup application", () => {
 
     await waitFor(() => expect(screen.getByText("本地模型不可用")).toBeTruthy());
     expect(screen.getByText(/未检测或验证可用的本地模型运行时/)).toBeTruthy();
+  });
+
+  it("shows the executable local recovery action when setup cannot continue", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({
+          ...bootstrapStatus,
+          recovery: {
+            required: true,
+            action: "bootstrap-reissue",
+            reason: "bootstrap_expired"
+          }
+        })
+      )
+    );
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "重新签发初始化码" });
+    expect(screen.getByText("./launch.sh recover-setup")).toBeTruthy();
+    expect(screen.queryByLabelText("一次性初始化码")).toBeNull();
   });
 });
