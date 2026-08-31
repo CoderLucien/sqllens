@@ -1,8 +1,9 @@
 # QA-001: DiagnosisCase V1 Does Not Enforce Required Provenance Integrity
 
-Status: OPEN, release blocking
+Status: PARTIALLY RESOLVED; QA-001D remains BLOCKED
 Severity: High
 Detected against: `main@024f2ce`
+Retested against: `main@7c00fe0`
 Owner: contract/domain owner (`#t8`), not QA
 Regression tests: `tests/qa/test_diagnosis_case_contract.py`
 
@@ -18,6 +19,7 @@ can make two readers resolve the same stable ID to different records.
 ### QA-001A: A Recommendation Can Have No Evidence
 
 Severity: High
+Resolution: RESOLVED and independently retested
 
 Set a valid recommendation's `evidenceIds` to `[]`. JSON Schema validation still
 succeeds because `minItems` is absent. The P0 contract requires every conclusion
@@ -29,6 +31,7 @@ evidence item under a separately frozen contract.
 ### QA-001B: Stable IDs Are Not Unique
 
 Severity: High
+Resolution: RESOLVED and independently retested
 
 Append a second evidence or recommendation record reusing the first record's ID.
 `validate_references()` succeeds because it converts IDs to sets but never checks
@@ -41,6 +44,7 @@ recommendation, review and feedback IDs before persistence.
 ### QA-001C: Pinned Revisions Are Incomplete And Mutable
 
 Severity: High
+Resolution: RESOLVED and independently retested
 
 The Schema requires only `ruleSet`, `policy` and `redaction`; it accepts cases
 that omit `provider`, `model`, `modelArtifact` or `prompt` instead of explicitly
@@ -63,6 +67,25 @@ allowed transition graph or outcome-transition check exists.
 Expected: freeze the workflow/outcome transition table, implement negative
 fixtures for illegal transitions, and keep workflow, review decision, feedback
 and outcome independent as required by the design.
+
+## Retest Evidence
+
+On `main@7c00fe0`, QA rebased the original failing tests without modifying their
+assertions and ran:
+
+```bash
+python3 -m unittest discover \
+  -s tests/qa \
+  -p 'test_diagnosis_case_contract.py' \
+  -v
+
+python3 docs/contracts/validate_examples.py
+```
+
+Actual result: the five focused tests passed and the project contract fixture
+command printed `contract fixtures passed`. This closes QA-001A through C. It
+does not close QA-001D because no approved transition table or negative
+transition fixture exists yet.
 
 ## Minimum Reproduction
 
