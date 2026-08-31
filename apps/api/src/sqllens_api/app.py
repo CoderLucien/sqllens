@@ -103,11 +103,6 @@ def create_app(
     store = SetupStore(runtime_settings)
     signer = SetupSessionSigner(runtime_settings)
     gateway = provider_gateway or HttpxProviderGateway()
-    bootstrap_loaded = True
-    if runtime_settings.bootstrap_code_file is not None:
-        bootstrap_loaded = store.ingest_bootstrap_file(
-            runtime_settings.bootstrap_code_file, clock()
-        )
 
     app = FastAPI(
         title="SQLLens P0 API",
@@ -118,7 +113,6 @@ def create_app(
     )
     app.state.settings = runtime_settings
     app.state.setup_store = store
-    app.state.bootstrap_loaded = bootstrap_loaded
 
     @app.middleware("http")
     async def security_and_setup_gate(
@@ -198,8 +192,6 @@ def create_app(
 
     @app.get("/healthz")
     async def health() -> Response:
-        if not app.state.bootstrap_loaded:
-            return JSONResponse(status_code=503, content={"status": "starting"})
         return JSONResponse(content={"status": "ok"})
 
     @app.get("/api/v1/setup/status")

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,6 +13,7 @@ from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
 from sqllens_api.provider import ProviderProbeRequest, ProviderProbeResult
+from sqllens_api.setup import SetupStore
 
 
 @dataclass
@@ -119,33 +123,88 @@ def test_status_reports_local_model_as_unavailable_without_claiming_gpu_detectio
     }
 
 
-def test_bootstrap_file_is_hashed_before_handshake_and_plaintext_can_be_removed(
+def test_bootstrap_ingest_reads_bounded_stdin_and_is_idempotent(
     settings: Settings,
     clock: MutableClock,
 ) -> None:
     code = "ABCD-EFGH-JKLM-NPQR"
-    secret_file = settings.data_dir.parent / "bootstrap-code"
-    secret_file.write_text(code, encoding="utf-8")
-    configured = replace(settings, bootstrap_code_file=secret_file)
+    replacement = "WXYZ-2345-6789-ABCD"
+    environment = {**os.environ, "SQLLENS_DATA_DIR": str(settings.data_dir)}
 
-    first_app = create_app(settings=configured, clock=clock)
-    first_client = TestClient(first_app)
-    assert first_client.get("/healthz").json() == {"status": "ok"}
-    assert first_client.get("/api/v1/setup/status").json()["bootstrap_hash_persisted"] is True
-    assert secret_file.read_text(encoding="utf-8") == code
-    assert code.encode("utf-8") not in configured.database_path.read_bytes()
+    first = subprocess.run(
+        [sys.executable, "-m", "sqllens_api.main", "bootstrap-ingest"],
+        input=f"{code}\n",
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+    repeated = subprocess.run(
+        [sys.executable, "-m", "sqllens_api.main", "bootstrap-ingest"],
+        input=f"{replacement}\n",
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
 
-    secret_file.unlink()
-    restarted = TestClient(create_app(settings=configured, clock=clock))
+    assert first.returncode == 0
+    assert repeated.returncode == 0
+    assert code not in first.stdout + first.stderr
+    assert replacement not in repeated.stdout + repeated.stderr
+    assert "persisted" in first.stdout.lower()
+    assert "already persisted" in repeated.stdout.lower()
+    assert SetupStore(settings).snapshot().bootstrap_persisted is True
+    assert code.encode("utf-8") not in settings.database_path.read_bytes()
+
+    restarted = TestClient(create_app(settings=settings, clock=clock))
     assert restarted.get("/api/v1/setup/status").json()["bootstrap_hash_persisted"] is True
     accepted = restarted.post("/api/v1/setup/bootstrap", json={"code": code})
     assert accepted.status_code == 200
+    rejected_replacement = restarted.post(
+        "/api/v1/setup/bootstrap", json={"code": replacement}
+    )
+    assert rejected_replacement.status_code == 401
 
-    replay_after_restart = TestClient(create_app(settings=configured, clock=clock)).post(
+    replay_after_restart = TestClient(create_app(settings=settings, clock=clock)).post(
         "/api/v1/setup/bootstrap", json={"code": code}
     )
     assert replay_after_restart.status_code == 401
     assert replay_after_restart.json()["error"]["code"] == "BOOTSTRAP_INVALID"
+
+
+def test_bootstrap_ingest_rejects_oversized_or_invalid_stdin_without_leaking_it(
+    settings: Settings,
+) -> None:
+    oversized = "Z" * 257
+    environment = {**os.environ, "SQLLENS_DATA_DIR": str(settings.data_dir)}
+
+    result = subprocess.run(
+        [sys.executable, "-m", "sqllens_api.main", "bootstrap-ingest"],
+        input=oversized,
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 64
+    assert oversized not in result.stdout + result.stderr
+    assert "invalid" in result.stderr.lower()
+    assert SetupStore(settings).snapshot().bootstrap_persisted is False
+
+
+def test_web_runtime_never_reads_the_plaintext_bootstrap_file(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SQLLENS_BOOTSTRAP_CODE_FILE", "/unreadable/bootstrap-code")
+
+    client = TestClient(create_app(settings=settings, clock=clock))
+
+    assert client.get("/healthz").json() == {"status": "ok"}
+    assert client.get("/api/v1/setup/status").json()["bootstrap_hash_persisted"] is False
 
 
 def test_bootstrap_code_is_short_lived_single_use_and_never_returned_or_logged(

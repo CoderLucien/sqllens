@@ -193,16 +193,31 @@ class SetupStore:
             )
         return format_bootstrap_code(normalized)
 
-    def ingest_bootstrap_file(self, path: Path, now: datetime) -> bool:
-        snapshot = self.snapshot()
-        if snapshot.initialized or snapshot.bootstrap_persisted:
-            return True
-        try:
-            code = path.read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
-            return False
-        self.issue_bootstrap_code(now, code=code)
-        return True
+    def ingest_bootstrap_code(self, code: str, now: datetime) -> bool:
+        normalized = normalize_bootstrap_code(code)
+        if len(normalized) < 12:
+            raise ValueError("bootstrap code must contain at least 12 valid characters")
+        salt = secrets.token_bytes(16)
+        now_value = _timestamp(now)
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.bootstrap_hash.is_(None),
+                    setup_state.c.finalized_at.is_(None),
+                )
+                .values(
+                    stage="bootstrap_required",
+                    bootstrap_hash=_derive_code_hash(normalized, salt),
+                    bootstrap_salt=_b64(salt),
+                    bootstrap_expires_at=now_value + self.settings.bootstrap_ttl_seconds,
+                    bootstrap_consumed_at=None,
+                    bootstrap_failed_attempts=0,
+                    updated_at=now_value,
+                )
+            )
+        return result.rowcount == 1
 
     def consume_bootstrap_code(self, code: str, now: datetime) -> bool:
         now_value = _timestamp(now)

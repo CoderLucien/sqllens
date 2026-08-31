@@ -11,6 +11,9 @@ case "${1:-web-api}" in
   migrate)
     exec python -m sqllens_api.main migrate
     ;;
+  bootstrap-ingest)
+    exec python -m sqllens_api.main bootstrap-ingest
+    ;;
   *)
     printf 'unsupported runtime command: %s\n' "$1" >&2
     exit 64
