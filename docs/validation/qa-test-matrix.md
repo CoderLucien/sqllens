@@ -277,8 +277,13 @@ Official references:
 
 ## Current Open Defects
 
-No open contract-fixture defect remains on `main@c0e99d6`. Runtime findings
-remain possible because the product implementation has not been delivered.
+No open contract-fixture defect remains on `main@c0e99d6`. The first release
+skeleton has two open launcher findings:
+
+- [QA-010](defects/QA-010-check-truncates-bootstrap-secret.md): High bootstrap
+  truncation and concurrent-start race on `cbfd26e`.
+- [QA-011](defects/QA-011-diagnostics-command-missing.md): Medium failure path
+  recommends an action the launcher does not implement on `cbfd26e`.
 
 ## Resolved At Contract Layer
 
