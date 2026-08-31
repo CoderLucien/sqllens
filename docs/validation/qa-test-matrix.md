@@ -166,11 +166,11 @@ strict read-only or zero-impact.
 |---|---|---|---|
 | `CASE-001` | E1/E2/E3 | All three paths produce the same versioned DiagnosisCase schema and immutable revisions. | `NOT_RUN` |
 | `CASE-002` | E1/E2/E3 | Every conclusion and recommendation references existing evidence IDs; fabricated/dangling IDs are rejected. | `NOT_RUN` |
-| `CASE-003` | E1/E2/E3 | Supporting and contradicting evidence remain distinct; confidence and completeness are independent bounded fields. | `NOT_RUN` |
+| `CASE-003` | E1/E2/E3 | Supporting and contradicting evidence remain distinct; confidence and completeness are independent bounded fields. | `FAIL` |
 | `CASE-004` | E1/E2/E3 | Insufficient or contradictory evidence produces an abstention with minimum next evidence, not a generic recommendation. | `NOT_RUN` |
 | `CASE-005` | E1/E2/E3 | Recommendation includes risk, prerequisites, owner, validation and rollback; no API executes recommendations or production changes. | `NOT_RUN` |
 | `CASE-006` | E1/E2/E3 | Evidence/provider/prompt/policy/redaction revisions and input fingerprints are retained across review and outcome changes. | `NOT_RUN` |
-| `CASE-007` | E1/E2/E3 | Allowed terminal outcome is separate from workflow status and is one of validated-effective, rolled-back, evidence-insufficient, or risk-accepted. | `NOT_RUN` |
+| `CASE-007` | E1/E2/E3 | Allowed terminal outcome is separate from workflow status and is one of validated-effective, rolled-back, evidence-insufficient, or risk-accepted. | `FAIL` |
 | `CASE-008` | E1/E2/E3 | Concurrent reviews and retries cannot overwrite an immutable revision or lose audit events. | `NOT_RUN` |
 
 ## Cross-Cutting Security
@@ -186,7 +186,7 @@ strict read-only or zero-impact.
 | `SEC-007` | E1 | Error envelopes expose stable codes but no stack, SQL literals, credential, token, internal path or provider body. | `NOT_RUN` |
 | `SEC-008` | E0 | Locked dependencies and final images pass native audits, secret scan, vulnerability scan and SBOM generation under the release policy. | `NOT_RUN` |
 | `SEC-009` | E1 | Outbound destinations, redirects, proxies and DNS resolution follow committed allowlists; private/reserved endpoints cannot be reached by user-controlled input. | `NOT_RUN` |
-| `SEC-010` | E1 | Audit events are append-only/ordered, identify actor/action/policy/outcome, and avoid raw sensitive payloads. | `NOT_RUN` |
+| `SEC-010` | E1 | Audit events are append-only/ordered, identify actor/action/policy/outcome, and avoid raw sensitive payloads. | `FAIL` |
 
 ## 2C4G Performance Qualification
 
@@ -271,6 +271,19 @@ Official references:
 | `PLAT-012` | E4/E5 | Linux local GPU mode is enabled only on an explicitly supported distribution/architecture with the pinned NVIDIA runtime and a successful in-container device/model probe. | `BLOCKED` |
 | `PLAT-013` | E5 | From a clean supported host, deployment has exactly three user steps: install container runtime, run one launcher/command, then finish Web setup; manual env/Compose edits, migrations, token-file lookup, GPU setup or extra operations fail acceptance. | `BLOCKED` |
 | `PLAT-014` | E5 | Launcher performs architecture/image-integrity/port/disk preflight, prints the local URL and one-time code, and keeps actionable remediation within the current step; unavailable local GPU degrades to external mode without adding a deployment step. | `BLOCKED` |
+
+## Current Open Defects
+
+- `CASE-007`: [QA-003](defects/QA-003-terminal-outcome-vocabulary.md) - the
+  contract cannot represent all four approved terminal business outcomes.
+- `CASE-003`: [QA-004](defects/QA-004-conflicting-evidence-polarity.md) - one
+  evidence ID can simultaneously support and contradict a hypothesis.
+- `SEC-010`: [QA-005](defects/QA-005-revision-audit-time-consistency.md) - newly
+  appended audit records are not bounded to their revision time window, and
+  accepted RFC 3339 input is parsed inconsistently.
+
+These are contract-level failures. Product API/database validation remains
+`NOT_RUN` until an executable runtime slice exists.
 
 ## Current Blocking Inputs
 
