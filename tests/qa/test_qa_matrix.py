@@ -26,7 +26,7 @@ class QaMatrixContractTest(unittest.TestCase):
 
     def test_matrix_contains_the_frozen_baseline_case_groups(self) -> None:
         expected_counts = {
-            "SETUP": 10,
+            "SETUP": 11,
             "DEPLOY": 7,
             "L1": 12,
             "L2": 18,
@@ -42,7 +42,7 @@ class QaMatrixContractTest(unittest.TestCase):
         }
 
         self.assertEqual(Counter(row["group"] for row in self.rows), expected_counts)
-        self.assertEqual(len(self.rows), 127)
+        self.assertEqual(len(self.rows), 128)
 
     def test_case_ids_are_unique(self) -> None:
         ids = [row["id"] for row in self.rows]
@@ -61,6 +61,7 @@ class QaMatrixContractTest(unittest.TestCase):
             "R-T14-2",
             "R-T14-3",
             "R-T10-1",
+            "R-T10-4",
             "R-T11-1",
             "R-T12-1",
             "R-T13-1",

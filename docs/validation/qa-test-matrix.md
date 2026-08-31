@@ -35,6 +35,7 @@ compatibility, or local-model GPU sizing.
 | `R-T10-1` Diagnosis APIs stay closed until setup finalization | `#t10` AC 1 | `SETUP` |
 | `R-T10-2` Low-resource mode downloads no model weights and has no Docker Socket | `#t10` AC 2 | `DEPLOY`, `SEC` |
 | `R-T10-3` Local mode is unavailable when the device is not exposed | `#t10` AC 3 | `SETUP`, `DEPLOY` |
+| `R-T10-4` Setup creates one Owner; post-setup APIs require login, authorization, CSRF and persistent session controls | `#t10` AC 4 and review checklist | `SETUP`, `SEC` |
 | `R-T11-1` Layer 1 handles valid, invalid, oversized, insufficient-evidence, and provider-outage cases | `#t11` AC 1 | `L1` |
 | `R-T11-2` Missing version/schema never yields executable DDL or benefit promises | `#t11` AC 2 | `L1`, `CASE` |
 | `R-T11-3` Every conclusion has evidence, completeness, risk, validation, and rollback | `#t11` AC 3 | `CASE` |
@@ -68,20 +69,21 @@ for release claims.
 |---|---|---|---|
 | `SETUP-001` | E1 | Fresh start exposes only setup/status endpoints; every diagnosis, case, job, review, connector and import endpoint returns the frozen pre-setup error. | `NOT_RUN` |
 | `SETUP-002` | E1 | Bootstrap token is single-use, expires at the configured TTL, is rate-limited, and never appears in application/access/error logs or API bodies. | `NOT_RUN` |
-| `SETUP-003` | E1 | Concurrent bootstrap attempts create exactly one first admin; losing requests fail without disclosing state or token validity. | `NOT_RUN` |
-| `SETUP-004` | E1 | Setup interruption at every step resumes from committed state without skipping mandatory policy or creating duplicate admins/secrets. | `NOT_RUN` |
+| `SETUP-003` | E1 | Concurrent bootstrap attempts create exactly one first admin; losing requests fail without disclosing state or token validity. | `FAIL` |
+| `SETUP-004` | E1 | Setup interruption at every step resumes from committed state without skipping mandatory policy or creating duplicate admins/secrets. | `FAIL` |
 | `SETUP-005` | E1 | An outbound model probe is rejected until retention, TLS, egress, redaction, and audit policy is committed. | `NOT_RUN` |
-| `SETUP-006` | E1 | External provider probe validates timeout, cancellation, TLS, structured output and redaction using non-sensitive fixture data. | `NOT_RUN` |
+| `SETUP-006` | E1 | External provider probe validates timeout, cancellation, TLS, structured output and redaction using non-sensitive fixture data. | `FAIL` |
 | `SETUP-007` | E1 | Missing GPU/device disables local mode and returns an actionable restart prerequisite; no fabricated hardware result is stored. | `NOT_RUN` |
 | `SETUP-008` | E1 | Finalize is rejected until every mandatory step is complete; successful finalize atomically enables diagnosis APIs. | `NOT_RUN` |
 | `SETUP-009` | E1 | Switching provider revisions drains or cancels pinned jobs; completed cases retain original provider/model/prompt/policy/redaction revisions. | `NOT_RUN` |
 | `SETUP-010` | E1 | The application atomically persists only a verifier for `/run/secrets/bootstrap_code` before readiness; after the launcher clears the host secret, one bootstrap succeeds, replay/concurrent reuse/restart fails, and plaintext is absent from logs, environment, command line, data volume and diagnostic bundles. | `FAIL` |
+| `SETUP-011` | E1 | External setup persists an encrypted credential reference; an authenticated provider call works after restart, and rotation/deletion preserve revision and plaintext-exclusion guarantees. | `FAIL` |
 | `DEPLOY-001` | E1 | Effective Compose configuration has an enforced aggregate 2 CPU/4 GiB budget and persists only documented volumes. | `NOT_RUN` |
 | `DEPLOY-002` | E1 | Base-mode pull/start downloads no local model weights and creates no weight volume content. | `NOT_RUN` |
 | `DEPLOY-003` | E1 | No application container mounts `/var/run/docker.sock`, a host root, or another broad host path; internal services publish no host ports. | `NOT_RUN` |
 | `DEPLOY-004` | E1 | Restart preserves finalized setup and cases, cleans orphaned temporary jobs, and does not reuse the bootstrap secret. | `NOT_RUN` |
 | `DEPLOY-005` | E0/E1 | Clean bootstrap, lint, typecheck, unit, integration, E2E, build and smoke commands are reproducible from lockfiles and pinned images. | `FAIL` |
-| `DEPLOY-006` | E1 | The image entrypoint supports `migrate` and `web-api`; migration is idempotent and fail-closed, `web-api` listens on `0.0.0.0:8080`, and `GET /healthz` reports ready only after storage and the bootstrap verifier are usable without disclosing internals. | `NOT_RUN` |
+| `DEPLOY-006` | E1 | The image entrypoint supports `migrate` and `web-api`; migration is idempotent and fail-closed, `web-api` listens on `0.0.0.0:8080`, and `GET /healthz` reports ready only after storage and the bootstrap verifier are usable without disclosing internals. | `FAIL` |
 | `DEPLOY-007` | E1 | Base Compose starts no placeholder worker or model-controller; unavailable services are confined to non-default profiles, expose no host ports and remain visibly disabled rather than reported healthy. | `NOT_RUN` |
 
 ## Layer 1: SQL-Only Triage
@@ -180,9 +182,9 @@ strict read-only or zero-impact.
 
 | ID | Environment | Scenario and assertions | Result |
 |---|---|---|---|
-| `SEC-001` | E1 | Session cookies are Secure/HttpOnly/SameSite with idle/absolute expiry; fixation and reuse after logout fail. | `NOT_RUN` |
-| `SEC-002` | E1 | State-changing routes enforce CSRF and authorization; object IDs cannot be used for cross-tenant/cross-role access. | `NOT_RUN` |
-| `SEC-003` | E1 | Login/bootstrap/provider/import endpoints enforce request size, rate, concurrency and timeout limits. | `NOT_RUN` |
+| `SEC-001` | E1 | Session cookies are Secure/HttpOnly/SameSite with idle/absolute expiry; fixation and reuse after logout fail. | `FAIL` |
+| `SEC-002` | E1 | State-changing routes enforce CSRF and authorization; object IDs cannot be used for cross-tenant/cross-role access. | `FAIL` |
+| `SEC-003` | E1 | Login/bootstrap/provider/import endpoints enforce request size, rate, concurrency and timeout limits. | `FAIL` |
 | `SEC-004` | E1 | CSP, HSTS where TLS is configured, frame, MIME, referrer and cache headers meet the frozen policy; setup/secrets are never cached. | `NOT_RUN` |
 | `SEC-005` | E0/E1 | Repository, images, runtime env, logs, SQLite and generated artifacts contain no committed or emitted test canary secret. | `NOT_RUN` |
 | `SEC-006` | E1/E3 | LLM output and imported content are untrusted text: schema validation and output encoding prevent XSS, command, SQL and tool execution. | `NOT_RUN` |
@@ -294,6 +296,23 @@ skeleton has four open findings against `7bbb8da`:
 [QA-011](defects/QA-011-diagnostics-command-missing.md) pass their launcher
 regressions on `7bbb8da`. Their closure does not satisfy the separate runtime
 and real-container gates above.
+
+The first runtime slice has five additional open findings against `d2d4a76`:
+
+- [QA-016](defects/QA-016-bootstrap-secret-permission-mismatch.md): High;
+  the non-root runtime cannot read the launcher's private host secret.
+- [QA-017](defects/QA-017-setup-session-loss-has-no-recovery.md): High;
+  code/session expiry or cookie loss leaves setup permanently incomplete.
+- [QA-018](defects/QA-018-external-provider-credential-discarded.md): High;
+  external mode is marked ready without a recoverable provider credential.
+- [QA-019](defects/QA-019-post-setup-apis-have-no-owner-auth.md): High;
+  no Owner/login/RBAC boundary protects post-setup APIs.
+- [QA-020](defects/QA-020-provider-probe-has-no-response-budget.md): Medium;
+  an allowed provider response is buffered and parsed without size limits.
+
+`/api/v1/cases/sql` still returns `501 FEATURE_NOT_IMPLEMENTED` after setup.
+That is the separate `#t11` morning-RC blocker rather than evidence that the
+anonymous-access path is safe.
 
 ## Resolved At Contract Layer
 
