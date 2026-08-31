@@ -1,9 +1,11 @@
 # QA-016: Bootstrap Secret Permissions Block The Non-Root Runtime
 
-Status: OPEN
+Status: RESOLVED on `integration/morning-rc@e1059c1`
 Severity: High
 Detected against: `feature/p0-runtime@d2d4a76` and
 `feature/cross-platform-release@7bbb8da`
+Fixed by runtime behavior `40bf68b`, independently retested through
+`integration/morning-rc@e1059c1`
 Owner: runtime and cross-platform release owners (`#t10`, `#t16`), not QA
 Regression tests: required as a real-Compose cold-start test
 
@@ -45,6 +47,35 @@ cat: /run/secrets/bootstrap_code: Permission denied
 Expected: the host secret remains private from other host users, while the
 non-root runtime can read it exactly long enough to commit its verifier.
 
+## Independent Retest
+
+QA built the exact integration head into image
+`sha256:8b4ad1811f585b212b2e9f5ad152066142069b2a67d37cc139fb7e3711c10b43`
+and ran a clean, isolated real-Compose lifecycle on Ubuntu 24.04 amd64. The
+launcher/runtime contract now sends the mode-0600 host code once through
+stdin to a short-lived `bootstrap-ingest` container. It does not mount that
+file into the long-running service.
+
+Observed results:
+
+```text
+image and runtime UID/GID          = 10001:10001
+host bootstrap mode before ingest = 0600
+bootstrap-ingest output            = Bootstrap hash persisted.
+host bytes after ingest            = 0
+long-running mounts                = named volume at /data only
+/run/secrets/bootstrap_code        = absent
+bootstrap_hash_persisted           = true
+first use / replay / restart replay = 200 / 401 / 401
+plaintext in logs/inspect/volume   = no / no / no
+```
+
+The QA run used a separately named project and data volume to avoid touching
+another agent's Docker state. The only harness change was the isolated
+project/volume name; the image, commands, endpoints, UID and data mount were
+the exact `e1059c1` implementation. The full command record is in
+`docs/validation/evidence/2026-09-01-e1059c1-bootstrap-recovery-packaging.md`.
+
 ## Required Disposition
 
 - Freeze one Mac/Linux-compatible secret-delivery mechanism that preserves
@@ -57,4 +88,6 @@ non-root runtime can read it exactly long enough to commit its verifier.
 - Retain replay, restart, logs, environment, command-line, data-volume, and
   diagnostic-bundle canary checks.
 
-This finding blocks the first runnable release candidate.
+The original permission mismatch is closed. Diagnostic-bundle canary coverage,
+concurrent HTTP consumption and full setup completion remain part of
+`SETUP-010`; this defect closure does not mark that broader case PASS.

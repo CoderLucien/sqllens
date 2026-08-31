@@ -3,6 +3,7 @@
 Status: OPEN
 Severity: High
 Detected against: `feature/p0-runtime@d2d4a76`
+Partially retested against: `feature/p0-runtime@3198583`
 Owner: runtime owner (`#t10`), not QA
 Regression tests: required at API, container-restart, and Web E2E layers
 
@@ -34,6 +35,27 @@ initialized                          = false
 
 The route table contains no reissue, recovery, or setup re-authentication
 endpoint.
+
+## Partial Retest
+
+QA independently verified the recovery-state implementation at `3198583`:
+
+```text
+cookie-loss recovery status        = bootstrap-reissue / setup_session_missing
+old epoch -> replacement epoch      = 2 -> 3
+stale setup session after reissue   = 401
+old code / replacement code         = 401 / 200
+expired-code recovery reason        = bootstrap_expired
+old hash racing with reissue        = rejected by epoch/hash CAS
+stale provider probe after reissue  = rejected by epoch/policy CAS
+Web recovery prompt                 = rendered with ./launch.sh recover-setup
+```
+
+The API suite passed 17/17 and the Web suite passed 3/3 at the fixed commit.
+The integration release at `e1059c1`, however, does not implement a
+`recover-setup` launcher action. Its accepted action list remains
+`start|check|stop|uninstall|diagnostics`. The Web instruction is therefore not
+executable from the shipped package yet.
 
 ## Required Disposition
 

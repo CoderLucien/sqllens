@@ -297,18 +297,25 @@ skeleton has four open findings against `7bbb8da`:
 regressions on `7bbb8da`. Their closure does not satisfy the separate runtime
 and real-container gates above.
 
-The first runtime slice has five additional open findings against `d2d4a76`:
+The first runtime slice has four remaining open findings after the integration
+retest:
 
-- [QA-016](defects/QA-016-bootstrap-secret-permission-mismatch.md): High;
-  the non-root runtime cannot read the launcher's private host secret.
 - [QA-017](defects/QA-017-setup-session-loss-has-no-recovery.md): High;
-  code/session expiry or cookie loss leaves setup permanently incomplete.
+  the epoch/CAS and Web prompt pass at `3198583`, but the integrated Release
+  still lacks the displayed `recover-setup` launcher action.
 - [QA-018](defects/QA-018-external-provider-credential-discarded.md): High;
   external mode is marked ready without a recoverable provider credential.
 - [QA-019](defects/QA-019-post-setup-apis-have-no-owner-auth.md): High;
   no Owner/login/RBAC boundary protects post-setup APIs.
 - [QA-020](defects/QA-020-provider-probe-has-no-response-budget.md): Medium;
   an allowed provider response is buffered and parsed without size limits.
+
+[QA-016](defects/QA-016-bootstrap-secret-permission-mismatch.md) is resolved on
+`integration/morning-rc@e1059c1`: a real isolated Compose run used one-shot
+stdin ingest with UID 10001, no steady-state secret mount, verifier persistence,
+host scrub, and 200/401/401 first-use/replay/restart behavior. The broader
+`SETUP-010` case stays FAIL until its remaining diagnostic and concurrency
+assertions are executed on the integrated Release.
 
 `/api/v1/cases/sql` still returns `501 FEATURE_NOT_IMPLEMENTED` after setup.
 That is the separate `#t11` morning-RC blocker rather than evidence that the
