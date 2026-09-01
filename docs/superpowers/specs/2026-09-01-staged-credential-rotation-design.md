@@ -50,9 +50,14 @@ Recovery is deliberately split:
 
 - Before a new process accepts traffic, it unconditionally aborts any inherited
   staged rotation by retiring its exact durable version and CAS-clearing the
-  staged record. A missing file is already retired. Unsafe ownership, type,
-  permissions, symlinks, or special files fail startup; the process must not
-  accept traffic.
+  staged record. A missing file is already retired. A partial file at the exact
+  staged identifier path is safe to delete without validating its content
+  digest when the credential directory is trusted and the object is a current
+  uid, mode `0600` regular file reached without following symlinks. Unknown
+  names, identifier mismatches, unsafe ownership or permissions, symlinks, and
+  special files are not touched and fail startup; the process must not accept
+  traffic. Active keys still require full version/digest validation and must be
+  decryptable.
 - During normal operation, a non-owner request that observes a staged rotation
   returns a retryable fail-closed response. It must not invoke generic
   retirement recovery or delete the staged key.
