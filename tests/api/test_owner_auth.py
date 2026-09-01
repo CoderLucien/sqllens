@@ -5,13 +5,18 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from fastapi.testclient import TestClient
 from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
-from sqllens_api.credentials import CredentialUnavailableError, CredentialVault
+from sqllens_api.credentials import (
+    CredentialUnavailableError,
+    CredentialVault,
+    EncryptedCredential,
+)
 from sqllens_api.provider import ProviderProbeRequest, ProviderProbeResult
 from sqllens_api.setup import OWNER_COOKIE_NAME, SETUP_COOKIE_NAME, SetupStore
 
@@ -642,3 +647,225 @@ def test_failed_rotation_cas_persists_orphan_cleanup_until_unlink_recovers(
     assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
         settings.credential_key_path
     ]
+
+
+def test_staged_rotation_cas_records_token_version_expected_active_and_epoch(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    store = SetupStore(settings)
+    snapshot = store.snapshot()
+    assert snapshot.provider_credential is not None
+    staged_version = f"file-v1:{'b' * 32}:{'c' * 32}"
+    token = "rotation-token-a"
+
+    assert store.begin_staged_rotation(
+        staged_version=staged_version,
+        token=token,
+        expected_credential=snapshot.provider_credential,
+        expected_setup_epoch=snapshot.setup_epoch,
+        now=clock(),
+    )
+
+    with store.engine.connect() as connection:
+        row = connection.exec_driver_sql(
+            """
+            SELECT credential_retirement_pending_version,
+                   credential_retirement_operation,
+                   credential_retirement_token,
+                   credential_staged_expected_ciphertext,
+                   credential_staged_expected_key_version,
+                   credential_staged_setup_epoch
+              FROM setup_state
+             WHERE id = 1
+            """
+        ).mappings().one()
+    assert row == {
+        "credential_retirement_pending_version": staged_version,
+        "credential_retirement_operation": "staged_rotation",
+        "credential_retirement_token": token,
+        "credential_staged_expected_ciphertext": (
+            snapshot.provider_credential.ciphertext
+        ),
+        "credential_staged_expected_key_version": (
+            snapshot.provider_credential.key_version
+        ),
+        "credential_staged_setup_epoch": snapshot.setup_epoch,
+    }
+
+
+def test_only_one_concurrent_staged_rotation_wins(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    store = SetupStore(settings)
+    snapshot = store.snapshot()
+    assert snapshot.provider_credential is not None
+    barrier = Barrier(2)
+    attempts = [
+        (f"file-v1:{identifier * 32}:{digest * 32}", f"rotation-token-{identifier}")
+        for identifier, digest in (("b", "c"), ("d", "e"))
+    ]
+
+    def begin(attempt: tuple[str, str]) -> bool:
+        barrier.wait(timeout=5)
+        staged_version, token = attempt
+        return store.begin_staged_rotation(
+            staged_version=staged_version,
+            token=token,
+            expected_credential=snapshot.provider_credential,
+            expected_setup_epoch=snapshot.setup_epoch,
+            now=clock(),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(begin, attempts))
+
+    assert sorted(results) == [False, True]
+    winner_index = results.index(True)
+    persisted = store.snapshot()
+    assert persisted.credential_retirement_pending_version == attempts[winner_index][0]
+    assert persisted.credential_retirement_token == attempts[winner_index][1]
+
+
+def test_commit_atomically_switches_active_and_moves_old_version_to_retirement(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    store = SetupStore(settings)
+    before = store.snapshot()
+    assert before.provider_credential is not None
+    replacement = EncryptedCredential(
+        ciphertext="aesgcm-v1:replacement-ciphertext",
+        key_version=f"file-v1:{'b' * 32}:{'c' * 32}",
+    )
+    token = "rotation-token-a"
+    assert store.begin_staged_rotation(
+        staged_version=replacement.key_version,
+        token=token,
+        expected_credential=before.provider_credential,
+        expected_setup_epoch=before.setup_epoch,
+        now=clock(),
+    )
+
+    request = ProviderProbeRequest(
+        mode="external",
+        base_url="https://api.example.com/v1",
+        api_key="replacement-provider-secret",
+        model="replacement-model",
+    )
+    result = ProviderProbeResult(
+        status="verified",
+        provider="openai-compatible",
+        model="replacement-model",
+        latency_ms=5,
+    )
+    assert store.commit_staged_rotation(
+        request,
+        result,
+        replacement,
+        token=token,
+        now=clock(),
+    )
+
+    committed = store.snapshot()
+    assert committed.provider_credential == replacement
+    assert (
+        committed.credential_retirement_pending_version
+        == before.provider_credential.key_version
+    )
+    assert committed.credential_retirement_operation == "rotation"
+    assert committed.credential_retirement_token is None
+
+
+def test_abort_requires_matching_version_and_token(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    store = SetupStore(settings)
+    snapshot = store.snapshot()
+    assert snapshot.provider_credential is not None
+    staged_version = f"file-v1:{'b' * 32}:{'c' * 32}"
+    token = "rotation-token-a"
+    assert store.begin_staged_rotation(
+        staged_version=staged_version,
+        token=token,
+        expected_credential=snapshot.provider_credential,
+        expected_setup_epoch=snapshot.setup_epoch,
+        now=clock(),
+    )
+
+    assert not store.abort_staged_rotation(staged_version, "wrong-token", clock())
+    assert not store.abort_staged_rotation(
+        f"file-v1:{'d' * 32}:{'e' * 32}", token, clock()
+    )
+    assert store.snapshot().credential_retirement_pending_version == staged_version
+    assert store.abort_staged_rotation(staged_version, token, clock())
+    aborted = store.snapshot()
+    assert aborted.credential_retirement_pending_version is None
+    assert aborted.credential_retirement_operation is None
+    assert aborted.credential_retirement_token is None
+
+
+def test_generic_retirement_completion_rejects_staged_rotation(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    store = SetupStore(settings)
+    snapshot = store.snapshot()
+    assert snapshot.provider_credential is not None
+    staged_version = f"file-v1:{'b' * 32}:{'c' * 32}"
+    token = "rotation-token-a"
+    assert store.begin_staged_rotation(
+        staged_version=staged_version,
+        token=token,
+        expected_credential=snapshot.provider_credential,
+        expected_setup_epoch=snapshot.setup_epoch,
+        now=clock(),
+    )
+
+    assert not store.complete_credential_retirement(staged_version, clock())
+    pending = store.snapshot()
+    assert pending.credential_retirement_pending_version == staged_version
+    assert pending.credential_retirement_operation == "staged_rotation"
+    assert pending.credential_retirement_token == token

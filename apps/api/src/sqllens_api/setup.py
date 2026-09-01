@@ -22,9 +22,11 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
     case,
     create_engine,
     insert,
+    or_,
     select,
     update,
 )
@@ -63,6 +65,10 @@ setup_state = Table(
     Column("provider_credential_key_version", String(80)),
     Column("credential_retirement_pending_version", String(80)),
     Column("credential_retirement_operation", String(40)),
+    Column("credential_retirement_token", String(64)),
+    Column("credential_staged_expected_ciphertext", Text),
+    Column("credential_staged_expected_key_version", String(80)),
+    Column("credential_staged_setup_epoch", Integer),
     Column("bootstrap_reissue_pending_hash", String(128)),
     Column("bootstrap_reissue_pending_salt", String(64)),
     Column("bootstrap_reissue_pending_expires_at", Float),
@@ -144,6 +150,7 @@ class SetupSnapshot:
     provider_credential: EncryptedCredential | None
     credential_retirement_pending_version: str | None
     credential_retirement_operation: str | None
+    credential_retirement_token: str | None
     bootstrap_reissue_pending: bool
     model_mode: str | None
     bootstrap_persisted: bool
@@ -209,6 +216,10 @@ class SetupStore:
                 "provider_credential_key_version": "VARCHAR(80)",
                 "credential_retirement_pending_version": "VARCHAR(80)",
                 "credential_retirement_operation": "VARCHAR(40)",
+                "credential_retirement_token": "VARCHAR(64)",
+                "credential_staged_expected_ciphertext": "TEXT",
+                "credential_staged_expected_key_version": "VARCHAR(80)",
+                "credential_staged_setup_epoch": "INTEGER",
                 "bootstrap_reissue_pending_hash": "VARCHAR(128)",
                 "bootstrap_reissue_pending_salt": "VARCHAR(64)",
                 "bootstrap_reissue_pending_expires_at": "FLOAT",
@@ -270,6 +281,7 @@ class SetupStore:
                 "credential_retirement_pending_version"
             ],
             credential_retirement_operation=row["credential_retirement_operation"],
+            credential_retirement_token=row["credential_retirement_token"],
             bootstrap_reissue_pending=row["bootstrap_reissue_pending_hash"] is not None,
             model_mode=row["model_mode"],
             bootstrap_persisted=row["bootstrap_hash"] is not None,
@@ -459,10 +471,16 @@ class SetupStore:
             )
         if row["credential_retirement_pending_version"] != expected_version:
             return row["credential_retirement_pending_version"] is None
+        if row["credential_retirement_operation"] == "staged_rotation":
+            return False
 
         values: dict[str, object] = {
             "credential_retirement_pending_version": None,
             "credential_retirement_operation": None,
+            "credential_retirement_token": None,
+            "credential_staged_expected_ciphertext": None,
+            "credential_staged_expected_key_version": None,
+            "credential_staged_setup_epoch": None,
             "updated_at": now_value,
         }
         if row["credential_retirement_operation"] == "bootstrap_reissue":
@@ -819,6 +837,168 @@ class SetupStore:
                 )
                 .values(
                     owner_session_epoch=setup_state.c.owner_session_epoch + 1,
+                    updated_at=_timestamp(now),
+                )
+            )
+        return result.rowcount == 1
+
+    def begin_staged_rotation(
+        self,
+        *,
+        staged_version: str,
+        token: str,
+        expected_credential: EncryptedCredential | None,
+        expected_setup_epoch: int,
+        now: datetime,
+    ) -> bool:
+        if not staged_version or len(staged_version) > 80:
+            raise ValueError("staged credential version is invalid")
+        if not token or len(token) > 64:
+            raise ValueError("staged credential token is invalid")
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.setup_epoch == expected_setup_epoch,
+                    setup_state.c.finalized_at.is_not(None),
+                    setup_state.c.external_model_egress.is_(True),
+                    setup_state.c.credential_retirement_pending_version.is_(None),
+                    setup_state.c.credential_retirement_operation.is_(None),
+                    setup_state.c.credential_retirement_token.is_(None),
+                    setup_state.c.credential_staged_expected_ciphertext.is_(None),
+                    setup_state.c.credential_staged_expected_key_version.is_(None),
+                    setup_state.c.credential_staged_setup_epoch.is_(None),
+                    ~select(diagnosis_admission.c.slot).exists(),
+                    (
+                        setup_state.c.provider_credential_ciphertext.is_(None)
+                        if expected_credential is None
+                        else setup_state.c.provider_credential_ciphertext
+                        == expected_credential.ciphertext
+                    ),
+                    (
+                        setup_state.c.provider_credential_key_version.is_(None)
+                        if expected_credential is None
+                        else setup_state.c.provider_credential_key_version
+                        == expected_credential.key_version
+                    ),
+                    setup_state.c.provider_credential_key_version.is_distinct_from(
+                        staged_version
+                    ),
+                )
+                .values(
+                    credential_retirement_pending_version=staged_version,
+                    credential_retirement_operation="staged_rotation",
+                    credential_retirement_token=token,
+                    credential_staged_expected_ciphertext=(
+                        expected_credential.ciphertext
+                        if expected_credential is not None
+                        else None
+                    ),
+                    credential_staged_expected_key_version=(
+                        expected_credential.key_version
+                        if expected_credential is not None
+                        else None
+                    ),
+                    credential_staged_setup_epoch=expected_setup_epoch,
+                    updated_at=_timestamp(now),
+                )
+            )
+        return result.rowcount == 1
+
+    def commit_staged_rotation(
+        self,
+        request: ProviderProbeRequest,
+        result: ProviderProbeResult,
+        credential: EncryptedCredential,
+        *,
+        token: str,
+        now: datetime,
+    ) -> bool:
+        expected_active_matches = or_(
+            and_(
+                setup_state.c.credential_staged_expected_ciphertext.is_(None),
+                setup_state.c.credential_staged_expected_key_version.is_(None),
+                setup_state.c.provider_credential_ciphertext.is_(None),
+                setup_state.c.provider_credential_key_version.is_(None),
+            ),
+            and_(
+                setup_state.c.credential_staged_expected_ciphertext.is_not(None),
+                setup_state.c.credential_staged_expected_key_version.is_not(None),
+                setup_state.c.provider_credential_ciphertext
+                == setup_state.c.credential_staged_expected_ciphertext,
+                setup_state.c.provider_credential_key_version
+                == setup_state.c.credential_staged_expected_key_version,
+            ),
+        )
+        with self.engine.begin() as connection:
+            write_result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.finalized_at.is_not(None),
+                    setup_state.c.external_model_egress.is_(True),
+                    setup_state.c.credential_retirement_pending_version
+                    == credential.key_version,
+                    setup_state.c.credential_retirement_operation == "staged_rotation",
+                    setup_state.c.credential_retirement_token == token,
+                    setup_state.c.credential_staged_setup_epoch.is_not(None),
+                    setup_state.c.setup_epoch
+                    == setup_state.c.credential_staged_setup_epoch,
+                    expected_active_matches,
+                    ~select(diagnosis_admission.c.slot).exists(),
+                )
+                .values(
+                    provider_status=result.status,
+                    provider_base_url=request.base_url,
+                    provider_model=request.model,
+                    provider_verified_at=_timestamp(now),
+                    provider_credential_ciphertext=credential.ciphertext,
+                    provider_credential_key_version=credential.key_version,
+                    credential_retirement_pending_version=(
+                        setup_state.c.credential_staged_expected_key_version
+                    ),
+                    credential_retirement_operation=case(
+                        (
+                            setup_state.c.credential_staged_expected_key_version.is_not(
+                                None
+                            ),
+                            "rotation",
+                        ),
+                        else_=None,
+                    ),
+                    credential_retirement_token=None,
+                    credential_staged_expected_ciphertext=None,
+                    credential_staged_expected_key_version=None,
+                    credential_staged_setup_epoch=None,
+                    model_mode="external",
+                    updated_at=_timestamp(now),
+                )
+            )
+        return write_result.rowcount == 1
+
+    def abort_staged_rotation(
+        self,
+        version: str,
+        token: str,
+        now: datetime,
+    ) -> bool:
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.credential_retirement_pending_version == version,
+                    setup_state.c.credential_retirement_operation == "staged_rotation",
+                    setup_state.c.credential_retirement_token == token,
+                )
+                .values(
+                    credential_retirement_pending_version=None,
+                    credential_retirement_operation=None,
+                    credential_retirement_token=None,
+                    credential_staged_expected_ciphertext=None,
+                    credential_staged_expected_key_version=None,
+                    credential_staged_setup_epoch=None,
                     updated_at=_timestamp(now),
                 )
             )
