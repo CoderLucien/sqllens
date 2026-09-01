@@ -41,7 +41,6 @@ RELEASE_PATHS = (
     "requirements",
     "pyproject.toml",
     ".dockerignore",
-    "Makefile",
     "packages",
 )
 EXCLUDED_NAMES = {
@@ -203,21 +202,94 @@ def write_release_notes(release_root: pathlib.Path, version: str) -> None:
         release_root / "RELEASE-NOTES.txt",
         f"""SQLLens Developer Preview {version}
 
-This preview is unsigned, not notarized, and has not been validated on macOS.
+This preview is unsigned and not notarized. Verified platform results must be
+read from the release report for this exact build; macOS, linux/arm64, CentOS,
+and Windows remain unverified until an exact-host smoke result is recorded.
+
+Before extracting, verify every downloaded artifact from its download directory:
+  macOS: shasum -a 256 -c SHA256SUMS
+  Linux: sha256sum -c SHA256SUMS
 
 macOS: double-click SQLLens.app. If Gatekeeper blocks the unsigned preview,
 right-click the app and choose Open. Docker Desktop must already be running.
 
-Command-line lifecycle:
+Start and validate:
   ./launch.sh start
+  ./release-smoke.sh
+
+Read-only preflight and interrupted-setup recovery:
+  ./launch.sh check
+  ./launch.sh recover-setup
+
+Support and lifecycle:
   ./launch.sh stop
   ./launch.sh diagnostics
   ./launch.sh uninstall
   ./launch.sh uninstall --purge-data
 
-The default uninstall retains the sqllens-data Docker volume. The explicit
---purge-data option permanently removes application data and local setup state.
+Stop and the default uninstall retain both sqllens-data and sqllens-secrets.
+The explicit --purge-data option permanently removes application data,
+encrypted-provider key material, and local setup state.
 """,
+    )
+
+
+def write_release_smoke(release_root: pathlib.Path) -> None:
+    write_text(
+        release_root / "release-smoke.sh",
+        """#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+COMPOSE_FILE="$ROOT/deploy/compose.json"
+
+fail() {
+  printf 'ERROR: %s\\n' "$*" >&2
+  exit 1
+}
+
+compose() {
+  docker compose --project-directory "$ROOT" -f "$COMPOSE_FILE" "$@"
+}
+
+"$ROOT/launch.sh" check
+container_id=$(compose ps -q web-api 2>/dev/null | sed -n '1p')
+[ -n "$container_id" ] ||
+  fail "Web App is not running; run ./launch.sh start, then retry ./release-smoke.sh"
+
+running=$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || true)
+[ "$running" = true ] ||
+  fail "Web App container is not running; run ./launch.sh diagnostics"
+health=$(docker inspect --format '{{.State.Health.Status}}' "$container_id" 2>/dev/null || true)
+[ "$health" = healthy ] ||
+  fail "Web App container is not healthy; run ./launch.sh diagnostics"
+
+docker exec "$container_id" python -c '
+import json
+import urllib.request
+
+def load(path):
+    with urllib.request.urlopen("http://127.0.0.1:8080" + path, timeout=3) as response:
+        raw = response.read(65_537)
+    if len(raw) > 65_536:
+        raise RuntimeError("local response exceeded smoke budget")
+    return json.loads(raw)
+
+health = load("/healthz")
+status = load("/api/v1/setup/status")
+if health != {"status": "ok"}:
+    raise RuntimeError("health contract failed")
+if not isinstance(status.get("state"), str):
+    raise RuntimeError("setup state contract failed")
+if not isinstance(status.get("initialized"), bool):
+    raise RuntimeError("setup initialized contract failed")
+if not isinstance(status.get("bootstrap_hash_persisted"), bool):
+    raise RuntimeError("bootstrap persistence contract failed")
+' >/dev/null || fail "bounded local API smoke failed; run ./launch.sh diagnostics"
+
+printf 'Release smoke passed: container healthy and local API contracts valid.\\n'
+""",
+        0o755,
     )
 
 
@@ -430,6 +502,7 @@ def build(
         stage_release(source, release_root)
         write_metadata(release_root, version, revision, epoch)
         write_release_notes(release_root, version)
+        write_release_smoke(release_root)
         write_launch_command(release_root)
 
         app_stage = stage / "macos-app"
