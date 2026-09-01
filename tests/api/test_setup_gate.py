@@ -1280,6 +1280,118 @@ def test_setup_probe_exception_after_durable_commit_never_deletes_active_key(
     assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 1
 
 
+@pytest.mark.parametrize("mode", ["external", "rules"])
+def test_finalize_rejects_provider_replacement_after_capturing_stale_snapshot(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    app = create_app(
+        settings=settings,
+        clock=clock,
+        provider_gateway=FakeProviderGateway(),
+    )
+    owner = TestClient(app)
+    _, csrf_token = bootstrap_session(owner, settings, clock)
+    commit_external_policy(owner, csrf_token)
+    probe_external_credential(owner, csrf_token, api_key="initial-provider-secret")
+    setup_cookie = owner.cookies.get(SETUP_COOKIE_NAME)
+    assert setup_cookie is not None
+    before = SetupStore(settings).snapshot().provider_credential
+    assert before is not None
+
+    finalizer = TestClient(app)
+    replacement = TestClient(app)
+    for client in (finalizer, replacement):
+        client.cookies.set(SETUP_COOKIE_NAME, setup_cookie, path="/api/v1/setup")
+
+    snapshot_captured = threading.Event()
+    release_finalize = threading.Event()
+    original_finalize = SetupStore.finalize
+    original_snapshot = SetupStore.snapshot
+
+    def controlled_finalize(
+        store: SetupStore,
+        requested_mode: str,
+        owner_password: str,
+        now: datetime,
+    ) -> tuple[int, int]:
+        stale_snapshot = original_snapshot(store)
+        snapshot_captured.set()
+        assert release_finalize.wait(5)
+        snapshot_calls = 0
+
+        def stale_then_live() -> setup_state_module.SetupSnapshot:
+            nonlocal snapshot_calls
+            snapshot_calls += 1
+            if snapshot_calls == 1:
+                return stale_snapshot
+            return original_snapshot(store)
+
+        store.snapshot = stale_then_live  # type: ignore[method-assign]
+        try:
+            return original_finalize(  # type: ignore[arg-type]
+                store,
+                requested_mode,
+                owner_password,
+                now,
+            )
+        finally:
+            del store.snapshot
+
+    monkeypatch.setattr(SetupStore, "finalize", controlled_finalize)
+
+    def finalize() -> Response:
+        return finalizer.post(
+            "/api/v1/setup/finalize",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"mode": mode, "owner_password": "owner-password-123"},
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        finalize_future = executor.submit(finalize)
+        try:
+            assert snapshot_captured.wait(5)
+            clock.advance(seconds=1)
+            replacement_response = replacement.post(
+                "/api/v1/setup/model-probes",
+                headers={"X-CSRF-Token": csrf_token},
+                json={
+                    "mode": "external",
+                    "base_url": "https://api.example.com/v2",
+                    "api_key": "replacement-provider-secret",
+                    "model": "replacement-model",
+                },
+            )
+            assert replacement_response.status_code == 200
+            winner = SetupStore(settings).snapshot()
+            assert winner.provider_credential is not None
+            assert winner.provider_credential != before
+            assert winner.credential_retirement_pending_version is None
+            vault = CredentialVault(settings.credential_key_path)
+            assert vault.decrypt(winner.provider_credential) == "replacement-provider-secret"
+            with pytest.raises(CredentialUnavailableError):
+                vault.decrypt(before)
+        finally:
+            release_finalize.set()
+        finalize_response = finalize_future.result(timeout=5)
+
+    assert finalize_response.status_code == 409
+    persisted = SetupStore(settings).snapshot()
+    assert persisted.stage == "model_required"
+    assert persisted.initialized is False
+    assert persisted.provider_credential == winner.provider_credential
+    assert persisted.provider_base_url == "https://api.example.com/v2"
+    assert persisted.provider_model == "replacement-model"
+    assert persisted.credential_retirement_pending_version is None
+    assert CredentialVault(settings.credential_key_path).decrypt(
+        persisted.provider_credential
+    ) == "replacement-provider-secret"
+    create_app(settings=settings, clock=clock)
+    assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 1
+
+
 def test_local_probe_fails_closed_and_provider_failure_can_degrade_to_rules(
     settings: Settings,
     clock: MutableClock,
