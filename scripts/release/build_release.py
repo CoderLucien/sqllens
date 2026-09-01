@@ -186,6 +186,7 @@ def copy_release_path(
     destination: pathlib.Path,
     relative: pathlib.PurePath,
     tracked_files: set[str],
+    staged_files: set[str],
 ) -> None:
     if should_exclude(relative):
         return
@@ -204,6 +205,7 @@ def copy_release_path(
                 destination / child.name,
                 relative / child.name,
                 tracked_files,
+                staged_files,
             )
         return
     if relative.as_posix() not in tracked_files:
@@ -213,6 +215,7 @@ def copy_release_path(
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
     destination.chmod(normalized_mode(source))
+    staged_files.add(relative.as_posix())
 
 
 def tracked_release_files(source: pathlib.Path) -> set[str]:
@@ -223,6 +226,8 @@ def tracked_release_files(source: pathlib.Path) -> set[str]:
             str(source),
             "ls-files",
             "-z",
+            "-v",
+            "--stage",
             "--cached",
             "--",
             *RELEASE_PATHS,
@@ -233,15 +238,43 @@ def tracked_release_files(source: pathlib.Path) -> set[str]:
     if result.returncode != 0:
         detail = os.fsdecode(result.stderr).strip() or "git ls-files failed"
         raise BuildError(f"could not enumerate tracked release inputs: {detail}")
-    return {
-        os.fsdecode(raw_path)
-        for raw_path in result.stdout.split(b"\0")
-        if raw_path
-    }
+    tracked_files: set[str] = set()
+    for raw_entry in result.stdout.split(b"\0"):
+        if not raw_entry:
+            continue
+        try:
+            raw_metadata, raw_path = raw_entry.split(b"\t", 1)
+            state, raw_mode, _object_id, raw_stage = raw_metadata.split()
+        except ValueError as exc:
+            raise BuildError("git ls-files returned an invalid release entry") from exc
+
+        relative = os.fsdecode(raw_path)
+        tracked_files.add(relative)
+        if should_exclude(pathlib.PurePath(relative)):
+            continue
+
+        index_state = os.fsdecode(state)
+        if index_state != "H" or raw_stage != b"0":
+            raise BuildError(
+                "release input is not fully materialized from source revision: "
+                f"{relative!r} (index state {index_state!r})"
+            )
+        mode = os.fsdecode(raw_mode)
+        if mode == "120000":
+            raise BuildError(f"release source contains a symbolic link: {relative}")
+        if mode not in {"100644", "100755"}:
+            raise BuildError(f"release source contains a special file: {relative}")
+    return tracked_files
 
 
 def stage_release(source: pathlib.Path, destination: pathlib.Path) -> None:
     tracked_files = tracked_release_files(source)
+    expected_files = {
+        relative
+        for relative in tracked_files
+        if not should_exclude(pathlib.PurePath(relative))
+    }
+    staged_files: set[str] = set()
     destination.mkdir(parents=True)
     for relative_text in RELEASE_PATHS:
         source_path = source / relative_text
@@ -253,6 +286,20 @@ def stage_release(source: pathlib.Path, destination: pathlib.Path) -> None:
             destination / relative,
             relative,
             tracked_files,
+            staged_files,
+        )
+
+    missing = expected_files - staged_files
+    extra = staged_files - expected_files
+    if missing or extra:
+        details = []
+        if missing:
+            details.append(f"missing {sorted(missing)[0]!r}")
+        if extra:
+            details.append(f"extra {sorted(extra)[0]!r}")
+        raise BuildError(
+            "release source is not fully materialized from source revision: "
+            + "; ".join(details)
         )
 
 

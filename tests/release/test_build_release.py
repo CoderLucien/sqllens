@@ -364,6 +364,29 @@ class ReleaseBuilderTest(unittest.TestCase):
         self.assertIn("not tracked by source revision", result.stderr)
         self.assertFalse(self.output.exists())
 
+    def test_skip_worktree_cannot_silently_omit_a_tracked_release_file(self) -> None:
+        relative = "apps/api/app.py"
+        subprocess.run(
+            ["git", "update-index", "--skip-worktree", relative],
+            cwd=self.source,
+            check=True,
+        )
+        (self.source / relative).unlink()
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--", relative],
+            cwd=self.source,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(status.stdout, "")
+
+        result = self._build()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not fully materialized from source revision", result.stderr)
+        self.assertFalse(self.output.exists())
+
     def test_publish_failure_never_exposes_a_partial_output_directory(self) -> None:
         with mock.patch.dict(
             os.environ, {"SOURCE_DATE_EPOCH": "1788192000"}, clear=False
