@@ -8,31 +8,41 @@ support. The P0 runtime remains one `web-api` process and one Compose replica.
 
 The invariant is:
 
-> Every credential key file has exactly one durable database reference as the
-> active version or as a staged/retirement-pending version. After recovery, the
-> directory contains only the decryptable active key.
+> The active credential reference always has an existing, safe, decryptable
+> key file. Every non-active key file has exactly one durable staged or
+> retirement-pending reference. After recovery, the directory contains only
+> the active key.
 
-No API key plaintext or key bytes are stored in SQLite.
+No API key plaintext or key bytes are stored in SQLite. A losing request may
+generate an ephemeral in-memory rotation plan, but that plan must never be
+written to disk, SQLite, or logs unless the request first wins the durable
+staged mutation.
 
 ## State Machine
 
 The only valid rotation sequence is:
 
 1. `idle(active=A)`
-2. Generate an in-memory rotation plan containing random key bytes and a
-   deterministic version/path. No file exists yet.
+2. Generate an ephemeral in-memory rotation plan containing random key bytes
+   and a deterministic version/path. No file exists yet, and losing the staged
+   CAS leaves no persistent state.
 3. Atomically write `staged_rotation(B, token, expected_active=A,
    expected_setup_epoch)` after checking that no credential operation or
    diagnosis lease exists.
 4. Materialize B with `O_EXCL`, mode `0600`, and `fsync` both the file and its
    parent directory.
-5. In one SQLite CAS transaction, change `active=A + staged=B` to
-   `active=B + retirement_pending=A`. If A does not exist, clear pending.
+5. In one SQLite CAS transaction, check `operation=staged_rotation`, token,
+   expected active, setup epoch, and the absence of a diagnosis lease; then
+   change `active=A + staged=B` to `active=B + retirement_pending=A`. If A does
+   not exist, clear pending.
 6. Idempotently retire A.
 7. CAS-clear the retirement record.
 
 The staged token is operation-specific. Generic retirement completion must not
-complete a staged rotation.
+complete a staged rotation. Owner abort is a token-matched CAS. Diagnosis
+admission provides the reverse exclusion: its lease transaction rejects every
+staged or retirement-pending credential operation, even if the request already
+passed middleware.
 
 ## Recovery
 
@@ -41,7 +51,8 @@ Recovery is deliberately split:
 - Before a new process accepts traffic, it unconditionally aborts any inherited
   staged rotation by retiring its exact durable version and CAS-clearing the
   staged record. A missing file is already retired. Unsafe ownership, type,
-  permissions, symlinks, or special files fail closed.
+  permissions, symlinks, or special files fail startup; the process must not
+  accept traffic.
 - During normal operation, a non-owner request that observes a staged rotation
   returns a retryable fail-closed response. It must not invoke generic
   retirement recovery or delete the staged key.
@@ -71,19 +82,27 @@ The implementation must converge from these crash points:
 
 CAS conflict, key unlink failure, phase-two failure, and cancellation must
 leave a retryable durable state. At no point may the active row reference a
-missing or already-retired key.
+missing or already-retired key. A staged reference may temporarily have no file
+before materialization, and a retirement-pending reference may temporarily have
+no file after unlink and before phase-two CAS. Those states are idempotent and
+must converge on restart.
 
 ## Tests
 
 Automated barriers and fault injection cover:
 
-- Two rotations passing provider probe concurrently; only one may create key
-  material or a file.
+- Two rotations passing provider probe concurrently; only one may win the
+  durable staged mutation and materialize a key file. A losing ephemeral plan
+  leaves no file, database row, or log residue.
 - A first request paused after staging or materialization while a second
   rotation and an unrelated API request fail closed without clearing B.
+- A diagnosis request paused before admission cannot acquire a lease after a
+  credential operation is staged; conversely, staging cannot begin while a
+  diagnosis lease exists.
 - Every crash point above followed by a simulated process restart.
 - CAS loser, unlink failure, phase-two failure, and cancellation recovery.
-- At each intermediate state, filesystem versions equal the disjoint union of
-  active and durable staged/retirement-pending versions.
+- At each intermediate state, active has one existing safe file, and every
+  non-active file belongs to exactly one durable staged/retirement-pending
+  reference. The two allowed reference-without-file states are staged before
+  materialization and retirement-pending after unlink.
 - Final convergence leaves exactly one decryptable active key.
-
