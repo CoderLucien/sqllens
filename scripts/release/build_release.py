@@ -154,10 +154,10 @@ def ensure_release_source_clean(source: pathlib.Path) -> None:
         )
 
 
-def source_date_epoch() -> int:
+def source_date_epoch(source: pathlib.Path, revision: str) -> int:
     raw = os.environ.get("SOURCE_DATE_EPOCH")
     if raw is None:
-        return int(dt.datetime.now(tz=dt.UTC).timestamp())
+        raw = git_output(source, "show", "-s", "--format=%ct", revision)
     try:
         value = int(raw)
     except ValueError as exc:
@@ -598,7 +598,7 @@ def build(
     source = validate_source(source)
     revision = verified_source_revision(source, revision)
     ensure_release_source_clean(source)
-    epoch = source_date_epoch()
+    epoch = source_date_epoch(source, revision)
 
     output = output.expanduser().resolve()
     if output.exists():
