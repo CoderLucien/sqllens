@@ -1,6 +1,9 @@
 import json
+import os
 import pathlib
 import re
+import subprocess
+import tempfile
 import tomllib
 import unittest
 
@@ -157,6 +160,12 @@ class PythonSupplyChainTest(unittest.TestCase):
         self.assertGreaterEqual(dockerfile.count("--no-index"), 3)
         self.assertIn("--no-build-isolation", dockerfile)
         self.assertIn("--no-deps", dockerfile)
+        self.assertIn("ARG SOURCE_REVISION", dockerfile)
+        self.assertIn("ARG SOURCE_GIT_TREE", dockerfile)
+        self.assertIn("org.opencontainers.image.revision", dockerfile)
+        self.assertIn("dev.sqllens.source.git-tree", dockerfile)
+        self.assertIn("dev.sqllens.build.dockerfile.git-blob", dockerfile)
+        self.assertIn("dev.sqllens.build.verifier.git-blob", dockerfile)
 
         artifact_stage, offline_stages = dockerfile.split("AS python-app-build", 1)
         self.assertIn("pip download", artifact_stage)
@@ -198,6 +207,82 @@ class PythonSupplyChainTest(unittest.TestCase):
         self.assertIn("reproducible OCI archive mismatch", verifier)
         self.assertIn("OCI manifest digest mismatch", verifier)
         self.assertIn("filesystem fingerprint mismatch", verifier)
+        self.assertIn("git clone", verifier)
+        self.assertIn("SOURCE_REVISION", verifier)
+        self.assertIn("SOURCE_GIT_TREE", verifier)
+        self.assertIn("source-identity.json", verifier)
+        self.assertIn("org.opencontainers.image.revision", verifier)
+        self.assertIn("dev.sqllens.source.git-tree", verifier)
+        self.assertIn("release source has uncommitted changes", verifier)
+        self.assertIn('-f "$BUILD_ROOT/apps/api/Dockerfile"', verifier)
+        self.assertNotIn('-f "$ROOT/apps/api/Dockerfile"', verifier)
+
+    def test_verifier_rejects_dirty_inputs_before_invoking_docker(self) -> None:
+        for relative in (
+            "scripts/release/verify_python_supply_chain.sh",
+            "apps/api/Dockerfile",
+            "apps/api/app.py",
+        ):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as raw:
+                source = pathlib.Path(raw) / "source"
+                files = {
+                    "scripts/release/verify_python_supply_chain.sh": VERIFIER.read_text(),
+                    "scripts/release/python_image_fingerprint.py": "print('{}')\n",
+                    "apps/api/Dockerfile": "FROM scratch\n",
+                    "apps/api/app.py": "print('api')\n",
+                    "deploy/python-runtime-baseline.json": "{}\n",
+                }
+                for path_text, content in files.items():
+                    path = source / path_text
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content)
+                verifier = source / "scripts" / "release" / "verify_python_supply_chain.sh"
+                verifier.chmod(0o755)
+
+                subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+                subprocess.run(
+                    ["git", "config", "user.name", "SQLLens Supply Test"],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "config", "user.email", "supply-test@sqllens.invalid"],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(["git", "add", "."], cwd=source, check=True)
+                subprocess.run(
+                    ["git", "commit", "-qm", "fixture"], cwd=source, check=True
+                )
+
+                dirty = source / relative
+                with dirty.open("a", encoding="utf-8") as stream:
+                    stream.write("\n# supply-chain-canary\n")
+
+                fake_bin = pathlib.Path(raw) / "fake-bin"
+                fake_bin.mkdir()
+                docker = fake_bin / "docker"
+                docker.write_text(
+                    "#!/bin/sh\n"
+                    "printf '%s\\n' 'docker must not run for a dirty source' >&2\n"
+                    "exit 91\n"
+                )
+                docker.chmod(0o755)
+                environment = os.environ.copy()
+                environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+
+                result = subprocess.run(
+                    ["sh", str(verifier)],
+                    cwd=source,
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("release source has uncommitted changes", result.stderr)
+                self.assertNotIn("docker must not run", result.stderr)
 
 
 if __name__ == "__main__":

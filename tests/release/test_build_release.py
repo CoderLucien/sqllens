@@ -8,8 +8,8 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from unittest import mock
 import zipfile
+from unittest import mock
 
 from scripts.release import build_release
 
@@ -39,12 +39,15 @@ class ReleaseBuilderTest(unittest.TestCase):
             ".dockerignore": "node_modules\n",
             "Makefile": "smoke:\n\t@true\n",
             "apps/web/node_modules/ignored/package.json": "{}\n",
+            "scripts/release/build_release.py": BUILDER.read_text(),
         }
         for relative, content in files.items():
             path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
         (self.source / "launch.sh").chmod(0o755)
+        self.builder = self.source / "scripts" / "release" / "build_release.py"
+        self.builder.chmod(0o755)
         git_env = os.environ.copy()
         git_env.update(
             {
@@ -92,7 +95,7 @@ class ReleaseBuilderTest(unittest.TestCase):
         return subprocess.run(
             [
                 sys.executable,
-                str(BUILDER),
+                str(self.builder),
                 "--source",
                 str(self.source),
                 "--output",
@@ -103,7 +106,7 @@ class ReleaseBuilderTest(unittest.TestCase):
                 revision or self.revision[:12],
                 "--skip-dmg",
             ],
-            cwd=ROOT,
+            cwd=self.source,
             env=env,
             text=True,
             capture_output=True,
@@ -199,6 +202,22 @@ class ReleaseBuilderTest(unittest.TestCase):
             names = {member.name for member in archive.getmembers()}
 
         self.assertEqual(metadata["source_revision"], self.revision)
+        expected_git_tree = subprocess.run(
+            ["git", "rev-parse", "HEAD^{tree}"],
+            cwd=self.source,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        expected_builder_blob = subprocess.run(
+            ["git", "rev-parse", "HEAD:scripts/release/build_release.py"],
+            cwd=self.source,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(metadata["source_git_tree"], expected_git_tree)
+        self.assertEqual(metadata["release_builder_git_blob"], expected_builder_blob)
         self.assertRegex(metadata["source_tree_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(metadata["release_kind"], "unsigned-developer-preview")
         self.assertEqual(metadata["platform_validation"]["macos"], "unverified")
@@ -276,7 +295,8 @@ class ReleaseBuilderTest(unittest.TestCase):
             'case "$*" in\n'
             "  *\" ps -q web-api\") printf '%s\\n' container-id ;;\n"
             "  \"inspect --format {{.State.Running}} container-id\") printf '%s\\n' true ;;\n"
-            "  \"inspect --format {{.State.Health.Status}} container-id\") printf '%s\\n' healthy ;;\n"
+            "  \"inspect --format {{.State.Health.Status}} container-id\") "
+            "printf '%s\\n' healthy ;;\n"
             '  "exec container-id python -c "*) exit 0 ;;\n'
             "esac\n"
         )
@@ -352,6 +372,56 @@ class ReleaseBuilderTest(unittest.TestCase):
         self.assertIn("release source has uncommitted changes", result.stderr)
         self.assertFalse(self.output.exists())
 
+    def test_dirty_release_builder_cannot_claim_the_git_revision(self) -> None:
+        with self.builder.open("a", encoding="utf-8") as stream:
+            stream.write("\n# release-canary\n")
+
+        result = self._build()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release source has uncommitted changes", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_dirty_runtime_dockerfile_cannot_claim_the_git_revision(self) -> None:
+        dockerfile = self.source / "apps" / "api" / "Dockerfile"
+        dockerfile.write_text("FROM scratch\n# release-canary\n")
+
+        result = self._build()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release source has uncommitted changes", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_release_payload_is_staged_from_an_independent_checkout(self) -> None:
+        staged_sources: list[pathlib.Path] = []
+        original_stage_release = build_release.stage_release
+
+        def capture_source(
+            source: pathlib.Path, destination: pathlib.Path
+        ) -> None:
+            staged_sources.append(source.resolve())
+            original_stage_release(source, destination)
+
+        with (
+            mock.patch.object(build_release, "__file__", str(self.builder)),
+            mock.patch.object(
+                build_release, "stage_release", side_effect=capture_source
+            ),
+            mock.patch.dict(
+                os.environ, {"SOURCE_DATE_EPOCH": "1788192000"}, clear=False
+            ),
+        ):
+            build_release.build(
+                self.source,
+                self.output,
+                "0.1.0-dev.1",
+                self.revision[:12],
+                skip_dmg=True,
+            )
+
+        self.assertEqual(len(staged_sources), 1)
+        self.assertNotEqual(staged_sources[0], self.source.resolve())
+
     def test_git_ignored_file_in_a_packaged_path_fails_closed(self) -> None:
         exclude = self.source / ".git" / "info" / "exclude"
         exclude.write_text(exclude.read_text() + "\n*.release-canary\n")
@@ -410,24 +480,25 @@ class ReleaseBuilderTest(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_publish_failure_never_exposes_a_partial_output_directory(self) -> None:
-        with mock.patch.dict(
-            os.environ, {"SOURCE_DATE_EPOCH": "1788192000"}, clear=False
-        ):
-            with mock.patch.object(
+        with (
+            mock.patch.dict(
+                os.environ, {"SOURCE_DATE_EPOCH": "1788192000"}, clear=False
+            ),
+            mock.patch.object(build_release, "__file__", str(self.builder)),
+            mock.patch.object(
                 build_release.os,
                 "replace",
                 side_effect=OSError("simulated atomic publish failure"),
-            ):
-                with self.assertRaisesRegex(
-                    OSError, "simulated atomic publish failure"
-                ):
-                    build_release.build(
-                        self.source,
-                        self.output,
-                        "0.1.0-dev.1",
-                        self.revision[:12],
-                        skip_dmg=True,
-                    )
+            ),
+            self.assertRaisesRegex(OSError, "simulated atomic publish failure"),
+        ):
+            build_release.build(
+                self.source,
+                self.output,
+                "0.1.0-dev.1",
+                self.revision[:12],
+                skip_dmg=True,
+            )
 
         self.assertFalse(self.output.exists())
 
@@ -444,7 +515,7 @@ class ReleaseBuilderTest(unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable,
-                str(BUILDER),
+                str(self.builder),
                 "--source",
                 str(self.source),
                 "--output",
@@ -454,7 +525,7 @@ class ReleaseBuilderTest(unittest.TestCase):
                 "--revision",
                 "7bbb8da",
             ],
-            cwd=ROOT,
+            cwd=self.source,
             text=True,
             capture_output=True,
             check=False,

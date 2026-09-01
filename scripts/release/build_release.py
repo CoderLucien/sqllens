@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import dataclasses
 import datetime as dt
 import gzip
 import hashlib
@@ -20,8 +22,10 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from collections.abc import Iterator
 
 REVISION_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
+GIT_OBJECT_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
 VERSION_PATTERN = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$"
@@ -58,10 +62,20 @@ EXCLUDED_NAMES = {
 }
 ZIP_MIN_EPOCH = 315532800
 ZIP_MAX_EPOCH = 4354819198
+BUILDER_RELATIVE_PATH = pathlib.PurePosixPath(
+    "scripts/release/build_release.py"
+)
 
 
 class BuildError(RuntimeError):
     """A release cannot be built without violating its contract."""
+
+
+@dataclasses.dataclass(frozen=True)
+class SourceIdentity:
+    revision: str
+    git_tree: str
+    builder_git_blob: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -143,15 +157,97 @@ def ensure_release_source_clean(source: pathlib.Path) -> None:
         "status",
         "--porcelain=v1",
         "--untracked-files=all",
-        "--",
-        *RELEASE_PATHS,
     )
     if status:
         first_change = status.splitlines()[0]
-        raise BuildError(
-            "release source has uncommitted changes in packaged paths: "
-            f"{first_change}"
+        raise BuildError(f"release source has uncommitted changes: {first_change}")
+
+
+def git_object_id(source: pathlib.Path, expression: str) -> str:
+    object_id = git_output(source, "rev-parse", "--verify", expression)
+    if GIT_OBJECT_PATTERN.fullmatch(object_id) is None:
+        raise BuildError(f"Git object did not resolve to a full object ID: {expression}")
+    return object_id
+
+
+def source_identity(
+    source: pathlib.Path,
+    expected_revision: str,
+    *,
+    require_running_builder: bool,
+) -> SourceIdentity:
+    revision = verified_source_revision(source, expected_revision)
+    ensure_release_source_clean(source)
+    git_tree = git_object_id(source, f"{revision}^{{tree}}")
+    builder_git_blob = git_object_id(
+        source, f"{revision}:{BUILDER_RELATIVE_PATH.as_posix()}"
+    )
+
+    builder = source / BUILDER_RELATIVE_PATH
+    if builder.is_symlink() or not builder.is_file():
+        raise BuildError("release builder is missing or unsafe")
+    working_builder_blob = git_output(
+        source,
+        "hash-object",
+        "--no-filters",
+        str(builder),
+    )
+    if working_builder_blob != builder_git_blob:
+        raise BuildError("release builder does not match the declared source revision")
+    if require_running_builder and pathlib.Path(__file__).resolve() != builder.resolve():
+        raise BuildError("release builder must execute from the declared source worktree")
+
+    return SourceIdentity(
+        revision=revision,
+        git_tree=git_tree,
+        builder_git_blob=builder_git_blob,
+    )
+
+
+def assert_source_identity(
+    source: pathlib.Path,
+    identity: SourceIdentity,
+    *,
+    require_running_builder: bool,
+) -> None:
+    actual = source_identity(
+        source,
+        identity.revision,
+        require_running_builder=require_running_builder,
+    )
+    if actual != identity:
+        raise BuildError("release source identity changed during the build")
+
+
+@contextlib.contextmanager
+def isolated_source_checkout(
+    source: pathlib.Path, identity: SourceIdentity
+) -> Iterator[pathlib.Path]:
+    with tempfile.TemporaryDirectory(prefix="sqllens-release-source-") as raw_checkout:
+        checkout = pathlib.Path(raw_checkout) / "source"
+        result = subprocess.run(
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--no-checkout",
+                "--no-hardlinks",
+                str(source),
+                str(checkout),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
         )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "git clone failed"
+            raise BuildError(f"could not create isolated release checkout: {detail}")
+        git_output(checkout, "checkout", "--detach", "--quiet", identity.revision)
+        assert_source_identity(checkout, identity, require_running_builder=False)
+        try:
+            yield checkout
+        finally:
+            assert_source_identity(checkout, identity, require_running_builder=False)
 
 
 def source_date_epoch(source: pathlib.Path, revision: str) -> int:
@@ -175,6 +271,36 @@ def should_exclude(relative: pathlib.PurePath) -> bool:
             return True
     name = relative.name
     return name.endswith((".pyc", ".pyo", ".tsbuildinfo"))
+
+
+def ensure_no_ignored_release_inputs(source: pathlib.Path) -> None:
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--",
+            *RELEASE_PATHS,
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = os.fsdecode(result.stderr).strip() or "git ls-files failed"
+        raise BuildError(f"could not validate ignored release inputs: {detail}")
+    for raw_path in result.stdout.split(b"\0"):
+        if not raw_path:
+            continue
+        relative = pathlib.PurePath(os.fsdecode(raw_path))
+        if not should_exclude(relative):
+            raise BuildError(
+                f"release input is not tracked by source revision: {relative}"
+            )
 
 
 def normalized_mode(path: pathlib.Path) -> int:
@@ -312,7 +438,7 @@ def write_text(path: pathlib.Path, content: str, mode: int = 0o644) -> None:
 def write_metadata(
     release_root: pathlib.Path,
     version: str,
-    revision: str,
+    identity: SourceIdentity,
     source_tree_sha256: str,
     epoch: int,
 ) -> None:
@@ -326,7 +452,9 @@ def write_metadata(
         },
         "release_kind": "unsigned-developer-preview",
         "signing": {"code_signed": False, "notarized": False},
-        "source_revision": revision,
+        "release_builder_git_blob": identity.builder_git_blob,
+        "source_git_tree": identity.git_tree,
+        "source_revision": identity.revision,
         "source_tree_sha256": source_tree_sha256,
         "version": version,
     }
@@ -643,9 +771,10 @@ def build(
 ) -> list[pathlib.Path]:
     macos_bundle_version(version)
     source = validate_source(source)
-    revision = verified_source_revision(source, revision)
-    ensure_release_source_clean(source)
-    epoch = source_date_epoch(source, revision)
+    identity = source_identity(source, revision, require_running_builder=True)
+    tracked_release_files(source)
+    ensure_no_ignored_release_inputs(source)
+    epoch = source_date_epoch(source, identity.revision)
 
     output = output.expanduser().resolve()
     if output.exists():
@@ -656,15 +785,18 @@ def build(
                 "output already contains release artifacts; use an empty output directory"
             )
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix=".sqllens-release-", dir=output.parent
-    ) as raw_stage:
+    with (
+        isolated_source_checkout(source, identity) as build_source,
+        tempfile.TemporaryDirectory(
+            prefix=".sqllens-release-", dir=output.parent
+        ) as raw_stage,
+    ):
         stage = pathlib.Path(raw_stage)
         release_root = stage / f"sqllens-{version}"
-        stage_release(source, release_root)
-        ensure_release_source_clean(source)
+        stage_release(build_source, release_root)
+        assert_source_identity(build_source, identity, require_running_builder=False)
         source_tree_digest = release_tree_sha256(release_root)
-        write_metadata(release_root, version, revision, source_tree_digest, epoch)
+        write_metadata(release_root, version, identity, source_tree_digest, epoch)
         write_release_notes(release_root, version)
         write_release_smoke(release_root)
         write_launch_command(release_root)
@@ -690,7 +822,9 @@ def build(
         checksums = stage / "SHA256SUMS"
         write_text(
             checksums,
-            "".join(f"{sha256(path)}  {path.name}\n" for path in sorted(artifacts)),
+            "".join(
+                f"{sha256(path)}  {path.name}\n" for path in sorted(artifacts)
+            ),
         )
 
         publish = stage / "publish"
@@ -698,6 +832,8 @@ def build(
         for path in [*artifacts, checksums]:
             path.rename(publish / path.name)
 
+        assert_source_identity(build_source, identity, require_running_builder=False)
+        assert_source_identity(source, identity, require_running_builder=True)
         if output.exists():
             output.rmdir()
         os.replace(publish, output)
