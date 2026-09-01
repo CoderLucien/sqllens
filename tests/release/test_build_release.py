@@ -330,6 +330,18 @@ class ReleaseBuilderTest(unittest.TestCase):
         self.assertIn("release source has uncommitted changes", result.stderr)
         self.assertFalse(self.output.exists())
 
+    def test_git_ignored_file_in_a_packaged_path_fails_closed(self) -> None:
+        exclude = self.source / ".git" / "info" / "exclude"
+        exclude.write_text(exclude.read_text() + "\n*.release-canary\n")
+        canary = self.source / "apps" / "api" / "credential.release-canary"
+        canary.write_text("must-not-ship\n")
+
+        result = self._build()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not tracked by source revision", result.stderr)
+        self.assertFalse(self.output.exists())
+
     def test_publish_failure_never_exposes_a_partial_output_directory(self) -> None:
         with mock.patch.dict(
             os.environ, {"SOURCE_DATE_EPOCH": "1788192000"}, clear=False
