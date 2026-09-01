@@ -12,6 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     SQLLENS_DATA_DIR=/data \
+    SQLLENS_SECRETS_DIR=/secrets \
     SQLLENS_WEB_DIST_DIR=/app/static
 
 WORKDIR /app
@@ -22,8 +23,8 @@ COPY pyproject.toml ./
 COPY apps/api/ apps/api/
 RUN python -m pip install --no-cache-dir --no-deps . \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin sqllens \
-    && mkdir -p /data /app/static \
-    && chown -R sqllens:sqllens /data /app/static \
+    && install -d -m 0700 -o sqllens -g sqllens /data /secrets \
+    && install -d -m 0755 -o sqllens -g sqllens /app/static \
     && install -m 0755 apps/api/entrypoint.sh /usr/local/bin/sqllens-entrypoint
 
 COPY --from=web-build --chown=sqllens:sqllens /build/apps/web/dist/ /app/static/

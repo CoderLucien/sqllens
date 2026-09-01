@@ -17,14 +17,23 @@ def _default_web_dist_dir() -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _default_secrets_dir() -> Path | None:
+    configured = os.environ.get("SQLLENS_SECRETS_DIR")
+    return Path(configured) if configured else None
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     data_dir: Path = field(default_factory=_default_data_dir)
     bootstrap_ttl_seconds: int = 600
     bootstrap_max_attempts: int = 5
     setup_session_ttl_seconds: int = 1_800
+    owner_session_ttl_seconds: int = 28_800
+    owner_login_max_attempts: int = 5
+    owner_login_lock_seconds: int = 60
     cookie_secure: bool = False
     web_dist_dir: Path | None = field(default_factory=_default_web_dist_dir)
+    secrets_dir: Path | None = field(default_factory=_default_secrets_dir)
     bind_host: str = field(default_factory=lambda: os.environ.get("SQLLENS_BIND_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.environ.get("SQLLENS_PORT", "8080")))
 
@@ -35,3 +44,8 @@ class Settings:
     @property
     def session_key_path(self) -> Path:
         return self.data_dir / "setup-session.key"
+
+    @property
+    def credential_key_path(self) -> Path:
+        secrets_dir = self.secrets_dir or self.data_dir.parent / "secrets"
+        return secrets_dir / "credential.key"
