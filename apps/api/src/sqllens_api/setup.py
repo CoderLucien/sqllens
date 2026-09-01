@@ -742,7 +742,38 @@ class SetupStore:
                     setup_state.c.setup_epoch == snapshot.setup_epoch,
                     setup_state.c.finalized_at.is_(None),
                     setup_state.c.policy_committed_at == snapshot.policy_committed_at,
-                    setup_state.c.provider_status == snapshot.provider_status,
+                    (
+                        setup_state.c.provider_status.is_(None)
+                        if snapshot.provider_status is None
+                        else setup_state.c.provider_status == snapshot.provider_status
+                    ),
+                    (
+                        setup_state.c.provider_base_url.is_(None)
+                        if snapshot.provider_base_url is None
+                        else setup_state.c.provider_base_url == snapshot.provider_base_url
+                    ),
+                    (
+                        setup_state.c.provider_model.is_(None)
+                        if snapshot.provider_model is None
+                        else setup_state.c.provider_model == snapshot.provider_model
+                    ),
+                    (
+                        setup_state.c.provider_verified_at.is_(None)
+                        if snapshot.provider_verified_at is None
+                        else setup_state.c.provider_verified_at == snapshot.provider_verified_at
+                    ),
+                    (
+                        setup_state.c.provider_credential_ciphertext.is_(None)
+                        if snapshot.provider_credential is None
+                        else setup_state.c.provider_credential_ciphertext
+                        == snapshot.provider_credential.ciphertext
+                    ),
+                    (
+                        setup_state.c.provider_credential_key_version.is_(None)
+                        if snapshot.provider_credential is None
+                        else setup_state.c.provider_credential_key_version
+                        == snapshot.provider_credential.key_version
+                    ),
                     setup_state.c.credential_retirement_pending_version.is_(None),
                 )
                 .values(
