@@ -185,17 +185,29 @@ def copy_release_path(
     source: pathlib.Path,
     destination: pathlib.Path,
     relative: pathlib.PurePath,
+    tracked_files: set[str],
 ) -> None:
     if should_exclude(relative):
         return
     if source.is_symlink():
+        if relative.as_posix() not in tracked_files:
+            raise BuildError(
+                f"release input is not tracked by source revision: {relative}"
+            )
         raise BuildError(f"release source contains a symbolic link: {relative}")
     if source.is_dir():
         destination.mkdir(parents=True, exist_ok=True)
         destination.chmod(0o755)
         for child in sorted(source.iterdir(), key=lambda item: item.name):
-            copy_release_path(child, destination / child.name, relative / child.name)
+            copy_release_path(
+                child,
+                destination / child.name,
+                relative / child.name,
+                tracked_files,
+            )
         return
+    if relative.as_posix() not in tracked_files:
+        raise BuildError(f"release input is not tracked by source revision: {relative}")
     if not source.is_file():
         raise BuildError(f"release source contains a special file: {relative}")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -203,14 +215,45 @@ def copy_release_path(
     destination.chmod(normalized_mode(source))
 
 
+def tracked_release_files(source: pathlib.Path) -> set[str]:
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--",
+            *RELEASE_PATHS,
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = os.fsdecode(result.stderr).strip() or "git ls-files failed"
+        raise BuildError(f"could not enumerate tracked release inputs: {detail}")
+    return {
+        os.fsdecode(raw_path)
+        for raw_path in result.stdout.split(b"\0")
+        if raw_path
+    }
+
+
 def stage_release(source: pathlib.Path, destination: pathlib.Path) -> None:
+    tracked_files = tracked_release_files(source)
     destination.mkdir(parents=True)
     for relative_text in RELEASE_PATHS:
         source_path = source / relative_text
         if not source_path.exists():
             continue
         relative = pathlib.PurePath(relative_text)
-        copy_release_path(source_path, destination / relative, relative)
+        copy_release_path(
+            source_path,
+            destination / relative,
+            relative,
+            tracked_files,
+        )
 
 
 def write_text(path: pathlib.Path, content: str, mode: int = 0o644) -> None:
