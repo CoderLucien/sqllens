@@ -1,4 +1,4 @@
--r runtime.lock
+-r runtime.in
 ast_serialize==0.8.0
 iniconfig==2.3.0
 librt==0.15.0

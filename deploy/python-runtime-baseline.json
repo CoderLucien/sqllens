@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "verified_date": "2026-09-01",
+  "source": "https://hub.docker.com/_/python/tags?name=3.12.14-slim-bookworm",
+  "image": "python:3.12.14-slim-bookworm@sha256:0f5b26b9518d002b6173fd61daad821fa340635ebfec5bba471013f9ca114579",
+  "python_version": "3.12.14",
+  "runtime_versions": {
+    "expat": "2.8.3",
+    "openssl": "3.0.20"
+  },
+  "platforms": {
+    "linux/amd64": {
+      "manifest_digest": "sha256:4427763a1ba36f5aa8f656a03e5d00f3b8d61f5dd950c73df6c14f8c7640f8ab",
+      "debian_packages": {
+        "count": 105,
+        "normalized_sha256": "82716765b3f4f2e6288f70414152ab9a8756e612279b88d19140fe04c4b79557",
+        "ca-certificates": "20250419~deb12u1",
+        "libc6": "2.36-9+deb12u14",
+        "libssl3": "3.0.20-1~deb12u2",
+        "openssl": "3.0.20-1~deb12u2"
+      }
+    },
+    "linux/arm64/v8": {
+      "manifest_digest": "sha256:457e0286fc132c4531ea071629ae6959095aa4074f172cd271aedb6950714ae6",
+      "debian_packages": {
+        "count": 105,
+        "normalized_sha256": "82716765b3f4f2e6288f70414152ab9a8756e612279b88d19140fe04c4b79557",
+        "ca-certificates": "20250419~deb12u1",
+        "libc6": "2.36-9+deb12u14",
+        "libssl3": "3.0.20-1~deb12u2",
+        "openssl": "3.0.20-1~deb12u2"
+      }
+    }
+  },
+  "inspection": {
+    "index": "OCI index read from the Docker containerd content store",
+    "packages": "dpkg status copied from stopped per-platform containers; no emulation",
+    "runtime": "Python, OpenSSL, and Expat executed on linux/amd64"
+  }
+}
