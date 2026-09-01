@@ -82,9 +82,13 @@ class ReleaseBuilderTest(unittest.TestCase):
         self,
         output: pathlib.Path | None = None,
         revision: str | None = None,
+        source_date_epoch: str | None = "1788192000",
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
-        env["SOURCE_DATE_EPOCH"] = "1788192000"
+        if source_date_epoch is None:
+            env.pop("SOURCE_DATE_EPOCH", None)
+        else:
+            env["SOURCE_DATE_EPOCH"] = source_date_epoch
         return subprocess.run(
             [
                 sys.executable,
@@ -312,6 +316,24 @@ class ReleaseBuilderTest(unittest.TestCase):
             (first_output / "SHA256SUMS").read_text(),
             (second_output / "SHA256SUMS").read_text(),
         )
+
+    def test_default_build_epoch_is_the_verified_commit_timestamp(self) -> None:
+        result = self._build(source_date_epoch=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cli_archive = self.output / "sqllens-0.1.0-dev.1-source.tar.gz"
+        with tarfile.open(cli_archive, "r:gz") as archive:
+            metadata_member = next(
+                member
+                for member in archive.getmembers()
+                if member.name.endswith("build-metadata.json")
+            )
+            metadata_stream = archive.extractfile(metadata_member)
+            if metadata_stream is None:
+                self.fail("build metadata is not a regular archive member")
+            metadata = json.load(metadata_stream)
+
+        self.assertEqual(metadata["build_timestamp"], "2026-08-31T16:00:00Z")
 
     def test_revision_must_match_the_clean_source_git_head(self) -> None:
         mismatch = "0000000" if not self.revision.startswith("0000000") else "1111111"
