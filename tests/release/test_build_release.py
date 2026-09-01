@@ -8,7 +8,10 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
+
+from scripts.release import build_release
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "scripts" / "release" / "build_release.py"
@@ -36,16 +39,49 @@ class ReleaseBuilderTest(unittest.TestCase):
             ".dockerignore": "node_modules\n",
             "Makefile": "smoke:\n\t@true\n",
             "apps/web/node_modules/ignored/package.json": "{}\n",
-            ".git/config": "must-not-ship\n",
         }
         for relative, content in files.items():
             path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
         (self.source / "launch.sh").chmod(0o755)
+        git_env = os.environ.copy()
+        git_env.update(
+            {
+                "GIT_AUTHOR_DATE": "2026-09-01T00:00:00+08:00",
+                "GIT_COMMITTER_DATE": "2026-09-01T00:00:00+08:00",
+            }
+        )
+        subprocess.run(["git", "init", "-q"], cwd=self.source, check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "SQLLens Release Test"],
+            cwd=self.source,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "release-test@sqllens.invalid"],
+            cwd=self.source,
+            check=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=self.source, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "fixture"],
+            cwd=self.source,
+            env=git_env,
+            check=True,
+        )
+        self.revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.source,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
 
     def _build(
-        self, output: pathlib.Path | None = None
+        self,
+        output: pathlib.Path | None = None,
+        revision: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["SOURCE_DATE_EPOCH"] = "1788192000"
@@ -60,7 +96,7 @@ class ReleaseBuilderTest(unittest.TestCase):
                 "--version",
                 "0.1.0-dev.1",
                 "--revision",
-                "7bbb8da",
+                revision or self.revision[:12],
                 "--skip-dmg",
             ],
             cwd=ROOT,
@@ -135,6 +171,11 @@ class ReleaseBuilderTest(unittest.TestCase):
                 b"osascript",
                 archive.read(f"{prefix}/MacOS/SQLLens"),
             )
+            launch_command = archive.read(
+                f"{prefix}/Resources/release/launch.command"
+            )
+            self.assertIn(b"./launch.sh url", launch_command)
+            self.assertNotIn(b"SQLLENS_PORT:-8080", launch_command)
 
     def test_source_archive_carries_honest_preview_metadata(self) -> None:
         result = self._build()
@@ -153,7 +194,8 @@ class ReleaseBuilderTest(unittest.TestCase):
             metadata = json.load(metadata_stream)
             names = {member.name for member in archive.getmembers()}
 
-        self.assertEqual(metadata["source_revision"], "7bbb8da")
+        self.assertEqual(metadata["source_revision"], self.revision)
+        self.assertRegex(metadata["source_tree_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(metadata["release_kind"], "unsigned-developer-preview")
         self.assertEqual(metadata["platform_validation"]["macos"], "unverified")
         self.assertEqual(
@@ -161,6 +203,22 @@ class ReleaseBuilderTest(unittest.TestCase):
         )
         self.assertFalse(any("node_modules" in name for name in names))
         self.assertFalse(any("/.git/" in name for name in names))
+
+        extracted = self.temp / "metadata-source"
+        with tarfile.open(cli_archive, "r:gz") as archive:
+            archive.extractall(extracted, filter="data")
+        release_root = extracted / "sqllens-0.1.0-dev.1"
+        for generated_name in (
+            "build-metadata.json",
+            "RELEASE-NOTES.txt",
+            "release-smoke.sh",
+            "launch.command",
+        ):
+            (release_root / generated_name).unlink()
+        self.assertEqual(
+            metadata["source_tree_sha256"],
+            build_release.release_tree_sha256(release_root),
+        )
 
     def test_end_user_archive_replaces_developer_make_targets_with_bounded_smoke(
         self,
@@ -255,6 +313,45 @@ class ReleaseBuilderTest(unittest.TestCase):
             (second_output / "SHA256SUMS").read_text(),
         )
 
+    def test_revision_must_match_the_clean_source_git_head(self) -> None:
+        mismatch = "0000000" if not self.revision.startswith("0000000") else "1111111"
+        result = self._build(revision=mismatch)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match source HEAD", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_dirty_release_source_cannot_claim_the_git_revision(self) -> None:
+        (self.source / "apps" / "api" / "app.py").write_text("print('changed')\n")
+
+        result = self._build()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release source has uncommitted changes", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_publish_failure_never_exposes_a_partial_output_directory(self) -> None:
+        with mock.patch.dict(
+            os.environ, {"SOURCE_DATE_EPOCH": "1788192000"}, clear=False
+        ):
+            with mock.patch.object(
+                build_release.os,
+                "replace",
+                side_effect=OSError("simulated atomic publish failure"),
+            ):
+                with self.assertRaisesRegex(
+                    OSError, "simulated atomic publish failure"
+                ):
+                    build_release.build(
+                        self.source,
+                        self.output,
+                        "0.1.0-dev.1",
+                        self.revision[:12],
+                        skip_dmg=True,
+                    )
+
+        self.assertFalse(self.output.exists())
+
     def test_missing_runtime_dockerfile_fails_closed(self) -> None:
         (self.source / "apps" / "api" / "Dockerfile").unlink()
 
@@ -292,8 +389,21 @@ class ReleaseBuilderTest(unittest.TestCase):
         outside = self.temp / "outside-secret"
         outside.write_text("do-not-package")
         (self.source / "apps" / "api" / "linked-secret").symlink_to(outside)
+        subprocess.run(
+            ["git", "add", "apps/api/linked-secret"], cwd=self.source, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-qm", "add unsafe link"], cwd=self.source, check=True
+        )
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.source,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
 
-        result = self._build()
+        result = self._build(revision=revision[:12])
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("symbolic link", result.stderr)

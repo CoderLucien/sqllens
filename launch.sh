@@ -39,6 +39,7 @@ Actions:
   uninstall     Remove application containers and retain data by default.
   recover-setup Reissue a local one-time code for an interrupted setup.
   diagnostics   Create a privacy-bounded diagnostic archive.
+  url           Print the running Web App's actual loopback URL.
 
 Options:
   --mode external|local  Select the model mode (default: external).
@@ -61,7 +62,7 @@ compose() {
 parse_args() {
   if [ "$#" -gt 0 ]; then
     case "$1" in
-      start|check|stop|uninstall|recover-setup|diagnostics)
+      start|check|stop|uninstall|recover-setup|diagnostics|url)
         ACTION=$1
         shift
         ;;
@@ -666,6 +667,14 @@ diagnostics_action() {
   printf 'Resolved Compose configuration is included. Application logs, container inspect environments, credentials, and user data were not collected.\n'
 }
 
+url_action() {
+  check_runtime
+  managed_web_running ||
+    fail "managed Web App is not running; run ./launch.sh start"
+  read_managed_port
+  printf 'http://127.0.0.1:%s\n' "$PUBLISHED_PORT"
+}
+
 parse_args "$@"
 
 case "$ACTION" in
@@ -690,5 +699,8 @@ case "$ACTION" in
     ;;
   diagnostics)
     diagnostics_action
+    ;;
+  url)
+    url_action
     ;;
 esac

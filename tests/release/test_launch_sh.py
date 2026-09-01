@@ -200,6 +200,22 @@ class PosixLauncherTest(unittest.TestCase):
         self.assertIn("port 8080 is already in use", result.stderr)
         self.assertIn("SQLLENS_PORT", result.stderr)
 
+    def test_url_reports_the_running_instances_actual_published_port(self) -> None:
+        self.running_file.touch()
+
+        result = self._run(
+            "url", extra_env={"SQLLENS_FAKE_PUBLISHED_PORT": "18001"}
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "http://127.0.0.1:18001\n")
+
+    def test_url_fails_when_the_managed_instance_is_not_running(self) -> None:
+        result = self._run("url")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Web App is not running", result.stderr)
+
     def test_successful_check_preserves_an_existing_bootstrap_secret(self) -> None:
         self._write_uname("Darwin", "arm64")
         self._write_lsof(port_is_busy=False)
