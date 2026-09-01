@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
+from sqllens_api.credentials import CredentialUnavailableError, CredentialVault
 from sqllens_api.provider import ProviderProbeRequest, ProviderProbeResult
 from sqllens_api.setup import OWNER_COOKIE_NAME, SETUP_COOKIE_NAME, SetupStore
 
@@ -422,3 +423,222 @@ def test_authenticated_rotation_recovers_an_unreadable_credential_key(
         restarted_gateway.requests[-1].api_key.get_secret_value()
         == "recovered-provider-secret"
     )
+
+
+def test_rotation_retirement_failure_is_observable_and_resumes_before_model_use(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    old_credential = SetupStore(settings).snapshot().provider_credential
+    assert old_credential is not None
+    csrf = login(client)["csrf_token"]
+    original_retire = CredentialVault.retire_version
+
+    def fail_retirement(_vault: CredentialVault, _version: str) -> None:
+        raise CredentialUnavailableError("forced unlink failure")
+
+    monkeypatch.setattr(CredentialVault, "retire_version", fail_retirement)
+    failed = client.put(
+        "/api/v1/settings/model",
+        headers={"X-CSRF-Token": str(csrf)},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "replacement-provider-secret",
+            "model": "demo-model",
+        },
+    )
+
+    assert failed.status_code == 503
+    assert failed.json()["error"]["code"] == "CREDENTIAL_RETIREMENT_PENDING"
+    pending = SetupStore(settings).snapshot()
+    assert pending.provider_credential is not None
+    assert pending.provider_credential != old_credential
+    assert pending.credential_retirement_pending_version == old_credential.key_version
+    assert CredentialVault(settings.credential_key_path).decrypt(old_credential) == (
+        "initial-provider-secret"
+    )
+
+    monkeypatch.setattr(CredentialVault, "retire_version", original_retire)
+    verified = client.post(
+        "/api/v1/settings/model/verify",
+        headers={"X-CSRF-Token": str(csrf)},
+    )
+    assert verified.status_code == 200
+    assert SetupStore(settings).snapshot().credential_retirement_pending_version is None
+    with pytest.raises(CredentialUnavailableError):
+        CredentialVault(settings.credential_key_path).decrypt(old_credential)
+
+
+def test_delete_retirement_failure_detaches_active_credential_and_is_retryable(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    old_credential = SetupStore(settings).snapshot().provider_credential
+    assert old_credential is not None
+    csrf = login(client)["csrf_token"]
+    original_retire = CredentialVault.retire_version
+
+    def fail_retirement(_vault: CredentialVault, _version: str) -> None:
+        raise CredentialUnavailableError("forced unlink failure")
+
+    monkeypatch.setattr(CredentialVault, "retire_version", fail_retirement)
+    failed = client.delete(
+        "/api/v1/settings/model",
+        headers={"X-CSRF-Token": str(csrf)},
+    )
+
+    assert failed.status_code == 503
+    pending = SetupStore(settings).snapshot()
+    assert pending.provider_credential is None
+    assert pending.model_mode == "rules"
+    assert pending.credential_retirement_pending_version == old_credential.key_version
+
+    monkeypatch.setattr(CredentialVault, "retire_version", original_retire)
+    retried = client.delete(
+        "/api/v1/settings/model",
+        headers={"X-CSRF-Token": str(csrf)},
+    )
+    assert retried.status_code == 200
+    assert SetupStore(settings).snapshot().credential_retirement_pending_version is None
+    with pytest.raises(CredentialUnavailableError):
+        CredentialVault(settings.credential_key_path).decrypt(old_credential)
+
+
+def test_rules_finalize_retirement_failure_resumes_before_owner_login(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    code = issue_bootstrap_code(settings, now=clock())
+    bootstrap = client.post("/api/v1/setup/bootstrap", json={"code": code})
+    csrf = bootstrap.json()["csrf_token"]
+    assert client.put(
+        "/api/v1/setup/security-policy",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "external_model_egress": True,
+            "allowed_provider_hosts": ["api.example.com"],
+            "send_sql_text": False,
+        },
+    ).status_code == 200
+    assert client.post(
+        "/api/v1/setup/model-probes",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "rules-retirement-secret",
+            "model": "demo-model",
+        },
+    ).status_code == 200
+    old_credential = SetupStore(settings).snapshot().provider_credential
+    assert old_credential is not None
+    original_retire = CredentialVault.retire_version
+
+    def fail_retirement(_vault: CredentialVault, _version: str) -> None:
+        raise CredentialUnavailableError("forced unlink failure")
+
+    monkeypatch.setattr(CredentialVault, "retire_version", fail_retirement)
+    failed = client.post(
+        "/api/v1/setup/finalize",
+        headers={"X-CSRF-Token": csrf},
+        json={"mode": "rules", "owner_password": OWNER_PASSWORD},
+    )
+
+    assert failed.status_code == 503
+    pending = SetupStore(settings).snapshot()
+    assert pending.initialized is True
+    assert pending.model_mode == "rules"
+    assert pending.provider_credential is None
+    assert pending.credential_retirement_pending_version == old_credential.key_version
+
+    monkeypatch.setattr(CredentialVault, "retire_version", original_retire)
+    recovered = TestClient(create_app(settings=settings, clock=clock))
+    assert login(recovered)["authenticated"] is True
+    assert SetupStore(settings).snapshot().credential_retirement_pending_version is None
+    with pytest.raises(CredentialUnavailableError):
+        CredentialVault(settings.credential_key_path).decrypt(old_credential)
+
+
+def test_failed_rotation_cas_persists_orphan_cleanup_until_unlink_recovers(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    active = SetupStore(settings).snapshot().provider_credential
+    assert active is not None
+    csrf = login(client)["csrf_token"]
+    original_replace = SetupStore.replace_provider_credential
+    original_retire = CredentialVault.retire_version
+
+    monkeypatch.setattr(SetupStore, "replace_provider_credential", lambda *_args, **_kwargs: False)
+
+    def fail_retirement(_vault: CredentialVault, _version: str) -> None:
+        raise CredentialUnavailableError("forced orphan unlink failure")
+
+    monkeypatch.setattr(CredentialVault, "retire_version", fail_retirement)
+    failed = client.put(
+        "/api/v1/settings/model",
+        headers={"X-CSRF-Token": str(csrf)},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "orphaned-provider-secret",
+            "model": "demo-model",
+        },
+    )
+
+    assert failed.status_code == 503
+    pending = SetupStore(settings).snapshot()
+    assert pending.provider_credential == active
+    assert pending.credential_retirement_operation == "orphan_rotation"
+    assert pending.credential_retirement_pending_version is not None
+    assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 2
+
+    monkeypatch.setattr(SetupStore, "replace_provider_credential", original_replace)
+    monkeypatch.setattr(CredentialVault, "retire_version", original_retire)
+    verified = client.post(
+        "/api/v1/settings/model/verify",
+        headers={"X-CSRF-Token": str(csrf)},
+    )
+    assert verified.status_code == 200
+    converged = SetupStore(settings).snapshot()
+    assert converged.provider_credential == active
+    assert converged.credential_retirement_pending_version is None
+    assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
+        settings.credential_key_path
+    ]

@@ -61,6 +61,11 @@ setup_state = Table(
     Column("provider_verified_at", Float),
     Column("provider_credential_ciphertext", Text),
     Column("provider_credential_key_version", String(80)),
+    Column("credential_retirement_pending_version", String(80)),
+    Column("credential_retirement_operation", String(40)),
+    Column("bootstrap_reissue_pending_hash", String(128)),
+    Column("bootstrap_reissue_pending_salt", String(64)),
+    Column("bootstrap_reissue_pending_expires_at", Float),
     Column("model_mode", String(30)),
     Column("owner_password_hash", String(128)),
     Column("owner_password_salt", String(64)),
@@ -69,6 +74,13 @@ setup_state = Table(
     Column("owner_locked_until", Float),
     Column("finalized_at", Float),
     Column("updated_at", Float, nullable=False),
+)
+diagnosis_admission = Table(
+    "diagnosis_admission",
+    metadata,
+    Column("slot", Integer, primary_key=True),
+    Column("job_id", String(80), nullable=False, unique=True),
+    Column("created_at", String(40), nullable=False),
 )
 
 
@@ -130,6 +142,9 @@ class SetupSnapshot:
     provider_model: str | None
     provider_verified_at: float | None
     provider_credential: EncryptedCredential | None
+    credential_retirement_pending_version: str | None
+    credential_retirement_operation: str | None
+    bootstrap_reissue_pending: bool
     model_mode: str | None
     bootstrap_persisted: bool
     bootstrap_expires_at: float | None
@@ -192,6 +207,11 @@ class SetupStore:
                 "setup_epoch": "INTEGER NOT NULL DEFAULT 1",
                 "provider_credential_ciphertext": "TEXT",
                 "provider_credential_key_version": "VARCHAR(80)",
+                "credential_retirement_pending_version": "VARCHAR(80)",
+                "credential_retirement_operation": "VARCHAR(40)",
+                "bootstrap_reissue_pending_hash": "VARCHAR(128)",
+                "bootstrap_reissue_pending_salt": "VARCHAR(64)",
+                "bootstrap_reissue_pending_expires_at": "FLOAT",
                 "owner_password_hash": "VARCHAR(128)",
                 "owner_password_salt": "VARCHAR(64)",
                 "owner_session_epoch": "INTEGER NOT NULL DEFAULT 0",
@@ -246,6 +266,11 @@ class SetupStore:
             provider_model=row["provider_model"],
             provider_verified_at=row["provider_verified_at"],
             provider_credential=credential,
+            credential_retirement_pending_version=row[
+                "credential_retirement_pending_version"
+            ],
+            credential_retirement_operation=row["credential_retirement_operation"],
+            bootstrap_reissue_pending=row["bootstrap_reissue_pending_hash"] is not None,
             model_mode=row["model_mode"],
             bootstrap_persisted=row["bootstrap_hash"] is not None,
             bootstrap_expires_at=row["bootstrap_expires_at"],
@@ -309,6 +334,8 @@ class SetupStore:
                 .where(
                     setup_state.c.id == _STATE_ID,
                     setup_state.c.finalized_at.is_(None),
+                    setup_state.c.provider_credential_key_version.is_(None),
+                    setup_state.c.credential_retirement_pending_version.is_(None),
                 )
                 .values(
                     stage="bootstrap_required",
@@ -334,8 +361,156 @@ class SetupStore:
                     owner_session_epoch=setup_state.c.owner_session_epoch + 1,
                     owner_failed_attempts=0,
                     owner_locked_until=None,
+                    credential_retirement_operation=None,
+                    bootstrap_reissue_pending_hash=None,
+                    bootstrap_reissue_pending_salt=None,
+                    bootstrap_reissue_pending_expires_at=None,
                     updated_at=now_value,
                 )
+            )
+        return result.rowcount == 1
+
+    def prepare_bootstrap_reissue(self, code: str, now: datetime) -> bool:
+        """Persist a recoverable reissue intent and detach any active credential."""
+        normalized = normalize_bootstrap_code(code)
+        if len(normalized) < 12:
+            raise ValueError("bootstrap code must contain at least 12 valid characters")
+        snapshot = self.snapshot()
+        if snapshot.initialized:
+            return False
+        now_value = _timestamp(now)
+
+        if snapshot.bootstrap_reissue_pending:
+            with self.engine.connect() as connection:
+                row = (
+                    connection.execute(select(setup_state).where(setup_state.c.id == _STATE_ID))
+                    .mappings()
+                    .one()
+                )
+            pending_hash = row["bootstrap_reissue_pending_hash"]
+            pending_salt = row["bootstrap_reissue_pending_salt"]
+            if (
+                snapshot.credential_retirement_operation != "bootstrap_reissue"
+                or pending_hash is None
+                or pending_salt is None
+                or not hmac.compare_digest(
+                    _derive_code_hash(normalized, _decode_b64(pending_salt)),
+                    pending_hash,
+                )
+            ):
+                raise RuntimeError("a different credential retirement operation is pending")
+            return True
+
+        if snapshot.credential_retirement_pending_version is not None:
+            raise RuntimeError("a different credential retirement operation is pending")
+        if snapshot.provider_credential is None:
+            return self.reissue_bootstrap_code(normalized, now)
+
+        salt = secrets.token_bytes(16)
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.finalized_at.is_(None),
+                    setup_state.c.setup_epoch == snapshot.setup_epoch,
+                    setup_state.c.provider_credential_ciphertext
+                    == snapshot.provider_credential.ciphertext,
+                    setup_state.c.provider_credential_key_version
+                    == snapshot.provider_credential.key_version,
+                    setup_state.c.credential_retirement_pending_version.is_(None),
+                )
+                .values(
+                    provider_status=None,
+                    provider_base_url=None,
+                    provider_model=None,
+                    provider_verified_at=None,
+                    provider_credential_ciphertext=None,
+                    provider_credential_key_version=None,
+                    model_mode=None,
+                    credential_retirement_pending_version=(
+                        snapshot.provider_credential.key_version
+                    ),
+                    credential_retirement_operation="bootstrap_reissue",
+                    bootstrap_reissue_pending_hash=_derive_code_hash(normalized, salt),
+                    bootstrap_reissue_pending_salt=_b64(salt),
+                    bootstrap_reissue_pending_expires_at=(
+                        now_value + self.settings.bootstrap_ttl_seconds
+                    ),
+                    updated_at=now_value,
+                )
+            )
+        if result.rowcount != 1:
+            raise RuntimeError("bootstrap recovery state changed concurrently")
+        return True
+
+    def complete_credential_retirement(
+        self,
+        expected_version: str,
+        now: datetime,
+    ) -> bool:
+        """Commit phase two after the detached key has been retired."""
+        now_value = _timestamp(now)
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(select(setup_state).where(setup_state.c.id == _STATE_ID))
+                .mappings()
+                .one()
+            )
+        if row["credential_retirement_pending_version"] != expected_version:
+            return row["credential_retirement_pending_version"] is None
+
+        values: dict[str, object] = {
+            "credential_retirement_pending_version": None,
+            "credential_retirement_operation": None,
+            "updated_at": now_value,
+        }
+        if row["credential_retirement_operation"] == "bootstrap_reissue":
+            pending_hash = row["bootstrap_reissue_pending_hash"]
+            pending_salt = row["bootstrap_reissue_pending_salt"]
+            pending_expires = row["bootstrap_reissue_pending_expires_at"]
+            if pending_hash is None or pending_salt is None or pending_expires is None:
+                raise RuntimeError("bootstrap recovery state is incomplete")
+            values.update(
+                {
+                    "stage": "bootstrap_required",
+                    "bootstrap_hash": pending_hash,
+                    "bootstrap_salt": pending_salt,
+                    "bootstrap_expires_at": pending_expires,
+                    "bootstrap_consumed_at": None,
+                    "bootstrap_failed_attempts": 0,
+                    "setup_epoch": setup_state.c.setup_epoch + 1,
+                    "external_model_egress": None,
+                    "allowed_provider_hosts": None,
+                    "send_sql_text": False,
+                    "policy_committed_at": None,
+                    "provider_status": None,
+                    "provider_base_url": None,
+                    "provider_model": None,
+                    "provider_verified_at": None,
+                    "provider_credential_ciphertext": None,
+                    "provider_credential_key_version": None,
+                    "model_mode": None,
+                    "owner_password_hash": None,
+                    "owner_password_salt": None,
+                    "owner_session_epoch": setup_state.c.owner_session_epoch + 1,
+                    "owner_failed_attempts": 0,
+                    "owner_locked_until": None,
+                    "bootstrap_reissue_pending_hash": None,
+                    "bootstrap_reissue_pending_salt": None,
+                    "bootstrap_reissue_pending_expires_at": None,
+                }
+            )
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.credential_retirement_pending_version == expected_version,
+                    setup_state.c.credential_retirement_operation
+                    == row["credential_retirement_operation"],
+                )
+                .values(**values)
             )
         return result.rowcount == 1
 
@@ -395,7 +570,7 @@ class SetupStore:
                         setup_state.c.setup_epoch == row["setup_epoch"],
                         setup_state.c.bootstrap_consumed_at.is_(None),
                         setup_state.c.bootstrap_failed_attempts
-                        == row["bootstrap_failed_attempts"],
+                        < self.settings.bootstrap_max_attempts,
                     )
                     .values(
                         bootstrap_failed_attempts=setup_state.c.bootstrap_failed_attempts + 1,
@@ -413,7 +588,11 @@ class SetupStore:
         now: datetime,
     ) -> None:
         snapshot = self.snapshot()
-        if snapshot.stage != "security_policy_required" or snapshot.initialized:
+        if (
+            snapshot.stage != "security_policy_required"
+            or snapshot.initialized
+            or snapshot.credential_retirement_pending_version is not None
+        ):
             raise RuntimeError("security policy is not valid in the current setup stage")
         now_value = _timestamp(now)
         with self.engine.begin() as connection:
@@ -424,6 +603,7 @@ class SetupStore:
                     setup_state.c.stage == "security_policy_required",
                     setup_state.c.setup_epoch == snapshot.setup_epoch,
                     setup_state.c.finalized_at.is_(None),
+                    setup_state.c.credential_retirement_pending_version.is_(None),
                 )
                 .values(
                     stage="model_required",
@@ -451,7 +631,11 @@ class SetupStore:
         if result.status != "verified":
             return
         snapshot = self.snapshot()
-        if snapshot.stage != "model_required" or snapshot.initialized:
+        if (
+            snapshot.stage != "model_required"
+            or snapshot.initialized
+            or snapshot.credential_retirement_pending_version is not None
+        ):
             raise RuntimeError("provider probe is not valid in the current setup stage")
         with self.engine.begin() as connection:
             write_result = connection.execute(
@@ -462,6 +646,7 @@ class SetupStore:
                     setup_state.c.setup_epoch == snapshot.setup_epoch,
                     setup_state.c.finalized_at.is_(None),
                     setup_state.c.policy_committed_at == snapshot.policy_committed_at,
+                    setup_state.c.credential_retirement_pending_version.is_(None),
                 )
                 .values(
                     provider_status=result.status,
@@ -483,7 +668,11 @@ class SetupStore:
         now: datetime,
     ) -> tuple[int, int]:
         snapshot = self.snapshot()
-        if snapshot.stage != "model_required" or snapshot.initialized:
+        if (
+            snapshot.stage != "model_required"
+            or snapshot.initialized
+            or snapshot.credential_retirement_pending_version is not None
+        ):
             raise RuntimeError("finalize is not valid in the current setup stage")
         if snapshot.policy_committed_at is None:
             raise RuntimeError("security policy is required")
@@ -504,6 +693,7 @@ class SetupStore:
                     setup_state.c.finalized_at.is_(None),
                     setup_state.c.policy_committed_at == snapshot.policy_committed_at,
                     setup_state.c.provider_status == snapshot.provider_status,
+                    setup_state.c.credential_retirement_pending_version.is_(None),
                 )
                 .values(
                     stage="ready",
@@ -524,6 +714,16 @@ class SetupStore:
                     provider_credential_key_version=(
                         snapshot.provider_credential.key_version
                         if mode == "external" and snapshot.provider_credential is not None
+                        else None
+                    ),
+                    credential_retirement_pending_version=(
+                        snapshot.provider_credential.key_version
+                        if mode == "rules" and snapshot.provider_credential is not None
+                        else None
+                    ),
+                    credential_retirement_operation=(
+                        "rules_finalize"
+                        if mode == "rules" and snapshot.provider_credential is not None
                         else None
                     ),
                     owner_password_hash=owner_hash,
@@ -642,6 +842,8 @@ class SetupStore:
                     setup_state.c.setup_epoch == expected_setup_epoch,
                     setup_state.c.finalized_at.is_not(None),
                     setup_state.c.external_model_egress.is_(True),
+                    setup_state.c.credential_retirement_pending_version.is_(None),
+                    ~select(diagnosis_admission.c.slot).exists(),
                     (
                         setup_state.c.provider_credential_ciphertext.is_(None)
                         if expected_credential is None
@@ -662,6 +864,14 @@ class SetupStore:
                     provider_verified_at=_timestamp(now),
                     provider_credential_ciphertext=credential.ciphertext,
                     provider_credential_key_version=credential.key_version,
+                    credential_retirement_pending_version=(
+                        expected_credential.key_version
+                        if expected_credential is not None
+                        else None
+                    ),
+                    credential_retirement_operation=(
+                        "rotation" if expected_credential is not None else None
+                    ),
                     model_mode="external",
                     updated_at=_timestamp(now),
                 )
@@ -682,6 +892,8 @@ class SetupStore:
                     setup_state.c.id == _STATE_ID,
                     setup_state.c.setup_epoch == expected_setup_epoch,
                     setup_state.c.finalized_at.is_not(None),
+                    setup_state.c.credential_retirement_pending_version.is_(None),
+                    ~select(diagnosis_admission.c.slot).exists(),
                     (
                         setup_state.c.provider_credential_ciphertext.is_(None)
                         if expected_credential is None
@@ -702,7 +914,33 @@ class SetupStore:
                     provider_verified_at=None,
                     provider_credential_ciphertext=None,
                     provider_credential_key_version=None,
+                    credential_retirement_pending_version=(
+                        expected_credential.key_version
+                        if expected_credential is not None
+                        else None
+                    ),
+                    credential_retirement_operation=(
+                        "delete" if expected_credential is not None else None
+                    ),
                     model_mode="rules",
+                    updated_at=_timestamp(now),
+                )
+            )
+        return result.rowcount == 1
+
+    def schedule_orphan_credential_retirement(self, version: str, now: datetime) -> bool:
+        """Persist cleanup for a newly-created key that never became active."""
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.credential_retirement_pending_version.is_(None),
+                    setup_state.c.provider_credential_key_version.is_distinct_from(version),
+                )
+                .values(
+                    credential_retirement_pending_version=version,
+                    credential_retirement_operation="orphan_rotation",
                     updated_at=_timestamp(now),
                 )
             )

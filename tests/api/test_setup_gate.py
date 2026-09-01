@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import io
 import os
 import subprocess
 import sys
@@ -10,10 +12,13 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqllens_api import app as app_module
 from sqllens_api import setup as setup_state_module
 from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
+from sqllens_api.credentials import CredentialUnavailableError, CredentialVault
+from sqllens_api.main import ingest_bootstrap_stdin
 from sqllens_api.provider import ProviderProbeRequest, ProviderProbeResult
 from sqllens_api.setup import SETUP_COOKIE_NAME, SetupStore
 
@@ -87,6 +92,25 @@ def commit_external_policy(client: TestClient, csrf_token: str) -> None:
     assert response.json()["state"] == "model_required"
 
 
+def probe_external_credential(
+    client: TestClient,
+    csrf_token: str,
+    *,
+    api_key: str = "probe-secret-canary",
+) -> None:
+    response = client.post(
+        "/api/v1/setup/model-probes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": api_key,
+            "model": "demo-model",
+        },
+    )
+    assert response.status_code == 200
+
+
 def test_health_is_public_but_diagnosis_api_fails_closed_before_setup(
     settings: Settings,
     clock: MutableClock,
@@ -104,6 +128,104 @@ def test_health_is_public_but_diagnosis_api_fails_closed_before_setup(
     assert response.json()["error"]["version"] == "1"
     assert response.json()["error"]["code"] == "SETUP_REQUIRED"
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_global_api_body_budget_rejects_oversized_login_and_setup_before_validation(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(create_app(settings=settings, clock=clock))
+    oversized = b"x" * 140_000
+
+    login = client.post(
+        "/api/v1/auth/login",
+        content=oversized,
+        headers={"Content-Type": "application/json"},
+    )
+    setup = client.post(
+        "/api/v1/setup/bootstrap",
+        content=oversized,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert login.status_code == 413
+    assert setup.status_code == 413
+    assert login.json()["error"]["code"] == "REQUEST_BODY_TOO_LARGE"
+    assert setup.json()["error"]["code"] == "REQUEST_BODY_TOO_LARGE"
+    assert SetupStore(settings).snapshot().bootstrap_persisted is False
+
+
+def test_global_api_body_budget_rejects_unbounded_empty_chunks(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module, "_REQUEST_BODY_MESSAGE_LIMIT", 3)
+    app = create_app(settings=settings, clock=clock)
+    sent: list[dict[str, object]] = []
+    chunks = iter(
+        [
+            {"type": "http.request", "body": b"", "more_body": True},
+            {"type": "http.request", "body": b"", "more_body": True},
+            {"type": "http.request", "body": b"", "more_body": True},
+        ]
+    )
+
+    async def receive() -> dict[str, object]:
+        return next(chunks)
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    asyncio.run(
+        app(
+            _api_scope("/api/v1/auth/login"),
+            receive,
+            send,
+        )
+    )
+
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    assert start["status"] == 413
+
+
+def test_global_api_body_budget_rejects_slow_chunk_streams(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module, "_REQUEST_BODY_READ_TIMEOUT_SECONDS", 0.01)
+    app = create_app(settings=settings, clock=clock)
+    sent: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        await asyncio.sleep(0.05)
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    asyncio.run(app(_api_scope("/api/v1/setup/bootstrap"), receive, send))
+
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    assert start["status"] == 413
+
+
+def _api_scope(path: str) -> dict[str, object]:
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 8080),
+        "state": {},
+    }
 
 
 def test_status_reports_local_model_as_unavailable_without_claiming_gpu_detection(
@@ -245,6 +367,45 @@ def test_expired_bootstrap_code_fails_with_a_generic_error(
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "BOOTSTRAP_INVALID"
     assert "expired" not in response.text.lower()
+
+
+def test_concurrent_invalid_bootstrap_codes_atomically_reach_attempt_limit(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SetupStore(settings)
+    valid_code = store.issue_bootstrap_code(clock(), code="ABCD-EFGH-JKLM-NPQR")
+    invalid_code = "WRONG-CODE-2345"
+    request_count = settings.bootstrap_max_attempts * 2
+    hashing_barrier = threading.Barrier(request_count)
+    original_derive = setup_state_module._derive_code_hash
+
+    def synchronized_derive(code: str, salt: bytes) -> str:
+        if setup_state_module.normalize_bootstrap_code(code) == (
+            setup_state_module.normalize_bootstrap_code(invalid_code)
+        ):
+            hashing_barrier.wait(timeout=5)
+        return original_derive(code, salt)
+
+    monkeypatch.setattr(setup_state_module, "_derive_code_hash", synchronized_derive)
+    results: list[int | None] = []
+    requests = [
+        threading.Thread(
+            target=lambda: results.append(store.consume_bootstrap_code(invalid_code, clock()))
+        )
+        for _ in range(request_count)
+    ]
+
+    for request in requests:
+        request.start()
+    for request in requests:
+        request.join(timeout=10)
+
+    assert all(not request.is_alive() for request in requests)
+    assert results == [None] * request_count
+    assert store.snapshot().bootstrap_failed_attempts == settings.bootstrap_max_attempts
+    assert store.consume_bootstrap_code(valid_code, clock()) is None
 
 
 def run_bootstrap_command(
@@ -406,6 +567,163 @@ def test_reissue_fails_closed_after_setup_is_finalized(
     assert TestClient(create_app(settings=settings, clock=clock)).get(
         "/api/v1/setup/status"
     ).json()["state"] == "ready"
+
+
+def test_external_setup_reissue_retires_old_key_and_creates_a_new_version(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    gateway = FakeProviderGateway()
+    client = TestClient(create_app(settings=settings, clock=clock, provider_gateway=gateway))
+    _, csrf = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf)
+    probe_external_credential(client, csrf, api_key="old-provider-secret")
+    old_credential = SetupStore(settings).snapshot().provider_credential
+    assert old_credential is not None
+    vault = CredentialVault(settings.credential_key_path)
+    assert vault.decrypt(old_credential) == "old-provider-secret"
+
+    replacement = "WXYZ-2345-6789-ABCD"
+    assert ingest_bootstrap_stdin(
+        settings,
+        io.BytesIO(f"{replacement}\n".encode()),
+        now=clock(),
+        replace_existing=True,
+    ) is True
+
+    recovered = SetupStore(settings).snapshot()
+    assert recovered.stage == "bootstrap_required"
+    assert recovered.provider_credential is None
+    assert recovered.credential_retirement_pending_version is None
+    assert list(settings.credential_key_path.parent.glob("credential*.key")) == []
+    with pytest.raises(CredentialUnavailableError):
+        vault.decrypt(old_credential)
+
+    restarted = TestClient(
+        create_app(settings=settings, clock=clock, provider_gateway=FakeProviderGateway())
+    )
+    bootstrap = restarted.post("/api/v1/setup/bootstrap", json={"code": replacement})
+    assert bootstrap.status_code == 200
+    new_csrf = bootstrap.json()["csrf_token"]
+    commit_external_policy(restarted, new_csrf)
+    probe_external_credential(restarted, new_csrf, api_key="new-provider-secret")
+    new_credential = SetupStore(settings).snapshot().provider_credential
+    assert new_credential is not None
+    assert new_credential.key_version != old_credential.key_version
+    finalized = restarted.post(
+        "/api/v1/setup/finalize",
+        headers={"X-CSRF-Token": new_csrf},
+        json={"mode": "external", "owner_password": "owner-password-123"},
+    )
+    assert finalized.status_code == 200
+    assert CredentialVault(settings.credential_key_path).decrypt(new_credential) == (
+        "new-provider-secret"
+    )
+
+
+def test_reissue_retirement_failure_is_observable_and_retryable(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=FakeProviderGateway(),
+        )
+    )
+    _, csrf = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf)
+    probe_external_credential(client, csrf, api_key="retirement-failure-secret")
+    old_credential = SetupStore(settings).snapshot().provider_credential
+    assert old_credential is not None
+    replacement = "WXYZ-2345-6789-ABCD"
+    original_retire = CredentialVault.retire_version
+
+    def fail_retirement(_vault: CredentialVault, _version: str) -> None:
+        raise CredentialUnavailableError("forced unlink failure")
+
+    monkeypatch.setattr(CredentialVault, "retire_version", fail_retirement)
+    with pytest.raises(CredentialUnavailableError):
+        ingest_bootstrap_stdin(
+            settings,
+            io.BytesIO(f"{replacement}\n".encode()),
+            now=clock(),
+            replace_existing=True,
+        )
+
+    pending = SetupStore(settings).snapshot()
+    assert pending.provider_credential is None
+    assert pending.credential_retirement_pending_version == old_credential.key_version
+    assert CredentialVault(settings.credential_key_path).decrypt(old_credential) == (
+        "retirement-failure-secret"
+    )
+
+    monkeypatch.setattr(CredentialVault, "retire_version", original_retire)
+    assert ingest_bootstrap_stdin(
+        settings,
+        io.BytesIO(f"{replacement}\n".encode()),
+        now=clock(),
+        replace_existing=True,
+    ) is True
+    assert SetupStore(settings).snapshot().credential_retirement_pending_version is None
+    with pytest.raises(CredentialUnavailableError):
+        CredentialVault(settings.credential_key_path).decrypt(old_credential)
+
+
+def test_reissue_resumes_after_key_deletion_but_before_phase_two_commit(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=FakeProviderGateway(),
+        )
+    )
+    _, csrf = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf)
+    probe_external_credential(client, csrf, api_key="phase-two-secret")
+    old_credential = SetupStore(settings).snapshot().provider_credential
+    assert old_credential is not None
+    replacement = "WXYZ-2345-6789-ABCD"
+    original_complete = SetupStore.complete_credential_retirement
+
+    def fail_phase_two(
+        _store: SetupStore,
+        _expected_version: str,
+        _now: datetime,
+    ) -> bool:
+        return False
+
+    monkeypatch.setattr(SetupStore, "complete_credential_retirement", fail_phase_two)
+    with pytest.raises(RuntimeError, match="retirement"):
+        ingest_bootstrap_stdin(
+            settings,
+            io.BytesIO(f"{replacement}\n".encode()),
+            now=clock(),
+            replace_existing=True,
+        )
+
+    interrupted = SetupStore(settings).snapshot()
+    assert interrupted.provider_credential is None
+    assert interrupted.credential_retirement_pending_version == old_credential.key_version
+    with pytest.raises(CredentialUnavailableError):
+        CredentialVault(settings.credential_key_path).decrypt(old_credential)
+
+    monkeypatch.setattr(SetupStore, "complete_credential_retirement", original_complete)
+    assert ingest_bootstrap_stdin(
+        settings,
+        io.BytesIO(f"{replacement}\n".encode()),
+        now=clock(),
+        replace_existing=True,
+    ) is True
+    converged = SetupStore(settings).snapshot()
+    assert converged.stage == "bootstrap_required"
+    assert converged.credential_retirement_pending_version is None
 
 
 def test_setup_mutations_require_session_and_csrf(

@@ -75,17 +75,57 @@ class CredentialVault:
     def discard_rotation(self, encrypted: EncryptedCredential) -> None:
         match = _VERSIONED_KEY_PATTERN.fullmatch(encrypted.key_version)
         if match is None:
-            return
-        self._discard_path(self._versioned_path(match.group("identifier")))
+            raise CredentialUnavailableError("rotated credential key version is unsupported")
+        self.retire_version(encrypted.key_version)
 
     def retire(self, encrypted: EncryptedCredential | None) -> None:
         if encrypted is None:
             return
+        self.retire_version(encrypted.key_version)
+
+    def retire_version(self, version: str) -> None:
+        """Strictly and idempotently remove one detached credential key version."""
+        path, _expected_version = self._path_for_version(version)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
-            path, _version = self._path_for_version(encrypted.key_version)
-        except CredentialUnavailableError:
+            directory_fd = os.open(path.parent, flags)
+        except FileNotFoundError:
             return
-        self._discard_path(path)
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be opened safely"
+            ) from error
+        try:
+            directory = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.geteuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700
+            ):
+                raise CredentialUnavailableError("credential directory permissions are invalid")
+            try:
+                metadata = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            except OSError as error:
+                raise CredentialUnavailableError(
+                    "credential key cannot be inspected safely"
+                ) from error
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+            ):
+                raise CredentialUnavailableError("credential key is unsafe to retire")
+            try:
+                os.unlink(path.name, dir_fd=directory_fd)
+                os.fsync(directory_fd)
+            except OSError as error:
+                raise CredentialUnavailableError(
+                    "credential key cannot be retired safely"
+                ) from error
+        finally:
+            os.close(directory_fd)
 
     def decrypt(self, encrypted: EncryptedCredential) -> str:
         key_path, expected_version = self._path_for_version(encrypted.key_version)

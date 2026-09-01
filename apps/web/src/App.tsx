@@ -202,7 +202,11 @@ export function App() {
   function finalize(mode: "external" | "rules") {
     void runAction(async () => {
       if (ownerPassword !== ownerPasswordConfirm) {
-        throw new ApiClientError("PASSWORD_MISMATCH", "两次输入的 Owner 密码不一致。");
+        throw new ApiClientError(
+          "PASSWORD_MISMATCH",
+          "两次输入的 Owner 密码不一致。",
+          422
+        );
       }
       const result = await apiRequest<{
         state: SetupStage;

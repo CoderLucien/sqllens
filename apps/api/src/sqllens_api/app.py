@@ -1,3 +1,4 @@
+import asyncio
 import ipaddress
 import re
 import uuid
@@ -12,12 +13,16 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from sqllens_api.config import Settings
 from sqllens_api.credentials import CredentialUnavailableError, CredentialVault
 from sqllens_api.diagnosis import (
+    MAX_SQL_BYTES,
+    DiagnosisCapacityError,
     DiagnosisStore,
     IdempotencyConflictError,
+    ProviderConfiguration,
     SqlDiagnosisError,
     apply_model_ranking,
     build_case,
@@ -47,6 +52,124 @@ from sqllens_api.setup import (
 
 Clock = Callable[[], datetime]
 _HOST_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
+_SQL_REQUEST_BODY_BYTES = MAX_SQL_BYTES + 1_024
+_API_REQUEST_BODY_BYTES = 131_072
+_REQUEST_BODY_MESSAGE_LIMIT = 128
+_REQUEST_BODY_READ_TIMEOUT_SECONDS = 2.0
+
+
+class ApiRequestBodyLimitMiddleware:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        api_body_bytes: int,
+        sql_body_bytes: int,
+        message_limit: int,
+        read_timeout_seconds: float,
+    ) -> None:
+        self.app = app
+        self.api_body_bytes = api_body_bytes
+        self.sql_body_bytes = sql_body_bytes
+        self.message_limit = message_limit
+        self.read_timeout_seconds = read_timeout_seconds
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = str(scope.get("path", ""))
+        method = str(scope.get("method", ""))
+        if scope["type"] != "http" or not path.startswith("/api/") or method not in {
+            "POST",
+            "PUT",
+            "PATCH",
+        }:
+            await self.app(scope, receive, send)
+            return
+
+        is_sql_request = path == "/api/v1/cases/sql"
+        max_body_bytes = self.sql_body_bytes if is_sql_request else self.api_body_bytes
+
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        declared_length = headers.get(b"content-length")
+        if declared_length is not None:
+            try:
+                too_large = int(declared_length) > max_body_bytes
+            except ValueError:
+                too_large = True
+            if too_large:
+                await self._reject(scope, receive, send, sql=is_sql_request)
+                return
+
+        buffered = bytearray()
+        disconnected = False
+        try:
+            async with asyncio.timeout(self.read_timeout_seconds):
+                for _message_number in range(self.message_limit):
+                    message = await receive()
+                    if message["type"] == "http.disconnect":
+                        disconnected = True
+                        break
+                    if message["type"] != "http.request":
+                        continue
+                    buffered.extend(message.get("body", b""))
+                    if len(buffered) > max_body_bytes:
+                        await self._reject(scope, receive, send, sql=is_sql_request)
+                        return
+                    if not message.get("more_body", False):
+                        break
+                else:
+                    await self._reject(scope, receive, send, sql=is_sql_request)
+                    return
+        except TimeoutError:
+            await self._reject(scope, receive, send, sql=is_sql_request)
+            return
+
+        replayed = False
+
+        async def replay_receive() -> Message:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                if disconnected:
+                    return {"type": "http.disconnect"}
+                return {"type": "http.request", "body": bytes(buffered), "more_body": False}
+            return {"type": "http.disconnect"}
+
+        await self.app(scope, replay_receive, send)
+
+    @staticmethod
+    async def _reject(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        sql: bool,
+    ) -> None:
+        supplied_request_id = next(
+            (
+                value.decode("ascii", errors="ignore")
+                for key, value in scope.get("headers", [])
+                if key.lower() == b"x-request-id"
+            ),
+            "",
+        )
+        request_id = (
+            supplied_request_id
+            if 1 <= len(supplied_request_id) <= 100 and supplied_request_id.isascii()
+            else uuid.uuid4().hex
+        )
+        response = JSONResponse(
+            status_code=413,
+            content={
+                "error": {
+                    "version": "1",
+                    "code": "SQL_INPUT_TOO_LARGE" if sql else "REQUEST_BODY_TOO_LARGE",
+                    "message": "The request exceeds the accepted size or time budget.",
+                    "request_id": request_id,
+                }
+            },
+            headers={"Cache-Control": "no-store", "X-Request-ID": request_id},
+        )
+        await _secure_response(response)(scope, receive, send)
 
 
 class BootstrapInput(BaseModel):
@@ -108,7 +231,7 @@ class LoginInput(BaseModel):
 
 class SqlCaseInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    sql: str
+    sql: str = Field(max_length=MAX_SQL_BYTES)
 
 
 def _utc_now() -> datetime:
@@ -149,6 +272,7 @@ def create_app(
     )
     vault = CredentialVault(runtime_settings.credential_key_path)
     diagnosis_store = DiagnosisStore(store.engine)
+    diagnosis_store.recover_interrupted_jobs()
 
     app = FastAPI(
         title="SQLLens P0 API",
@@ -159,6 +283,30 @@ def create_app(
     )
     app.state.settings = runtime_settings
     app.state.setup_store = store
+    app.state.diagnosis_store = diagnosis_store
+
+    def resume_credential_retirement() -> None:
+        snapshot = store.snapshot()
+        pending_version = snapshot.credential_retirement_pending_version
+        if pending_version is None:
+            return
+        try:
+            vault.retire_version(pending_version)
+        except CredentialUnavailableError as error:
+            raise ApiError(
+                503,
+                "CREDENTIAL_RETIREMENT_PENDING",
+                "Credential cleanup is pending and must be retried.",
+            ) from error
+        if (
+            not store.complete_credential_retirement(pending_version, clock())
+            and store.snapshot().credential_retirement_pending_version is not None
+        ):
+            raise ApiError(
+                503,
+                "CREDENTIAL_RETIREMENT_PENDING",
+                "Credential cleanup is pending and must be retried.",
+            )
 
     def current_owner_token(request: Request) -> str | None:
         snapshot = store.snapshot()
@@ -190,7 +338,24 @@ def create_app(
         }
         is_logout_api = request.url.path == "/api/v1/auth/logout"
         response: Response
+        retirement_error: ApiError | None = None
         if (
+            request.url.path.startswith("/api/v1/")
+            and request.url.path != "/api/v1/setup/status"
+            and store.snapshot().credential_retirement_pending_version is not None
+        ):
+            try:
+                resume_credential_retirement()
+            except ApiError as error:
+                retirement_error = error
+        if retirement_error is not None:
+            response = error_response(
+                request,
+                status_code=retirement_error.status_code,
+                code=retirement_error.code,
+                message=retirement_error.message,
+            )
+        elif (
             request.url.path.startswith("/api/v1/")
             and not is_setup_api
             and not is_public_auth_api
@@ -231,8 +396,19 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(
-        request: Request, _error: RequestValidationError
+        request: Request, error: RequestValidationError
     ) -> JSONResponse:
+        if any(
+            item.get("type") == "string_too_long"
+            and tuple(item.get("loc", ())) == ("body", "sql")
+            for item in error.errors()
+        ):
+            return error_response(
+                request,
+                status_code=413,
+                code="SQL_INPUT_TOO_LARGE",
+                message="The SQL request exceeds the accepted size limit.",
+            )
         return error_response(
             request,
             status_code=422,
@@ -292,7 +468,10 @@ def create_app(
 
     def provider_credential_available() -> bool:
         snapshot = store.snapshot()
-        if snapshot.provider_credential is None:
+        if (
+            snapshot.provider_credential is None
+            or snapshot.credential_retirement_pending_version is not None
+        ):
             return False
         try:
             vault.decrypt(snapshot.provider_credential)
@@ -306,6 +485,7 @@ def create_app(
             snapshot.provider_credential is None
             or snapshot.provider_base_url is None
             or snapshot.provider_model is None
+            or snapshot.credential_retirement_pending_version is not None
         ):
             raise ApiError(
                 503,
@@ -325,6 +505,24 @@ def create_app(
             base_url=snapshot.provider_base_url,
             api_key=SecretStr(api_key),
             model=snapshot.provider_model,
+        )
+
+    def admitted_provider_request(
+        configuration: ProviderConfiguration,
+    ) -> ProviderProbeRequest:
+        if (
+            configuration.mode != "external"
+            or configuration.credential is None
+            or configuration.base_url is None
+            or configuration.model is None
+        ):
+            raise CredentialUnavailableError("admitted provider configuration is incomplete")
+        api_key = vault.decrypt(configuration.credential)
+        return ProviderProbeRequest(
+            mode="external",
+            base_url=configuration.base_url,
+            api_key=SecretStr(api_key),
+            model=configuration.model,
         )
 
     @app.get("/healthz")
@@ -352,6 +550,8 @@ def create_app(
                 recovery_reason = "attempt_limit_reached"
         elif not snapshot.initialized and session_token is None:
             recovery_reason = "setup_session_missing"
+        if snapshot.credential_retirement_pending_version is not None:
+            recovery_reason = "credential_retirement_pending"
         credential_available = provider_credential_available()
         reported_state = (
             "model_recovery_required"
@@ -527,7 +727,7 @@ def create_app(
                 "Setup prerequisites have not been verified.",
             ) from error
         if payload.mode == "rules":
-            vault.retire(snapshot.provider_credential)
+            resume_credential_retirement()
         owner_cookie, owner_csrf = signer.issue_owner(
             clock(),
             setup_epoch=setup_epoch,
@@ -626,6 +826,12 @@ def create_app(
         payload: ProviderProbeRequest,
         _owner: Annotated[str, Depends(require_owner_session)],
     ) -> Response:
+        if diagnosis_store.has_active_lease():
+            raise ApiError(
+                409,
+                "MODEL_CONFIGURATION_IN_USE",
+                "Model settings cannot change while a diagnosis job is running.",
+            )
         snapshot = store.snapshot()
         if payload.mode != "external":
             raise ApiError(422, "VALIDATION_ERROR", "Only external provider rotation is supported.")
@@ -660,113 +866,80 @@ def create_app(
             expected_setup_epoch=snapshot.setup_epoch,
             now=clock(),
         ):
-            vault.discard_rotation(encrypted)
-            raise ApiError(409, "SETTINGS_STATE_CHANGED", "Model settings changed concurrently.")
-        vault.retire(snapshot.provider_credential)
+            configuration_in_use = diagnosis_store.has_active_lease()
+            if not store.schedule_orphan_credential_retirement(
+                encrypted.key_version,
+                clock(),
+            ):
+                try:
+                    vault.discard_rotation(encrypted)
+                except CredentialUnavailableError as error:
+                    raise ApiError(
+                        503,
+                        "CREDENTIAL_RETIREMENT_PENDING",
+                        "Credential cleanup is pending and must be retried.",
+                    ) from error
+            else:
+                resume_credential_retirement()
+            raise ApiError(
+                409,
+                (
+                    "MODEL_CONFIGURATION_IN_USE"
+                    if configuration_in_use
+                    else "SETTINGS_STATE_CHANGED"
+                ),
+                (
+                    "Model settings cannot change while a diagnosis job is running."
+                    if configuration_in_use
+                    else "Model settings changed concurrently."
+                ),
+            )
+        resume_credential_retirement()
         return JSONResponse(content={"model_mode": "external", "credential_available": True})
 
     @app.delete("/api/v1/settings/model")
     async def delete_model_credential(
         _owner: Annotated[str, Depends(require_owner_session)],
     ) -> dict[str, object]:
+        if diagnosis_store.has_active_lease():
+            raise ApiError(
+                409,
+                "MODEL_CONFIGURATION_IN_USE",
+                "Model settings cannot change while a diagnosis job is running.",
+            )
         snapshot = store.snapshot()
         if not store.delete_provider_credential(
             expected_credential=snapshot.provider_credential,
             expected_setup_epoch=snapshot.setup_epoch,
             now=clock(),
         ):
+            if diagnosis_store.has_active_lease():
+                raise ApiError(
+                    409,
+                    "MODEL_CONFIGURATION_IN_USE",
+                    "Model settings cannot change while a diagnosis job is running.",
+                )
             raise ApiError(409, "SETTINGS_STATE_CHANGED", "Model settings changed concurrently.")
-        vault.retire(snapshot.provider_credential)
+        resume_credential_retirement()
         return {"model_mode": "rules", "credential_available": False}
 
     @app.post("/api/v1/cases/sql")
     async def create_sql_case(
+        request: Request,
         payload: SqlCaseInput,
         _owner: Annotated[str, Depends(require_owner_session)],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> Response:
         try:
             safe_idempotency_key = validate_idempotency_key(idempotency_key)
-            structure = parse_sql_structure(payload.sql)
         except SqlDiagnosisError as error:
             raise ApiError(error.status_code, error.code, error.message) from error
 
         fingerprint = request_fingerprint(payload.sql)
         try:
-            existing_job = diagnosis_store.resolve_idempotency(
-                safe_idempotency_key,
-                fingerprint,
-            )
-        except IdempotencyConflictError:
-            raise ApiError(
-                409,
-                "IDEMPOTENCY_KEY_CONFLICT",
-                "The Idempotency-Key was already used for another request.",
-            ) from None
-        if existing_job is not None:
-            return JSONResponse(status_code=202, content=existing_job)
-
-        snapshot = store.snapshot()
-        external_mode = snapshot.model_mode == "external"
-        provider = "openai-compatible" if external_mode else None
-        model = snapshot.provider_model if external_mode else None
-        case_payload = build_case(
-            sql=payload.sql,
-            structure=structure,
-            now=clock(),
-            provider=provider,
-            model=model,
-            prompt=MODEL_PROMPT_REVISION if external_mode else None,
-        )
-        explanation: dict[str, str | None] = {
-            "status": "not_requested",
-            "code": None,
-            "policy": "rules-only/v1",
-            "payloadSchema": None,
-            "payloadDigest": None,
-        }
-        if external_mode:
-            ranking_payload = build_model_ranking_payload(case_payload)
-            explanation = {
-                "status": "degraded",
-                "code": "MODEL_CREDENTIAL_UNAVAILABLE",
-                "policy": MODEL_EGRESS_POLICY,
-                "payloadSchema": MODEL_RANKING_REQUEST_SCHEMA,
-                "payloadDigest": ranking_payload.digest(),
-            }
-            try:
-                provider_request = stored_provider_request()
-            except ApiError as error:
-                explanation["code"] = error.code
-            else:
-                if (
-                    snapshot.external_model_egress is not True
-                    or provider_request.provider_host not in snapshot.allowed_provider_hosts
-                ):
-                    explanation["code"] = "MODEL_EGRESS_POLICY_DENIED"
-                else:
-                    model_result = await model_gateway.explain(
-                        ModelExplanationRequest(
-                            provider=provider_request,
-                            payload=ranking_payload,
-                        )
-                    )
-                    if model_result.status == "applied" and apply_model_ranking(
-                        case_payload,
-                        model_result.ranked_hypothesis_ids,
-                    ):
-                        explanation["status"] = "applied"
-                        explanation["code"] = None
-                    else:
-                        explanation["code"] = (
-                            model_result.code or "MODEL_OUTPUT_INVALID"
-                        )
-        try:
-            job = diagnosis_store.create_or_get(
+            reservation = diagnosis_store.reserve_job(
                 idempotency_key=safe_idempotency_key,
                 fingerprint=fingerprint,
-                case_payload=case_payload,
-                explanation=explanation,
                 now=clock(),
             )
         except IdempotencyConflictError:
@@ -775,6 +948,102 @@ def create_app(
                 "IDEMPOTENCY_KEY_CONFLICT",
                 "The Idempotency-Key was already used for another request.",
             ) from None
+        except DiagnosisCapacityError:
+            response = error_response(
+                request,
+                status_code=429,
+                code="DIAGNOSIS_CAPACITY_EXCEEDED",
+                message="Diagnosis capacity is busy. Retry after the active job finishes.",
+            )
+            response.headers["Retry-After"] = "1"
+            return response
+        if not reservation.owner:
+            return JSONResponse(status_code=202, content=reservation.job)
+
+        try:
+            configuration = reservation.provider_configuration
+            if configuration is None:
+                raise RuntimeError("admitted provider configuration is unavailable")
+            try:
+                structure = parse_sql_structure(payload.sql)
+            except SqlDiagnosisError as error:
+                diagnosis_store.fail_job(
+                    reservation,
+                    code=error.code,
+                    retryable=False,
+                )
+                raise ApiError(error.status_code, error.code, error.message) from error
+
+            external_mode = configuration.mode == "external"
+            case_payload = build_case(
+                sql=payload.sql,
+                structure=structure,
+                now=clock(),
+                provider=configuration.revision if external_mode else None,
+                model=configuration.model if external_mode else None,
+                prompt=MODEL_PROMPT_REVISION if external_mode else None,
+                case_id=str(reservation.job["caseId"]),
+            )
+            explanation: dict[str, str | None] = {
+                "status": "not_requested",
+                "code": None,
+                "policy": "rules-only/v1",
+                "payloadSchema": None,
+                "payloadDigest": None,
+            }
+            if external_mode:
+                ranking_payload = build_model_ranking_payload(case_payload)
+                explanation = {
+                    "status": "degraded",
+                    "code": "MODEL_CREDENTIAL_UNAVAILABLE",
+                    "policy": MODEL_EGRESS_POLICY,
+                    "payloadSchema": MODEL_RANKING_REQUEST_SCHEMA,
+                    "payloadDigest": ranking_payload.digest(),
+                }
+                try:
+                    provider_request = admitted_provider_request(configuration)
+                except CredentialUnavailableError:
+                    explanation["code"] = "MODEL_CREDENTIAL_UNAVAILABLE"
+                else:
+                    if (
+                        configuration.external_model_egress is not True
+                        or provider_request.provider_host
+                        not in configuration.allowed_provider_hosts
+                    ):
+                        explanation["code"] = "MODEL_EGRESS_POLICY_DENIED"
+                    else:
+                        model_result = await model_gateway.explain(
+                            ModelExplanationRequest(
+                                provider=provider_request,
+                                payload=ranking_payload,
+                            )
+                        )
+                        if model_result.status == "applied" and apply_model_ranking(
+                            case_payload,
+                            model_result.ranked_hypothesis_ids,
+                        ):
+                            explanation["status"] = "applied"
+                            explanation["code"] = None
+                        else:
+                            explanation["code"] = (
+                                model_result.code or "MODEL_OUTPUT_INVALID"
+                            )
+            job = diagnosis_store.complete_job(
+                reservation,
+                case_payload=case_payload,
+                explanation=explanation,
+                now=clock(),
+            )
+        except asyncio.CancelledError:
+            diagnosis_store.cancel_job(reservation)
+            raise
+        except ApiError:
+            raise
+        except Exception:
+            job = diagnosis_store.fail_job(
+                reservation,
+                code="DIAGNOSIS_PROCESSING_FAILED",
+            )
         return JSONResponse(status_code=202, content=job)
 
     @app.get("/api/v1/jobs/{job_id}")
@@ -806,4 +1075,11 @@ def create_app(
         async def root() -> dict[str, str]:
             return {"service": "sqllens", "status": "web-build-missing"}
 
+    app.add_middleware(
+        ApiRequestBodyLimitMiddleware,
+        api_body_bytes=_API_REQUEST_BODY_BYTES,
+        sql_body_bytes=_SQL_REQUEST_BODY_BYTES,
+        message_limit=_REQUEST_BODY_MESSAGE_LIMIT,
+        read_timeout_seconds=_REQUEST_BODY_READ_TIMEOUT_SECONDS,
+    )
     return app

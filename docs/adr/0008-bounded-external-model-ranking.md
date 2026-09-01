@@ -35,6 +35,15 @@ degradation code while the deterministic Diagnosis Case remains available. The
 job records the payload schema, egress policy, and SHA-256 digest of the
 redacted payload, not the payload or credential.
 
+Job admission is a persistent singleton lease by default. The idempotency key
+is reserved before SQL parsing or provider egress; replays read the same job,
+while a different key over capacity receives `429` without parsing or leaving
+the deployment. The admission transaction also snapshots the provider model,
+egress policy, allowlist, and encrypted credential reference. Actual provider
+calls and Case provenance use only that snapshot. Credential rotation or
+deletion returns `409` while the lease is active, and every completed, failed,
+cancelled, or startup-recovered job releases the lease.
+
 OpenAI documents `json_schema` as the preferred structured response format for
 models that support it and documents `strict` schema adherence as a supported
 option with a JSON Schema subset. These sources define the wire shape used by

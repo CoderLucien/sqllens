@@ -23,9 +23,14 @@ provider-credential format.
 External setup becomes ready only after a bounded provider probe succeeds, the
 ciphertext commits, and the stored credential can be decrypted. An authenticated
 Owner request with CSRF protection may rotate a missing, damaged, or valid key.
-Rotation creates a new versioned key, compares and swaps the SQLite reference,
-then retires the previous key. Deletion compares and clears the complete
-provider record before retiring its key and degrading the runtime to rules mode.
+Every operation that removes an old credential uses a persisted two-phase
+retirement state. The first transaction detaches or replaces the active
+credential and records the retired key version. The service then removes that
+key idempotently outside SQLite and a compare-and-swap transaction clears the
+pending state. Recovery, rules finalization, rotation, deletion, and orphaned
+rotation cleanup all resume this state before other product APIs proceed. This
+keeps an active database reference from ever pointing at a key already deleted
+from the filesystem and makes unlink or commit failures retryable after restart.
 
 Normal reads never create or replace key material. Symlinks, non-regular files,
 wrong ownership, unexpected modes, invalid lengths, malformed ciphertext, and
