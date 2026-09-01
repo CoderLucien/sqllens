@@ -21,7 +21,7 @@ import tarfile
 import tempfile
 import zipfile
 
-TOKEN_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$")
+REVISION_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
 VERSION_PATTERN = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$"
@@ -69,18 +69,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--version", required=True)
-    parser.add_argument("--revision", required=True)
+    parser.add_argument(
+        "--revision",
+        required=True,
+        help="Expected 7-40 character Git HEAD; metadata always records the verified full SHA",
+    )
     parser.add_argument(
         "--skip-dmg",
         action="store_true",
         help="Do not invoke hdiutil even when building on macOS",
     )
     return parser.parse_args()
-
-
-def validate_token(value: str, label: str) -> None:
-    if not TOKEN_PATTERN.fullmatch(value) or ".." in value:
-        raise BuildError(f"invalid {label}: {value!r}")
 
 
 def macos_bundle_version(version: str) -> str:
@@ -105,6 +104,54 @@ def validate_source(source: pathlib.Path) -> pathlib.Path:
                 f"release source is incomplete or unsafe: missing {relative}"
             )
     return resolved
+
+
+def git_output(source: pathlib.Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(source), *arguments],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
+        raise BuildError(f"release source is not a usable Git worktree: {detail}")
+    return result.stdout.strip()
+
+
+def verified_source_revision(source: pathlib.Path, expected: str) -> str:
+    if REVISION_PATTERN.fullmatch(expected) is None:
+        raise BuildError("revision must be a 7-40 character lowercase Git SHA")
+
+    top_level = pathlib.Path(git_output(source, "rev-parse", "--show-toplevel")).resolve()
+    if top_level != source:
+        raise BuildError("release source must be the Git worktree root")
+
+    revision = git_output(source, "rev-parse", "--verify", "HEAD^{commit}")
+    if REVISION_PATTERN.fullmatch(revision) is None or len(revision) != 40:
+        raise BuildError("source HEAD did not resolve to a full Git commit SHA")
+    if not revision.startswith(expected):
+        raise BuildError(
+            f"expected revision {expected} does not match source HEAD {revision}"
+        )
+    return revision
+
+
+def ensure_release_source_clean(source: pathlib.Path) -> None:
+    status = git_output(
+        source,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--",
+        *RELEASE_PATHS,
+    )
+    if status:
+        first_change = status.splitlines()[0]
+        raise BuildError(
+            "release source has uncommitted changes in packaged paths: "
+            f"{first_change}"
+        )
 
 
 def source_date_epoch() -> int:
@@ -176,6 +223,7 @@ def write_metadata(
     release_root: pathlib.Path,
     version: str,
     revision: str,
+    source_tree_sha256: str,
     epoch: int,
 ) -> None:
     timestamp = dt.datetime.fromtimestamp(epoch, tz=dt.UTC).replace(microsecond=0)
@@ -189,6 +237,7 @@ def write_metadata(
         "release_kind": "unsigned-developer-preview",
         "signing": {"code_signed": False, "notarized": False},
         "source_revision": revision,
+        "source_tree_sha256": source_tree_sha256,
         "version": version,
     }
     write_text(
@@ -305,7 +354,17 @@ cd "$ROOT" || exit 1
 status=0
 ./launch.sh start || status=$?
 if [ "$status" -eq 0 ]; then
-  /usr/bin/open "http://127.0.0.1:${SQLLENS_PORT:-8080}" >/dev/null 2>&1 || true
+  url=$(./launch.sh url) || status=$?
+fi
+if [ "$status" -eq 0 ]; then
+  port=${url#http://127.0.0.1:}
+  case "$port" in
+    ''|*[!0-9]*)
+      printf 'ERROR: launcher returned an invalid local URL; run ./launch.sh diagnostics\n' >&2
+      status=1
+      ;;
+    *) /usr/bin/open "$url" >/dev/null 2>&1 || true ;;
+  esac
 fi
 
 printf '\nPress Return to close this window.\n'
@@ -472,6 +531,18 @@ def sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def release_tree_sha256(root: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    for path in iter_regular_files(root):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        mode = path.stat().st_mode & 0o777
+        content = path.read_bytes()
+        for value in (relative, f"{mode:o}".encode("ascii"), content):
+            digest.update(len(value).to_bytes(8, "big"))
+            digest.update(value)
+    return digest.hexdigest()
+
+
 def build(
     source: pathlib.Path,
     output: pathlib.Path,
@@ -481,8 +552,9 @@ def build(
     skip_dmg: bool = False,
 ) -> list[pathlib.Path]:
     macos_bundle_version(version)
-    validate_token(revision, "revision")
     source = validate_source(source)
+    revision = verified_source_revision(source, revision)
+    ensure_release_source_clean(source)
     epoch = source_date_epoch()
 
     output = output.expanduser().resolve()
@@ -500,7 +572,9 @@ def build(
         stage = pathlib.Path(raw_stage)
         release_root = stage / f"sqllens-{version}"
         stage_release(source, release_root)
-        write_metadata(release_root, version, revision, epoch)
+        ensure_release_source_clean(source)
+        source_tree_digest = release_tree_sha256(release_root)
+        write_metadata(release_root, version, revision, source_tree_digest, epoch)
         write_release_notes(release_root, version)
         write_release_smoke(release_root)
         write_launch_command(release_root)
@@ -529,13 +603,15 @@ def build(
             "".join(f"{sha256(path)}  {path.name}\n" for path in sorted(artifacts)),
         )
 
-        output.mkdir(parents=True, exist_ok=True)
-        delivered: list[pathlib.Path] = []
+        publish = stage / "publish"
+        publish.mkdir()
         for path in [*artifacts, checksums]:
-            destination = output / path.name
-            os.replace(path, destination)
-            delivered.append(destination)
-        return delivered
+            path.rename(publish / path.name)
+
+        if output.exists():
+            output.rmdir()
+        os.replace(publish, output)
+        return [output / path.name for path in [*artifacts, checksums]]
 
 
 def main() -> int:
