@@ -16,7 +16,11 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from sqllens_api.config import Settings
-from sqllens_api.credentials import CredentialUnavailableError, CredentialVault
+from sqllens_api.credentials import (
+    CredentialUnavailableError,
+    CredentialVault,
+    EncryptedCredential,
+)
 from sqllens_api.diagnosis import (
     MAX_SQL_BYTES,
     DiagnosisCapacityError,
@@ -46,6 +50,7 @@ from sqllens_api.provider import (
 from sqllens_api.setup import (
     OWNER_COOKIE_NAME,
     SETUP_COOKIE_NAME,
+    STAGED_CREDENTIAL_OPERATIONS,
     SetupSessionSigner,
     SetupSnapshot,
     SetupStore,
@@ -301,7 +306,7 @@ def create_app(
         pending_version = snapshot.credential_retirement_pending_version
         if pending_version is None:
             return
-        if snapshot.credential_retirement_operation == "staged_rotation":
+        if snapshot.credential_retirement_operation in STAGED_CREDENTIAL_OPERATIONS:
             raise ApiError(
                 503,
                 "CREDENTIAL_ROTATION_IN_PROGRESS",
@@ -331,14 +336,20 @@ def create_app(
         pending_version = snapshot.credential_retirement_pending_version
         if pending_version is None:
             return
-        if snapshot.credential_retirement_operation == "staged_rotation":
+        if snapshot.credential_retirement_operation in STAGED_CREDENTIAL_OPERATIONS:
             token = snapshot.credential_retirement_token
             if token is None:
                 raise CredentialUnavailableError(
                     "staged credential rotation token is unavailable"
                 )
             vault.retire_staged_version(pending_version)
-            if not store.abort_staged_rotation(pending_version, token, clock()):
+            operation = snapshot.credential_retirement_operation
+            aborted = (
+                store.abort_staged_rotation(pending_version, token, clock())
+                if operation == "staged_rotation"
+                else store.abort_staged_setup_probe(pending_version, token, clock())
+            )
+            if not aborted:
                 raise CredentialUnavailableError(
                     "staged credential rotation changed during startup recovery"
                 )
@@ -392,7 +403,8 @@ def create_app(
             and retirement_snapshot.credential_retirement_pending_version is not None
             and (
                 request.url.path != "/api/v1/setup/status"
-                or retirement_snapshot.credential_retirement_operation == "staged_rotation"
+                or retirement_snapshot.credential_retirement_operation
+                in STAGED_CREDENTIAL_OPERATIONS
             )
         ):
             try:
@@ -721,20 +733,147 @@ def create_app(
             )
         assert payload.api_key is not None
         try:
-            encrypted = vault.encrypt(payload.api_key.get_secret_value())
-            store.save_provider_probe(payload, result, encrypted, clock())
+            plan = vault.plan_rotation(snapshot.provider_credential)
         except CredentialUnavailableError as error:
             raise ApiError(
                 503,
                 "CREDENTIAL_STORE_UNAVAILABLE",
                 "The provider credential could not be stored safely.",
             ) from error
-        except RuntimeError as error:
+        token = uuid.uuid4().hex
+        assert snapshot.policy_committed_at is not None
+        if not store.begin_staged_setup_probe(
+            staged_version=plan.key_version,
+            token=token,
+            expected_credential=snapshot.provider_credential,
+            expected_setup_epoch=snapshot.setup_epoch,
+            expected_policy_committed_at=snapshot.policy_committed_at,
+            now=clock(),
+        ):
+            observed = store.snapshot()
+            if observed.credential_retirement_operation in STAGED_CREDENTIAL_OPERATIONS:
+                raise ApiError(
+                    409,
+                    "CREDENTIAL_SETUP_IN_PROGRESS",
+                    "Another credential setup operation is already in progress.",
+                )
             raise ApiError(
                 409,
                 "SETUP_STATE_CHANGED",
                 "Setup state changed while the provider was being verified.",
+            )
+
+        def stage_is_still_owned(observed: SetupSnapshot) -> bool:
+            return (
+                observed.provider_credential == snapshot.provider_credential
+                and observed.setup_epoch == snapshot.setup_epoch
+                and observed.credential_retirement_pending_version == plan.key_version
+                and observed.credential_retirement_operation == "staged_setup_probe"
+                and observed.credential_retirement_token == token
+            )
+
+        def abort_owned_stage() -> None:
+            try:
+                vault.retire_staged_version(plan.key_version)
+            except CredentialUnavailableError as error:
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_SETUP_IN_PROGRESS",
+                    "Credential setup cleanup is pending and must be retried.",
+                ) from error
+            if not store.abort_staged_setup_probe(plan.key_version, token, clock()):
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_SETUP_IN_PROGRESS",
+                    "Credential setup cleanup is pending and must be retried.",
+                )
+
+        def commit_is_durable(
+            observed: SetupSnapshot,
+            encrypted_credential: EncryptedCredential,
+        ) -> bool:
+            old_version = (
+                snapshot.provider_credential.key_version
+                if snapshot.provider_credential is not None
+                else None
+            )
+            retirement_matches = (
+                observed.credential_retirement_pending_version is None
+                and observed.credential_retirement_operation is None
+            )
+            if old_version is not None:
+                retirement_matches = retirement_matches or (
+                    observed.credential_retirement_pending_version == old_version
+                    and observed.credential_retirement_operation == "setup_probe_replacement"
+                )
+            return (
+                observed.provider_credential == encrypted_credential
+                and observed.credential_retirement_token is None
+                and retirement_matches
+            )
+
+        try:
+            encrypted = vault.materialize_rotation(payload.api_key.get_secret_value(), plan)
+        except BaseException as error:
+            abort_owned_stage()
+            if not isinstance(error, CredentialUnavailableError):
+                raise
+            raise ApiError(
+                503,
+                "CREDENTIAL_STORE_UNAVAILABLE",
+                "The provider credential could not be stored safely.",
             ) from error
+
+        try:
+            committed = store.commit_staged_setup_probe(
+                payload,
+                result,
+                encrypted,
+                token=token,
+                now=clock(),
+            )
+        except BaseException as error:
+            observed = store.snapshot()
+            if commit_is_durable(observed, encrypted):
+                committed = True
+                if not isinstance(error, Exception):
+                    resume_credential_retirement()
+                    raise
+            elif stage_is_still_owned(observed):
+                abort_owned_stage()
+                if not isinstance(error, Exception):
+                    raise
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_SETUP_IN_PROGRESS",
+                    "Credential setup did not commit and was safely aborted.",
+                ) from error
+            else:
+                if not isinstance(error, Exception):
+                    raise
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_SETUP_STATE_UNCERTAIN",
+                    "Credential setup state changed and must be recovered before retrying.",
+                ) from error
+        if not committed:
+            observed = store.snapshot()
+            if commit_is_durable(observed, encrypted):
+                committed = True
+            elif stage_is_still_owned(observed):
+                abort_owned_stage()
+                raise ApiError(
+                    409,
+                    "SETUP_STATE_CHANGED",
+                    "Setup state changed while the provider was being stored.",
+                )
+            else:
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_SETUP_STATE_UNCERTAIN",
+                    "Credential setup state changed and must be recovered before retrying.",
+                )
+        resume_credential_retirement()
         return JSONResponse(content=result.model_dump(exclude_none=True))
 
     @app.post("/api/v1/setup/finalize")

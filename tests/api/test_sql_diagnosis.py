@@ -1171,7 +1171,9 @@ def test_external_model_unavailability_degrades_to_deterministic_evidence(
         )
     )
     complete_setup(configured, settings, clock, mode="external")
-    settings.credential_key_path.unlink()
+    active_key_paths = list(settings.credential_key_path.parent.glob("credential*.key"))
+    assert len(active_key_paths) == 1
+    active_key_paths[0].unlink()
 
     degraded = TestClient(create_app(settings=settings, clock=clock))
     owner_csrf = login(degraded)

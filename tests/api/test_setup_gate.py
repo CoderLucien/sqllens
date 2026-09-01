@@ -6,18 +6,30 @@ import os
 import subprocess
 import sys
 import threading
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqllens_api import app as app_module
 from sqllens_api import setup as setup_state_module
 from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
-from sqllens_api.credentials import CredentialUnavailableError, CredentialVault
+from sqllens_api.credentials import (
+    CredentialRotationPlan,
+    CredentialUnavailableError,
+    CredentialVault,
+    EncryptedCredential,
+)
+from sqllens_api.diagnosis import (
+    DiagnosisCapacityError,
+    DiagnosisStore,
+    request_fingerprint,
+)
 from sqllens_api.main import ingest_bootstrap_stdin
 from sqllens_api.provider import ProviderProbeRequest, ProviderProbeResult
 from sqllens_api.setup import SETUP_COOKIE_NAME, SetupStore
@@ -823,6 +835,449 @@ def test_external_probe_is_allowlisted_and_redacts_credentials(
     assert "probe-secret-canary" not in verified.text
     assert "probe-secret-canary" not in caplog.text
     assert len(gateway.requests) == 1
+
+
+def test_setup_probe_commit_failure_leaves_no_key_and_restart_converges(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeProviderGateway()
+    client = TestClient(create_app(settings=settings, clock=clock, provider_gateway=gateway))
+    _, csrf_token = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf_token)
+
+    def fail_provider_commit(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("forced provider commit failure")
+
+    monkeypatch.setattr(SetupStore, "commit_staged_setup_probe", fail_provider_commit)
+    failed = client.post(
+        "/api/v1/setup/model-probes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "probe-secret-canary",
+            "model": "demo-model",
+        },
+    )
+
+    assert failed.status_code == 503
+    assert failed.json()["error"]["code"] == "CREDENTIAL_SETUP_IN_PROGRESS"
+    assert SetupStore(settings).snapshot().provider_credential is None
+    assert list(settings.credential_key_path.parent.glob("credential*.key")) == []
+    restarted = TestClient(create_app(settings=settings, clock=clock))
+    assert restarted.get("/api/v1/setup/status").json()["state"] == "model_required"
+
+
+def test_late_setup_probe_cannot_leave_a_key_after_concurrent_rules_finalize(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    second_probe_started = threading.Event()
+    release_second_probe = threading.Event()
+
+    class DelayedSecondProbeGateway:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def probe(self, request: ProviderProbeRequest) -> ProviderProbeResult:
+            self.calls += 1
+            if self.calls == 2:
+                second_probe_started.set()
+                assert await asyncio.to_thread(release_second_probe.wait, 5)
+            return ProviderProbeResult(
+                status="verified",
+                provider="openai-compatible",
+                model=request.model or "demo-model",
+                latency_ms=5,
+            )
+
+    app = create_app(
+        settings=settings,
+        clock=clock,
+        provider_gateway=DelayedSecondProbeGateway(),
+    )
+    owner = TestClient(app)
+    _, csrf_token = bootstrap_session(owner, settings, clock)
+    commit_external_policy(owner, csrf_token)
+    probe_external_credential(owner, csrf_token, api_key="first-provider-secret")
+    setup_cookie = owner.cookies.get(SETUP_COOKIE_NAME)
+    assert setup_cookie is not None
+    late_client = TestClient(app)
+    late_client.cookies.set(SETUP_COOKIE_NAME, setup_cookie, path="/api/v1/setup")
+    late_responses: list[Response] = []
+
+    def run_late_probe() -> None:
+        late_responses.append(
+            late_client.post(
+                "/api/v1/setup/model-probes",
+                headers={"X-CSRF-Token": csrf_token},
+                json={
+                    "mode": "external",
+                    "base_url": "https://api.example.com/v1",
+                    "api_key": "late-provider-secret",
+                    "model": "late-model",
+                },
+            )
+        )
+
+    late_thread = threading.Thread(target=run_late_probe)
+    late_thread.start()
+    assert second_probe_started.wait(5)
+    finalized = owner.post(
+        "/api/v1/setup/finalize",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"mode": "rules", "owner_password": "owner-password-123"},
+    )
+    release_second_probe.set()
+    late_thread.join(timeout=5)
+
+    assert finalized.status_code == 200
+    assert len(late_responses) == 1
+    late_response = late_responses[0]
+    assert late_response.status_code == 409
+    assert SetupStore(settings).snapshot().provider_credential is None
+    assert list(settings.credential_key_path.parent.glob("credential*.key")) == []
+    restarted = TestClient(create_app(settings=settings, clock=clock))
+    assert restarted.get("/api/v1/setup/status").json()["state"] == "ready"
+
+
+@pytest.mark.parametrize("crash_state", ["before_file", "materialized", "partial"])
+def test_restart_recovers_request_owned_setup_stage(
+    settings: Settings,
+    clock: MutableClock,
+    crash_state: str,
+) -> None:
+    client = TestClient(create_app(settings=settings, clock=clock))
+    _, csrf_token = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf_token)
+    store = SetupStore(settings)
+    snapshot = store.snapshot()
+    assert snapshot.policy_committed_at is not None
+    vault = CredentialVault(settings.credential_key_path)
+    plan = vault.plan_rotation(None)
+    token = "crashed-setup-probe-owner"
+    assert store.begin_staged_setup_probe(
+        staged_version=plan.key_version,
+        token=token,
+        expected_credential=None,
+        expected_setup_epoch=snapshot.setup_epoch,
+        expected_policy_committed_at=snapshot.policy_committed_at,
+        now=clock(),
+    )
+    staged_path = settings.credential_key_path.with_name(
+        f"{settings.credential_key_path.stem}.file-v1-{plan.identifier}"
+        f"{settings.credential_key_path.suffix}"
+    )
+    if crash_state == "materialized":
+        vault.materialize_rotation("staged-provider-secret", plan)
+    elif crash_state == "partial":
+        staged_path.write_bytes(b"partial")
+        staged_path.chmod(0o600)
+
+    restarted = TestClient(create_app(settings=settings, clock=clock))
+
+    recovered = SetupStore(settings).snapshot()
+    assert recovered.provider_credential is None
+    assert recovered.credential_retirement_pending_version is None
+    assert recovered.credential_retirement_token is None
+    assert not staged_path.exists()
+    assert restarted.get("/api/v1/setup/status").json()["state"] == "model_required"
+
+
+def test_setup_stage_blocks_finalize_and_generic_retirement_completion(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(create_app(settings=settings, clock=clock))
+    _, csrf_token = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf_token)
+    store = SetupStore(settings)
+    snapshot = store.snapshot()
+    assert snapshot.policy_committed_at is not None
+    vault = CredentialVault(settings.credential_key_path)
+    plan = vault.plan_rotation(None)
+    token = "setup-stage-owner"
+    assert store.begin_staged_setup_probe(
+        staged_version=plan.key_version,
+        token=token,
+        expected_credential=None,
+        expected_setup_epoch=snapshot.setup_epoch,
+        expected_policy_committed_at=snapshot.policy_committed_at,
+        now=clock(),
+    )
+
+    with pytest.raises(RuntimeError, match="finalize"):
+        store.finalize("rules", "owner-password-123", clock())
+    assert not store.complete_credential_retirement(plan.key_version, clock())
+    pending = store.snapshot()
+    assert pending.credential_retirement_operation == "staged_setup_probe"
+    assert pending.credential_retirement_token == token
+
+
+def test_setup_stage_and_diagnosis_admission_are_bidirectionally_exclusive(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(create_app(settings=settings, clock=clock))
+    _, csrf_token = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf_token)
+    store = SetupStore(settings)
+    diagnosis_store = DiagnosisStore(store.engine)
+    snapshot = store.snapshot()
+    assert snapshot.policy_committed_at is not None
+    vault = CredentialVault(settings.credential_key_path)
+
+    reservation = diagnosis_store.reserve_job(
+        idempotency_key="diagnosis-blocks-setup-stage",
+        fingerprint=request_fingerprint("SELECT * FROM orders"),
+        now=clock(),
+    )
+    first_plan = vault.plan_rotation(None)
+    assert not store.begin_staged_setup_probe(
+        staged_version=first_plan.key_version,
+        token="blocked-setup-stage",
+        expected_credential=None,
+        expected_setup_epoch=snapshot.setup_epoch,
+        expected_policy_committed_at=snapshot.policy_committed_at,
+        now=clock(),
+    )
+    diagnosis_store.fail_job(reservation, code="TEST_COMPLETE")
+
+    second_plan = vault.plan_rotation(None)
+    token = "winning-setup-stage"
+    assert store.begin_staged_setup_probe(
+        staged_version=second_plan.key_version,
+        token=token,
+        expected_credential=None,
+        expected_setup_epoch=snapshot.setup_epoch,
+        expected_policy_committed_at=snapshot.policy_committed_at,
+        now=clock(),
+    )
+    with pytest.raises(DiagnosisCapacityError):
+        diagnosis_store.reserve_job(
+            idempotency_key="setup-stage-blocks-diagnosis",
+            fingerprint=request_fingerprint("SELECT * FROM customers"),
+            now=clock(),
+        )
+    assert store.abort_staged_setup_probe(second_plan.key_version, token, clock())
+
+
+def test_only_one_concurrent_setup_probe_materializes_a_request_owned_key(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe_barrier = threading.Barrier(2)
+
+    class ConcurrentSetupGateway:
+        async def probe(self, request: ProviderProbeRequest) -> ProviderProbeResult:
+            await asyncio.to_thread(probe_barrier.wait, 5)
+            return ProviderProbeResult(
+                status="verified",
+                provider="openai-compatible",
+                model=request.model or "demo-model",
+                latency_ms=5,
+            )
+
+    app = create_app(
+        settings=settings,
+        clock=clock,
+        provider_gateway=ConcurrentSetupGateway(),
+    )
+    owner = TestClient(app)
+    _, csrf_token = bootstrap_session(owner, settings, clock)
+    commit_external_policy(owner, csrf_token)
+    setup_cookie = owner.cookies.get(SETUP_COOKIE_NAME)
+    assert setup_cookie is not None
+    clients = [TestClient(app), TestClient(app)]
+    for client in clients:
+        client.cookies.set(SETUP_COOKIE_NAME, setup_cookie, path="/api/v1/setup")
+
+    original_materialize = CredentialVault.materialize_rotation
+    owner_materializing = threading.Event()
+    release_owner = threading.Event()
+    materialized_versions: list[str] = []
+
+    def controlled_materialize(
+        vault: CredentialVault,
+        plaintext: str,
+        plan: CredentialRotationPlan,
+    ) -> EncryptedCredential:
+        staged = SetupStore(settings).snapshot()
+        assert staged.credential_retirement_operation == "staged_setup_probe"
+        assert staged.credential_retirement_pending_version == plan.key_version
+        materialized_versions.append(plan.key_version)
+        owner_materializing.set()
+        assert release_owner.wait(5)
+        return original_materialize(vault, plaintext, plan)
+
+    monkeypatch.setattr(CredentialVault, "materialize_rotation", controlled_materialize)
+
+    def probe(index: int) -> Response:
+        return clients[index].post(
+            "/api/v1/setup/model-probes",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "mode": "external",
+                "base_url": "https://api.example.com/v1",
+                "api_key": f"concurrent-provider-secret-{index}",
+                "model": f"concurrent-model-{index}",
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(probe, index) for index in range(2)]
+        try:
+            assert owner_materializing.wait(5)
+            completed, _pending = wait(futures, timeout=5, return_when=FIRST_COMPLETED)
+            assert len(completed) == 1
+            assert next(iter(completed)).result().status_code == 409
+        finally:
+            release_owner.set()
+        responses = [future.result(timeout=5) for future in futures]
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    assert len(materialized_versions) == 1
+    persisted = SetupStore(settings).snapshot()
+    assert persisted.provider_credential is not None
+    assert persisted.credential_retirement_pending_version is None
+    assert CredentialVault(settings.credential_key_path).decrypt(
+        persisted.provider_credential
+    ).startswith("concurrent-provider-secret-")
+    assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 1
+
+
+def test_replacement_setup_probe_retires_only_the_previous_key(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    client = TestClient(
+        create_app(settings=settings, clock=clock, provider_gateway=FakeProviderGateway())
+    )
+    _, csrf_token = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf_token)
+    probe_external_credential(client, csrf_token, api_key="first-provider-secret")
+    before = SetupStore(settings).snapshot().provider_credential
+    assert before is not None
+
+    probe_external_credential(client, csrf_token, api_key="replacement-provider-secret")
+
+    after = SetupStore(settings).snapshot().provider_credential
+    assert after is not None
+    assert after.key_version != before.key_version
+    vault = CredentialVault(settings.credential_key_path)
+    assert vault.decrypt(after) == "replacement-provider-secret"
+    with pytest.raises(CredentialUnavailableError):
+        vault.decrypt(before)
+    assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 1
+
+
+@pytest.mark.parametrize("failure_phase", ["unlink", "phase_two"])
+def test_replacement_setup_probe_retirement_failure_converges_on_restart(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str,
+) -> None:
+    client = TestClient(
+        create_app(settings=settings, clock=clock, provider_gateway=FakeProviderGateway())
+    )
+    _, csrf_token = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf_token)
+    probe_external_credential(client, csrf_token, api_key="first-provider-secret")
+    before = SetupStore(settings).snapshot().provider_credential
+    assert before is not None
+    original_retire = CredentialVault.retire_version
+    original_complete = SetupStore.complete_credential_retirement
+    if failure_phase == "unlink":
+
+        def fail_retirement(_vault: CredentialVault, _version: str) -> None:
+            raise CredentialUnavailableError("forced setup replacement unlink failure")
+
+        monkeypatch.setattr(CredentialVault, "retire_version", fail_retirement)
+    else:
+        monkeypatch.setattr(
+            SetupStore,
+            "complete_credential_retirement",
+            lambda *_args, **_kwargs: False,
+        )
+
+    failed = client.post(
+        "/api/v1/setup/model-probes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "replacement-provider-secret",
+            "model": "demo-model",
+        },
+    )
+
+    assert failed.status_code == 503
+    assert failed.json()["error"]["code"] == "CREDENTIAL_RETIREMENT_PENDING"
+    interrupted = SetupStore(settings).snapshot()
+    assert interrupted.provider_credential is not None
+    assert interrupted.provider_credential != before
+    assert interrupted.credential_retirement_pending_version == before.key_version
+    assert interrupted.credential_retirement_operation == "setup_probe_replacement"
+    monkeypatch.setattr(CredentialVault, "retire_version", original_retire)
+    monkeypatch.setattr(SetupStore, "complete_credential_retirement", original_complete)
+
+    create_app(settings=settings, clock=clock)
+
+    recovered = SetupStore(settings).snapshot()
+    assert recovered.provider_credential == interrupted.provider_credential
+    assert recovered.credential_retirement_pending_version is None
+    vault = CredentialVault(settings.credential_key_path)
+    assert vault.decrypt(recovered.provider_credential) == "replacement-provider-secret"
+    with pytest.raises(CredentialUnavailableError):
+        vault.decrypt(before)
+    assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 1
+
+
+def test_setup_probe_exception_after_durable_commit_never_deletes_active_key(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(settings=settings, clock=clock, provider_gateway=FakeProviderGateway())
+    )
+    _, csrf_token = bootstrap_session(client, settings, clock)
+    commit_external_policy(client, csrf_token)
+    original_commit = SetupStore.commit_staged_setup_probe
+
+    def commit_then_raise(
+        store: SetupStore,
+        *args: object,
+        **kwargs: object,
+    ) -> bool:
+        assert original_commit(store, *args, **kwargs)  # type: ignore[arg-type]
+        raise RuntimeError("forced ambiguous post-commit failure")
+
+    monkeypatch.setattr(SetupStore, "commit_staged_setup_probe", commit_then_raise)
+
+    response = client.post(
+        "/api/v1/setup/model-probes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "durably-committed-provider-secret",
+            "model": "demo-model",
+        },
+    )
+
+    assert response.status_code == 200
+    persisted = SetupStore(settings).snapshot()
+    assert persisted.provider_credential is not None
+    assert persisted.credential_retirement_pending_version is None
+    assert CredentialVault(settings.credential_key_path).decrypt(
+        persisted.provider_credential
+    ) == "durably-committed-provider-secret"
+    assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 1
 
 
 def test_local_probe_fails_closed_and_provider_failure_can_degrade_to_rules(

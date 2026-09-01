@@ -115,6 +115,12 @@ def login(client: TestClient, password: str = OWNER_PASSWORD) -> dict[str, objec
     return response.json()
 
 
+def only_credential_key_path(settings: Settings) -> Path:
+    paths = list(settings.credential_key_path.parent.glob("credential*.key"))
+    assert len(paths) == 1
+    return paths[0]
+
+
 def test_finalize_creates_owner_and_all_product_apis_default_to_authenticated(
     settings: Settings,
     clock: MutableClock,
@@ -258,9 +264,10 @@ def test_external_provider_credential_is_encrypted_rotatable_and_restart_safe(
 
     database = settings.database_path.read_bytes()
     assert b"initial-provider-secret" not in database
-    assert settings.credential_key_path.is_file()
-    assert stat.S_IMODE(settings.credential_key_path.stat().st_mode) == 0o600
-    key_material = settings.credential_key_path.read_bytes()
+    active_key_path = only_credential_key_path(settings)
+    assert active_key_path.is_file()
+    assert stat.S_IMODE(active_key_path.stat().st_mode) == 0o600
+    key_material = active_key_path.read_bytes()
     assert key_material not in database
 
     restarted_gateway = RecordingProviderGateway()
@@ -356,7 +363,7 @@ def test_rules_finalize_discards_a_previously_verified_external_credential(
             "model": "demo-model",
         },
     ).status_code == 200
-    assert settings.credential_key_path.exists()
+    assert only_credential_key_path(settings).exists()
 
     finalized = client.post(
         "/api/v1/setup/finalize",
@@ -388,11 +395,12 @@ def test_authenticated_rotation_recovers_an_unreadable_credential_key(
         )
     )
     complete_setup(setup_client, settings, clock, mode="external")
+    active_key_path = only_credential_key_path(settings)
     if damage == "missing":
-        settings.credential_key_path.unlink()
+        active_key_path.unlink()
     else:
-        settings.credential_key_path.write_bytes(b"corrupt")
-        settings.credential_key_path.chmod(0o600)
+        active_key_path.write_bytes(b"corrupt")
+        active_key_path.chmod(0o600)
 
     gateway = RecordingProviderGateway()
     recovery = TestClient(
@@ -449,7 +457,7 @@ def test_unsafe_active_key_prevents_startup_without_touching_it(
         )
     )
     complete_setup(configured, settings, clock, mode="external")
-    active_path = settings.credential_key_path
+    active_path = only_credential_key_path(settings)
     if unsafe_kind == "symlink":
         outside = settings.data_dir / "outside.key"
         outside.write_bytes(b"x" * 32)
@@ -694,9 +702,7 @@ def test_failed_staged_commit_persists_cleanup_until_restart_recovers(
     converged = SetupStore(settings).snapshot()
     assert converged.provider_credential == active
     assert converged.credential_retirement_pending_version is None
-    assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
-        settings.credential_key_path
-    ]
+    assert only_credential_key_path(settings).is_file()
 
 
 def test_commit_exception_after_durable_switch_never_deletes_new_active_key(
@@ -792,9 +798,7 @@ def test_commit_exception_before_durable_switch_aborts_owned_stage(
     assert CredentialVault(settings.credential_key_path).decrypt(
         after.provider_credential
     ) == "initial-provider-secret"
-    assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
-        settings.credential_key_path
-    ]
+    assert only_credential_key_path(settings).is_file()
 
 
 def test_rotation_cancellation_aborts_only_its_owned_stage(
@@ -843,9 +847,7 @@ def test_rotation_cancellation_aborts_only_its_owned_stage(
     assert after.provider_credential == before.provider_credential
     assert after.credential_retirement_pending_version is None
     assert after.credential_retirement_token is None
-    assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
-        settings.credential_key_path
-    ]
+    assert only_credential_key_path(settings).is_file()
 
 
 def test_staged_rotation_cas_records_token_version_expected_active_and_epoch(
@@ -1210,9 +1212,7 @@ def test_partial_materialization_failure_is_owner_aborted_without_orphan(
     assert recovered.provider_credential == before.provider_credential
     assert recovered.credential_retirement_pending_version is None
     assert recovered.credential_retirement_token is None
-    assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
-        settings.credential_key_path
-    ]
+    assert only_credential_key_path(settings).is_file()
 
 
 def test_non_owner_request_cannot_resume_or_delete_live_staged_rotation(
