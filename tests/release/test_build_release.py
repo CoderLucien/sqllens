@@ -387,6 +387,28 @@ class ReleaseBuilderTest(unittest.TestCase):
         self.assertIn("not fully materialized from source revision", result.stderr)
         self.assertFalse(self.output.exists())
 
+    def test_ignored_dangling_top_level_symlink_fails_closed(self) -> None:
+        exclude = self.source / ".git" / "info" / "exclude"
+        exclude.write_text(exclude.read_text() + "\n/packages\n")
+        packages = self.source / "packages"
+        packages.symlink_to(self.temp / "missing-packages", target_is_directory=True)
+        self.assertTrue(packages.is_symlink())
+        self.assertFalse(packages.exists())
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--", "packages"],
+            cwd=self.source,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(status.stdout, "")
+
+        result = self._build()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not tracked by source revision", result.stderr)
+        self.assertFalse(self.output.exists())
+
     def test_publish_failure_never_exposes_a_partial_output_directory(self) -> None:
         with mock.patch.dict(
             os.environ, {"SOURCE_DATE_EPOCH": "1788192000"}, clear=False

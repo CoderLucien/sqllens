@@ -278,7 +278,7 @@ def stage_release(source: pathlib.Path, destination: pathlib.Path) -> None:
     destination.mkdir(parents=True)
     for relative_text in RELEASE_PATHS:
         source_path = source / relative_text
-        if not source_path.exists():
+        if not source_path.exists() and not source_path.is_symlink():
             continue
         relative = pathlib.PurePath(relative_text)
         copy_release_path(
