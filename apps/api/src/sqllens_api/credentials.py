@@ -114,6 +114,61 @@ class CredentialVault:
             raise CredentialUnavailableError("staged credential key version is unsupported")
         self.retire_version(version)
 
+    def assert_key_file_closure(self, authorized_versions: set[str]) -> None:
+        """Reject credential key files that have no durable database reference."""
+        try:
+            self.key_path.parent.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be inspected safely"
+            ) from error
+        self._ensure_directory(create=False)
+        authorized_names = {
+            self._path_for_version(version)[0].name for version in authorized_versions
+        }
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            directory_fd = os.open(self.key_path.parent, flags)
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be opened safely"
+            ) from error
+        try:
+            directory = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.geteuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700
+            ):
+                raise CredentialUnavailableError("credential directory permissions are invalid")
+            for name in os.listdir(directory_fd):
+                if name not in authorized_names:
+                    raise CredentialUnavailableError(
+                        "credential directory contains an unreferenced key"
+                    )
+                try:
+                    metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                except OSError as error:
+                    raise CredentialUnavailableError(
+                        "credential key cannot be inspected safely"
+                    ) from error
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                ):
+                    raise CredentialUnavailableError(
+                        "credential key permissions are invalid"
+                    )
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be inspected safely"
+            ) from error
+        finally:
+            os.close(directory_fd)
+
     def retire_version(self, version: str) -> None:
         """Strictly and idempotently remove one detached credential key version."""
         path, _expected_version = self._path_for_version(version)

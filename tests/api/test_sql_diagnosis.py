@@ -16,7 +16,9 @@ from sqllens_api import diagnosis as diagnosis_module
 from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
+from sqllens_api.credentials import CredentialVault
 from sqllens_api.diagnosis import (
+    DiagnosisCapacityError,
     DiagnosisStore,
     SqlDiagnosisError,
     build_case,
@@ -29,6 +31,7 @@ from sqllens_api.provider import (
     ProviderProbeRequest,
     ProviderProbeResult,
 )
+from sqllens_api.setup import SetupStore
 
 OWNER_PASSWORD = "correct-horse-battery-staple"
 
@@ -791,6 +794,68 @@ def test_admission_lock_prevents_rotation_between_provider_snapshot_and_lease(
     assert not diagnosis_thread.is_alive()
     assert diagnosis_responses[0].status_code == 202
     assert ranker.requests[0].provider.model == "demo-model"
+
+
+def test_diagnosis_admission_and_staged_rotation_are_bidirectionally_exclusive(
+    settings: Settings,
+    clock: FixedClock,
+) -> None:
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=VerifiedProviderGateway(),
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    setup_store = SetupStore(settings)
+    diagnosis_store = DiagnosisStore(setup_store.engine)
+    snapshot = setup_store.snapshot()
+    assert snapshot.provider_credential is not None
+    vault = CredentialVault(settings.credential_key_path)
+
+    reservation = diagnosis_store.reserve_job(
+        idempotency_key="diagnosis-blocks-stage",
+        fingerprint=request_fingerprint("SELECT * FROM orders"),
+        now=clock(),
+    )
+    assert reservation.owner is True
+    first_plan = vault.plan_rotation(snapshot.provider_credential)
+    assert not setup_store.begin_staged_rotation(
+        staged_version=first_plan.key_version,
+        token="blocked-stage-token",
+        expected_credential=snapshot.provider_credential,
+        expected_setup_epoch=snapshot.setup_epoch,
+        now=clock(),
+    )
+    diagnosis_store.fail_job(reservation, code="TEST_COMPLETE")
+
+    second_plan = vault.plan_rotation(snapshot.provider_credential)
+    assert setup_store.begin_staged_rotation(
+        staged_version=second_plan.key_version,
+        token="winning-stage-token",
+        expected_credential=snapshot.provider_credential,
+        expected_setup_epoch=snapshot.setup_epoch,
+        now=clock(),
+    )
+    replay = diagnosis_store.reserve_job(
+        idempotency_key="diagnosis-blocks-stage",
+        fingerprint=request_fingerprint("SELECT * FROM orders"),
+        now=clock(),
+    )
+    assert replay.owner is False
+    assert replay.job["status"] == "failed"
+    with pytest.raises(DiagnosisCapacityError):
+        diagnosis_store.reserve_job(
+            idempotency_key="stage-blocks-diagnosis",
+            fingerprint=request_fingerprint("SELECT * FROM customers"),
+            now=clock(),
+        )
+    assert setup_store.abort_staged_rotation(
+        second_plan.key_version,
+        "winning-stage-token",
+        clock(),
+    )
 
 
 def test_model_owner_failure_is_a_replayable_terminal_job_without_second_egress(

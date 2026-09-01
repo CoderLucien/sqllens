@@ -1004,60 +1004,6 @@ class SetupStore:
             )
         return result.rowcount == 1
 
-    def replace_provider_credential(
-        self,
-        request: ProviderProbeRequest,
-        result: ProviderProbeResult,
-        credential: EncryptedCredential,
-        *,
-        expected_credential: EncryptedCredential | None,
-        expected_setup_epoch: int,
-        now: datetime,
-    ) -> bool:
-        with self.engine.begin() as connection:
-            write_result = connection.execute(
-                update(setup_state)
-                .where(
-                    setup_state.c.id == _STATE_ID,
-                    setup_state.c.setup_epoch == expected_setup_epoch,
-                    setup_state.c.finalized_at.is_not(None),
-                    setup_state.c.external_model_egress.is_(True),
-                    setup_state.c.credential_retirement_pending_version.is_(None),
-                    ~select(diagnosis_admission.c.slot).exists(),
-                    (
-                        setup_state.c.provider_credential_ciphertext.is_(None)
-                        if expected_credential is None
-                        else setup_state.c.provider_credential_ciphertext
-                        == expected_credential.ciphertext
-                    ),
-                    (
-                        setup_state.c.provider_credential_key_version.is_(None)
-                        if expected_credential is None
-                        else setup_state.c.provider_credential_key_version
-                        == expected_credential.key_version
-                    ),
-                )
-                .values(
-                    provider_status=result.status,
-                    provider_base_url=request.base_url,
-                    provider_model=request.model,
-                    provider_verified_at=_timestamp(now),
-                    provider_credential_ciphertext=credential.ciphertext,
-                    provider_credential_key_version=credential.key_version,
-                    credential_retirement_pending_version=(
-                        expected_credential.key_version
-                        if expected_credential is not None
-                        else None
-                    ),
-                    credential_retirement_operation=(
-                        "rotation" if expected_credential is not None else None
-                    ),
-                    model_mode="external",
-                    updated_at=_timestamp(now),
-                )
-            )
-        return write_result.rowcount == 1
-
     def delete_provider_credential(
         self,
         *,
@@ -1107,25 +1053,6 @@ class SetupStore:
                 )
             )
         return result.rowcount == 1
-
-    def schedule_orphan_credential_retirement(self, version: str, now: datetime) -> bool:
-        """Persist cleanup for a newly-created key that never became active."""
-        with self.engine.begin() as connection:
-            result = connection.execute(
-                update(setup_state)
-                .where(
-                    setup_state.c.id == _STATE_ID,
-                    setup_state.c.credential_retirement_pending_version.is_(None),
-                    setup_state.c.provider_credential_key_version.is_distinct_from(version),
-                )
-                .values(
-                    credential_retirement_pending_version=version,
-                    credential_retirement_operation="orphan_rotation",
-                    updated_at=_timestamp(now),
-                )
-            )
-        return result.rowcount == 1
-
 
 class SetupSessionSigner:
     def __init__(self, settings: Settings) -> None:

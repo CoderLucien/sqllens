@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import stat
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
+import sqllens_api.credentials as credentials_module
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqllens_api.app import create_app
 from sqllens_api.bootstrap import issue_bootstrap_code
 from sqllens_api.config import Settings
 from sqllens_api.credentials import (
+    CredentialRotationPlan,
     CredentialUnavailableError,
     CredentialVault,
     EncryptedCredential,
@@ -430,6 +435,46 @@ def test_authenticated_rotation_recovers_an_unreadable_credential_key(
     )
 
 
+@pytest.mark.parametrize("unsafe_kind", ["symlink", "fifo", "mode"])
+def test_unsafe_active_key_prevents_startup_without_touching_it(
+    settings: Settings,
+    clock: MutableClock,
+    unsafe_kind: str,
+) -> None:
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    active_path = settings.credential_key_path
+    if unsafe_kind == "symlink":
+        outside = settings.data_dir / "outside.key"
+        outside.write_bytes(b"x" * 32)
+        outside.chmod(0o600)
+        active_path.unlink()
+        active_path.symlink_to(outside)
+    elif unsafe_kind == "fifo":
+        active_path.unlink()
+        os.mkfifo(active_path, 0o600)
+    else:
+        active_path.chmod(0o644)
+
+    with pytest.raises(CredentialUnavailableError):
+        create_app(settings=settings, clock=clock)
+
+    assert active_path.exists() or active_path.is_symlink()
+    metadata = active_path.lstat()
+    if unsafe_kind == "symlink":
+        assert stat.S_ISLNK(metadata.st_mode)
+    elif unsafe_kind == "fifo":
+        assert stat.S_ISFIFO(metadata.st_mode)
+    else:
+        assert stat.S_IMODE(metadata.st_mode) == 0o644
+
+
 def test_rotation_retirement_failure_is_observable_and_resumes_before_model_use(
     settings: Settings,
     clock: MutableClock,
@@ -591,7 +636,7 @@ def test_rules_finalize_retirement_failure_resumes_before_owner_login(
         CredentialVault(settings.credential_key_path).decrypt(old_credential)
 
 
-def test_failed_rotation_cas_persists_orphan_cleanup_until_unlink_recovers(
+def test_failed_staged_commit_persists_cleanup_until_restart_recovers(
     settings: Settings,
     clock: MutableClock,
     monkeypatch: pytest.MonkeyPatch,
@@ -607,15 +652,19 @@ def test_failed_rotation_cas_persists_orphan_cleanup_until_unlink_recovers(
     active = SetupStore(settings).snapshot().provider_credential
     assert active is not None
     csrf = login(client)["csrf_token"]
-    original_replace = SetupStore.replace_provider_credential
-    original_retire = CredentialVault.retire_version
+    original_commit = SetupStore.commit_staged_rotation
+    original_retire_staged = CredentialVault.retire_staged_version
 
-    monkeypatch.setattr(SetupStore, "replace_provider_credential", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(SetupStore, "commit_staged_rotation", lambda *_args, **_kwargs: False)
 
-    def fail_retirement(_vault: CredentialVault, _version: str) -> None:
-        raise CredentialUnavailableError("forced orphan unlink failure")
+    def fail_staged_retirement(_vault: CredentialVault, _version: str) -> None:
+        raise CredentialUnavailableError("forced staged unlink failure")
 
-    monkeypatch.setattr(CredentialVault, "retire_version", fail_retirement)
+    monkeypatch.setattr(
+        CredentialVault,
+        "retire_staged_version",
+        fail_staged_retirement,
+    )
     failed = client.put(
         "/api/v1/settings/model",
         headers={"X-CSRF-Token": str(csrf)},
@@ -630,20 +679,170 @@ def test_failed_rotation_cas_persists_orphan_cleanup_until_unlink_recovers(
     assert failed.status_code == 503
     pending = SetupStore(settings).snapshot()
     assert pending.provider_credential == active
-    assert pending.credential_retirement_operation == "orphan_rotation"
+    assert pending.credential_retirement_operation == "staged_rotation"
     assert pending.credential_retirement_pending_version is not None
+    assert pending.credential_retirement_token is not None
     assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 2
 
-    monkeypatch.setattr(SetupStore, "replace_provider_credential", original_replace)
-    monkeypatch.setattr(CredentialVault, "retire_version", original_retire)
-    verified = client.post(
-        "/api/v1/settings/model/verify",
-        headers={"X-CSRF-Token": str(csrf)},
+    monkeypatch.setattr(SetupStore, "commit_staged_rotation", original_commit)
+    monkeypatch.setattr(
+        CredentialVault,
+        "retire_staged_version",
+        original_retire_staged,
     )
-    assert verified.status_code == 200
+    create_app(settings=settings, clock=clock)
     converged = SetupStore(settings).snapshot()
     assert converged.provider_credential == active
     assert converged.credential_retirement_pending_version is None
+    assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
+        settings.credential_key_path
+    ]
+
+
+def test_commit_exception_after_durable_switch_never_deletes_new_active_key(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    before = SetupStore(settings).snapshot()
+    assert before.provider_credential is not None
+    csrf = str(login(client)["csrf_token"])
+    original_commit = SetupStore.commit_staged_rotation
+
+    def commit_then_raise(
+        store: SetupStore,
+        *args: object,
+        **kwargs: object,
+    ) -> bool:
+        assert original_commit(store, *args, **kwargs)  # type: ignore[arg-type]
+        raise RuntimeError("forced ambiguous post-commit failure")
+
+    monkeypatch.setattr(SetupStore, "commit_staged_rotation", commit_then_raise)
+
+    rotated = client.put(
+        "/api/v1/settings/model",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "replacement-provider-secret",
+            "model": "replacement-model",
+        },
+    )
+
+    assert rotated.status_code == 200
+    after = SetupStore(settings).snapshot()
+    assert after.provider_credential is not None
+    assert after.provider_credential != before.provider_credential
+    assert after.credential_retirement_pending_version is None
+    vault = CredentialVault(settings.credential_key_path)
+    assert vault.decrypt(after.provider_credential) == "replacement-provider-secret"
+    with pytest.raises(CredentialUnavailableError):
+        vault.decrypt(before.provider_credential)
+    assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 1
+
+
+def test_commit_exception_before_durable_switch_aborts_owned_stage(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    before = SetupStore(settings).snapshot()
+    assert before.provider_credential is not None
+    csrf = str(login(client)["csrf_token"])
+
+    def fail_before_commit(*_args: object, **_kwargs: object) -> bool:
+        raise RuntimeError("forced pre-commit failure")
+
+    monkeypatch.setattr(SetupStore, "commit_staged_rotation", fail_before_commit)
+
+    failed = client.put(
+        "/api/v1/settings/model",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "replacement-provider-secret",
+            "model": "replacement-model",
+        },
+    )
+
+    assert failed.status_code == 503
+    assert failed.json()["error"]["code"] == "CREDENTIAL_ROTATION_IN_PROGRESS"
+    after = SetupStore(settings).snapshot()
+    assert after.provider_credential == before.provider_credential
+    assert after.credential_retirement_pending_version is None
+    assert after.credential_retirement_token is None
+    assert CredentialVault(settings.credential_key_path).decrypt(
+        after.provider_credential
+    ) == "initial-provider-secret"
+    assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
+        settings.credential_key_path
+    ]
+
+
+def test_rotation_cancellation_aborts_only_its_owned_stage(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    before = SetupStore(settings).snapshot()
+    assert before.provider_credential is not None
+    csrf = str(login(client)["csrf_token"])
+
+    def cancel_materialization(
+        _vault: CredentialVault,
+        _plaintext: str,
+        _plan: CredentialRotationPlan,
+    ) -> EncryptedCredential:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        CredentialVault,
+        "materialize_rotation",
+        cancel_materialization,
+    )
+
+    with pytest.raises(RuntimeError, match="No response returned"):
+        client.put(
+            "/api/v1/settings/model",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "mode": "external",
+                "base_url": "https://api.example.com/v1",
+                "api_key": "replacement-provider-secret",
+                "model": "replacement-model",
+            },
+        )
+
+    after = SetupStore(settings).snapshot()
+    assert after.provider_credential == before.provider_credential
+    assert after.credential_retirement_pending_version is None
+    assert after.credential_retirement_token is None
     assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
         settings.credential_key_path
     ]
@@ -868,4 +1067,422 @@ def test_generic_retirement_completion_rejects_staged_rotation(
     pending = store.snapshot()
     assert pending.credential_retirement_pending_version == staged_version
     assert pending.credential_retirement_operation == "staged_rotation"
+    assert pending.credential_retirement_token == token
+
+
+def test_concurrent_rotations_create_only_one_durable_stage_and_key_file(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    probe_barrier = Barrier(2)
+
+    class ConcurrentProviderGateway:
+        async def probe(self, request: ProviderProbeRequest) -> ProviderProbeResult:
+            await asyncio.to_thread(probe_barrier.wait, 5)
+            return ProviderProbeResult(
+                status="verified",
+                provider="openai-compatible",
+                model=request.model or "demo-model",
+                latency_ms=5,
+            )
+
+    app = create_app(
+        settings=settings,
+        clock=clock,
+        provider_gateway=ConcurrentProviderGateway(),
+    )
+    clients = [TestClient(app), TestClient(app)]
+    csrf_tokens = [str(login(client)["csrf_token"]) for client in clients]
+    original_materialize = CredentialVault.materialize_rotation
+    materialized_versions: list[str] = []
+    owner_materializing = Event()
+    release_owner = Event()
+
+    def record_materialization(
+        vault: CredentialVault,
+        plaintext: str,
+        plan: CredentialRotationPlan,
+    ) -> EncryptedCredential:
+        staged = SetupStore(settings).snapshot()
+        assert staged.credential_retirement_operation == "staged_rotation"
+        assert staged.credential_retirement_pending_version == plan.key_version
+        assert staged.credential_retirement_token is not None
+        materialized_versions.append(plan.key_version)
+        owner_materializing.set()
+        assert release_owner.wait(5)
+        return original_materialize(vault, plaintext, plan)
+
+    monkeypatch.setattr(CredentialVault, "materialize_rotation", record_materialization)
+
+    def rotate(index: int) -> Response:
+        return clients[index].put(
+            "/api/v1/settings/model",
+            headers={"X-CSRF-Token": csrf_tokens[index]},
+            json={
+                "mode": "external",
+                "base_url": "https://api.example.com/v1",
+                "api_key": f"replacement-provider-secret-{index}",
+                "model": f"replacement-model-{index}",
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(rotate, index) for index in range(2)]
+        try:
+            assert owner_materializing.wait(5)
+            completed, _pending = wait(
+                futures,
+                timeout=5,
+                return_when=FIRST_COMPLETED,
+            )
+            assert len(completed) == 1
+            loser = next(iter(completed)).result()
+            assert loser.status_code == 409
+            blocked = TestClient(app).get("/api/v1/setup/status")
+            assert blocked.status_code == 503
+            assert blocked.json()["error"]["code"] == "CREDENTIAL_ROTATION_IN_PROGRESS"
+        finally:
+            release_owner.set()
+        responses = [future.result(timeout=5) for future in futures]
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    assert len(materialized_versions) == 1
+    snapshot = SetupStore(settings).snapshot()
+    assert snapshot.provider_credential is not None
+    assert snapshot.credential_retirement_pending_version is None
+    assert CredentialVault(settings.credential_key_path).decrypt(
+        snapshot.provider_credential
+    ).startswith("replacement-provider-secret-")
+    assert len(list(settings.credential_key_path.parent.glob("credential*.key"))) == 1
+
+
+def test_partial_materialization_failure_is_owner_aborted_without_orphan(
+    settings: Settings,
+    clock: MutableClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(client, settings, clock, mode="external")
+    before = SetupStore(settings).snapshot()
+    assert before.provider_credential is not None
+    csrf = str(login(client)["csrf_token"])
+    original_write = credentials_module.os.write
+    write_calls = 0
+
+    def partial_then_fail(descriptor: int, value: object) -> int:
+        nonlocal write_calls
+        write_calls += 1
+        if write_calls == 1:
+            return original_write(descriptor, bytes(value)[:7])  # type: ignore[arg-type]
+        raise OSError("forced partial credential write")
+
+    monkeypatch.setattr(credentials_module.os, "write", partial_then_fail)
+
+    failed = client.put(
+        "/api/v1/settings/model",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "mode": "external",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "replacement-provider-secret",
+            "model": "replacement-model",
+        },
+    )
+
+    assert failed.status_code == 503
+    assert failed.json()["error"]["code"] == "CREDENTIAL_STORE_UNAVAILABLE"
+    recovered = SetupStore(settings).snapshot()
+    assert recovered.provider_credential == before.provider_credential
+    assert recovered.credential_retirement_pending_version is None
+    assert recovered.credential_retirement_token is None
+    assert list(settings.credential_key_path.parent.glob("credential*.key")) == [
+        settings.credential_key_path
+    ]
+
+
+def test_non_owner_request_cannot_resume_or_delete_live_staged_rotation(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    app = create_app(
+        settings=settings,
+        clock=clock,
+        provider_gateway=RecordingProviderGateway(),
+    )
+    client = TestClient(app)
+    complete_setup(client, settings, clock, mode="external")
+    store = SetupStore(settings)
+    snapshot = store.snapshot()
+    assert snapshot.provider_credential is not None
+    vault = CredentialVault(settings.credential_key_path)
+    plan = vault.plan_rotation(snapshot.provider_credential)
+    token = "live-owner-token"
+    assert store.begin_staged_rotation(
+        staged_version=plan.key_version,
+        token=token,
+        expected_credential=snapshot.provider_credential,
+        expected_setup_epoch=snapshot.setup_epoch,
+        now=clock(),
+    )
+    vault.materialize_rotation("staged-provider-secret", plan)
+    staged_path = settings.credential_key_path.with_name(
+        f"{settings.credential_key_path.stem}.file-v1-{plan.identifier}"
+        f"{settings.credential_key_path.suffix}"
+    )
+
+    blocked = client.get("/api/v1/auth/session")
+
+    assert blocked.status_code == 503
+    assert blocked.json()["error"]["code"] == "CREDENTIAL_ROTATION_IN_PROGRESS"
+    assert staged_path.exists()
+    still_staged = store.snapshot()
+    assert still_staged.credential_retirement_pending_version == plan.key_version
+    assert still_staged.credential_retirement_token == token
+
+
+def test_restart_recovers_stage_before_materialization(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    store = SetupStore(settings)
+    before = store.snapshot()
+    assert before.provider_credential is not None
+    vault = CredentialVault(settings.credential_key_path)
+    plan = vault.plan_rotation(before.provider_credential)
+    assert store.begin_staged_rotation(
+        staged_version=plan.key_version,
+        token="crashed-owner-token",
+        expected_credential=before.provider_credential,
+        expected_setup_epoch=before.setup_epoch,
+        now=clock(),
+    )
+
+    create_app(settings=settings, clock=clock)
+
+    recovered = SetupStore(settings).snapshot()
+    assert recovered.provider_credential == before.provider_credential
+    assert recovered.credential_retirement_pending_version is None
+    assert CredentialVault(settings.credential_key_path).decrypt(
+        recovered.provider_credential
+    ) == "initial-provider-secret"
+
+
+def test_restart_recovers_materialized_stage_before_active_cas(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    store = SetupStore(settings)
+    before = store.snapshot()
+    assert before.provider_credential is not None
+    vault = CredentialVault(settings.credential_key_path)
+    plan = vault.plan_rotation(before.provider_credential)
+    assert store.begin_staged_rotation(
+        staged_version=plan.key_version,
+        token="crashed-owner-token",
+        expected_credential=before.provider_credential,
+        expected_setup_epoch=before.setup_epoch,
+        now=clock(),
+    )
+    vault.materialize_rotation("staged-provider-secret", plan)
+    staged_path = settings.credential_key_path.with_name(
+        f"{settings.credential_key_path.stem}.file-v1-{plan.identifier}"
+        f"{settings.credential_key_path.suffix}"
+    )
+    assert staged_path.exists()
+
+    create_app(settings=settings, clock=clock)
+
+    recovered = SetupStore(settings).snapshot()
+    assert recovered.provider_credential == before.provider_credential
+    assert recovered.credential_retirement_pending_version is None
+    assert not staged_path.exists()
+
+
+def test_restart_recovers_safe_partial_write_or_fsync_file(
+    settings: Settings,
+    clock: MutableClock,
+) -> None:
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    store = SetupStore(settings)
+    before = store.snapshot()
+    assert before.provider_credential is not None
+    vault = CredentialVault(settings.credential_key_path)
+    plan = vault.plan_rotation(before.provider_credential)
+    assert store.begin_staged_rotation(
+        staged_version=plan.key_version,
+        token="crashed-owner-token",
+        expected_credential=before.provider_credential,
+        expected_setup_epoch=before.setup_epoch,
+        now=clock(),
+    )
+    staged_path = settings.credential_key_path.with_name(
+        f"{settings.credential_key_path.stem}.file-v1-{plan.identifier}"
+        f"{settings.credential_key_path.suffix}"
+    )
+    staged_path.write_bytes(b"partial")
+    staged_path.chmod(0o600)
+
+    create_app(settings=settings, clock=clock)
+
+    assert not staged_path.exists()
+    assert SetupStore(settings).snapshot().credential_retirement_pending_version is None
+
+
+@pytest.mark.parametrize("unlink_before_restart", [False, True])
+def test_restart_finishes_old_key_retirement_before_and_after_unlink(
+    settings: Settings,
+    clock: MutableClock,
+    unlink_before_restart: bool,
+) -> None:
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    store = SetupStore(settings)
+    before = store.snapshot()
+    assert before.provider_credential is not None
+    vault = CredentialVault(settings.credential_key_path)
+    plan = vault.plan_rotation(before.provider_credential)
+    token = "restart-retirement-token"
+    assert store.begin_staged_rotation(
+        staged_version=plan.key_version,
+        token=token,
+        expected_credential=before.provider_credential,
+        expected_setup_epoch=before.setup_epoch,
+        now=clock(),
+    )
+    replacement = vault.materialize_rotation("replacement-provider-secret", plan)
+    request = ProviderProbeRequest(
+        mode="external",
+        base_url="https://api.example.com/v1",
+        api_key="replacement-provider-secret",
+        model="replacement-model",
+    )
+    result = ProviderProbeResult(
+        status="verified",
+        provider="openai-compatible",
+        model="replacement-model",
+        latency_ms=5,
+    )
+    assert store.commit_staged_rotation(
+        request,
+        result,
+        replacement,
+        token=token,
+        now=clock(),
+    )
+    if unlink_before_restart:
+        vault.retire_version(before.provider_credential.key_version)
+
+    create_app(settings=settings, clock=clock)
+
+    recovered = SetupStore(settings).snapshot()
+    assert recovered.provider_credential == replacement
+    assert recovered.credential_retirement_pending_version is None
+    assert vault.decrypt(replacement) == "replacement-provider-secret"
+    with pytest.raises(CredentialUnavailableError):
+        vault.decrypt(before.provider_credential)
+
+
+@pytest.mark.parametrize(
+    "unsafe_kind",
+    ["symlink", "mode", "unknown-version", "unknown-name"],
+)
+def test_unsafe_or_unknown_staged_path_prevents_startup_without_deletion(
+    settings: Settings,
+    clock: MutableClock,
+    unsafe_kind: str,
+) -> None:
+    configured = TestClient(
+        create_app(
+            settings=settings,
+            clock=clock,
+            provider_gateway=RecordingProviderGateway(),
+        )
+    )
+    complete_setup(configured, settings, clock, mode="external")
+    store = SetupStore(settings)
+    before = store.snapshot()
+    assert before.provider_credential is not None
+    vault = CredentialVault(settings.credential_key_path)
+    plan = vault.plan_rotation(before.provider_credential)
+    token = "crashed-owner-token"
+    assert store.begin_staged_rotation(
+        staged_version=plan.key_version,
+        token=token,
+        expected_credential=before.provider_credential,
+        expected_setup_epoch=before.setup_epoch,
+        now=clock(),
+    )
+    staged_path = settings.credential_key_path.with_name(
+        f"{settings.credential_key_path.stem}.file-v1-{plan.identifier}"
+        f"{settings.credential_key_path.suffix}"
+    )
+    if unsafe_kind == "symlink":
+        staged_path.symlink_to(settings.credential_key_path)
+        unsafe_path = staged_path
+    elif unsafe_kind == "mode":
+        staged_path.write_bytes(b"partial")
+        staged_path.chmod(0o644)
+        unsafe_path = staged_path
+    elif unsafe_kind == "unknown-version":
+        unsafe_path = settings.credential_key_path.with_name(
+            f"{settings.credential_key_path.stem}.file-v1-{'f' * 32}"
+            f"{settings.credential_key_path.suffix}"
+        )
+        unsafe_path.write_bytes(b"unknown-key")
+        unsafe_path.chmod(0o600)
+    else:
+        unsafe_path = settings.credential_key_path.parent / "unrecognized-secret"
+        unsafe_path.write_bytes(b"unknown-key")
+        unsafe_path.chmod(0o600)
+
+    with pytest.raises(CredentialUnavailableError):
+        create_app(settings=settings, clock=clock)
+
+    assert unsafe_path.exists() or unsafe_path.is_symlink()
+    pending = SetupStore(settings).snapshot()
+    assert pending.credential_retirement_pending_version == plan.key_version
     assert pending.credential_retirement_token == token

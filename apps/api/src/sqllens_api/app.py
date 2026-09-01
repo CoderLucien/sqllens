@@ -47,6 +47,7 @@ from sqllens_api.setup import (
     OWNER_COOKIE_NAME,
     SETUP_COOKIE_NAME,
     SetupSessionSigner,
+    SetupSnapshot,
     SetupStore,
 )
 
@@ -285,11 +286,27 @@ def create_app(
     app.state.setup_store = store
     app.state.diagnosis_store = diagnosis_store
 
+    def credential_versions_for(snapshot: SetupSnapshot) -> set[str]:
+        versions: set[str] = set()
+        provider_credential = snapshot.provider_credential
+        pending_version = snapshot.credential_retirement_pending_version
+        if provider_credential is not None:
+            versions.add(provider_credential.key_version)
+        if pending_version is not None:
+            versions.add(pending_version)
+        return versions
+
     def resume_credential_retirement() -> None:
         snapshot = store.snapshot()
         pending_version = snapshot.credential_retirement_pending_version
         if pending_version is None:
             return
+        if snapshot.credential_retirement_operation == "staged_rotation":
+            raise ApiError(
+                503,
+                "CREDENTIAL_ROTATION_IN_PROGRESS",
+                "Credential rotation is in progress and must be retried.",
+            )
         try:
             vault.retire_version(pending_version)
         except CredentialUnavailableError as error:
@@ -307,6 +324,34 @@ def create_app(
                 "CREDENTIAL_RETIREMENT_PENDING",
                 "Credential cleanup is pending and must be retried.",
             )
+
+    def recover_credential_state_before_traffic() -> None:
+        snapshot = store.snapshot()
+        vault.assert_key_file_closure(credential_versions_for(snapshot))
+        pending_version = snapshot.credential_retirement_pending_version
+        if pending_version is None:
+            return
+        if snapshot.credential_retirement_operation == "staged_rotation":
+            token = snapshot.credential_retirement_token
+            if token is None:
+                raise CredentialUnavailableError(
+                    "staged credential rotation token is unavailable"
+                )
+            vault.retire_staged_version(pending_version)
+            if not store.abort_staged_rotation(pending_version, token, clock()):
+                raise CredentialUnavailableError(
+                    "staged credential rotation changed during startup recovery"
+                )
+        else:
+            vault.retire_version(pending_version)
+            if not store.complete_credential_retirement(pending_version, clock()):
+                raise CredentialUnavailableError(
+                    "credential retirement changed during startup recovery"
+                )
+        recovered = store.snapshot()
+        vault.assert_key_file_closure(credential_versions_for(recovered))
+
+    recover_credential_state_before_traffic()
 
     def current_owner_token(request: Request) -> str | None:
         snapshot = store.snapshot()
@@ -339,10 +384,16 @@ def create_app(
         is_logout_api = request.url.path == "/api/v1/auth/logout"
         response: Response
         retirement_error: ApiError | None = None
+        retirement_snapshot = (
+            store.snapshot() if request.url.path.startswith("/api/v1/") else None
+        )
         if (
-            request.url.path.startswith("/api/v1/")
-            and request.url.path != "/api/v1/setup/status"
-            and store.snapshot().credential_retirement_pending_version is not None
+            retirement_snapshot is not None
+            and retirement_snapshot.credential_retirement_pending_version is not None
+            and (
+                request.url.path != "/api/v1/setup/status"
+                or retirement_snapshot.credential_retirement_operation == "staged_rotation"
+            )
         ):
             try:
                 resume_credential_retirement()
@@ -848,39 +899,129 @@ def create_app(
             )
         assert payload.api_key is not None
         try:
-            encrypted = vault.rotate(
-                payload.api_key.get_secret_value(),
-                previous=snapshot.provider_credential,
-            )
+            plan = vault.plan_rotation(snapshot.provider_credential)
         except CredentialUnavailableError as error:
             raise ApiError(
                 503,
                 "CREDENTIAL_STORE_UNAVAILABLE",
                 "Credential storage failed.",
             ) from error
-        if not store.replace_provider_credential(
-            payload,
-            result,
-            encrypted,
+        token = uuid.uuid4().hex
+        if not store.begin_staged_rotation(
+            staged_version=plan.key_version,
+            token=token,
             expected_credential=snapshot.provider_credential,
             expected_setup_epoch=snapshot.setup_epoch,
             now=clock(),
         ):
-            configuration_in_use = diagnosis_store.has_active_lease()
-            if not store.schedule_orphan_credential_retirement(
-                encrypted.key_version,
-                clock(),
-            ):
-                try:
-                    vault.discard_rotation(encrypted)
-                except CredentialUnavailableError as error:
-                    raise ApiError(
-                        503,
-                        "CREDENTIAL_RETIREMENT_PENDING",
-                        "Credential cleanup is pending and must be retried.",
-                    ) from error
+            if diagnosis_store.has_active_lease():
+                raise ApiError(
+                    409,
+                    "MODEL_CONFIGURATION_IN_USE",
+                    "Model settings cannot change while a diagnosis job is running.",
+                )
+            if store.snapshot().credential_retirement_operation == "staged_rotation":
+                raise ApiError(
+                    409,
+                    "CREDENTIAL_ROTATION_IN_PROGRESS",
+                    "Another credential rotation is already in progress.",
+                )
+            raise ApiError(409, "SETTINGS_STATE_CHANGED", "Model settings changed concurrently.")
+
+        def abort_owned_stage() -> None:
+            try:
+                vault.retire_staged_version(plan.key_version)
+            except CredentialUnavailableError as error:
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_ROTATION_IN_PROGRESS",
+                    "Credential rotation cleanup is pending and must be retried.",
+                ) from error
+            if not store.abort_staged_rotation(plan.key_version, token, clock()):
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_ROTATION_IN_PROGRESS",
+                    "Credential rotation cleanup is pending and must be retried.",
+                )
+
+        def commit_is_durable(observed: SetupSnapshot) -> bool:
+            old_version = (
+                snapshot.provider_credential.key_version
+                if snapshot.provider_credential is not None
+                else None
+            )
+            retirement_matches = observed.credential_retirement_pending_version is None
+            retirement_matches = retirement_matches and (
+                observed.credential_retirement_operation is None
+            )
+            if old_version is not None:
+                retirement_matches = retirement_matches or (
+                    observed.credential_retirement_pending_version == old_version
+                    and observed.credential_retirement_operation == "rotation"
+                )
+            return (
+                observed.provider_credential == encrypted
+                and observed.credential_retirement_token is None
+                and retirement_matches
+            )
+
+        def stage_is_still_owned(observed: SetupSnapshot) -> bool:
+            return (
+                observed.provider_credential == snapshot.provider_credential
+                and observed.setup_epoch == snapshot.setup_epoch
+                and observed.credential_retirement_pending_version == plan.key_version
+                and observed.credential_retirement_operation == "staged_rotation"
+                and observed.credential_retirement_token == token
+            )
+
+        try:
+            encrypted = vault.materialize_rotation(
+                payload.api_key.get_secret_value(), plan
+            )
+        except BaseException as error:
+            abort_owned_stage()
+            if not isinstance(error, CredentialUnavailableError):
+                raise
+            raise ApiError(
+                503,
+                "CREDENTIAL_STORE_UNAVAILABLE",
+                "Credential storage failed.",
+            ) from error
+        try:
+            committed = store.commit_staged_rotation(
+                payload,
+                result,
+                encrypted,
+                token=token,
+                now=clock(),
+            )
+        except BaseException as error:
+            observed = store.snapshot()
+            if commit_is_durable(observed):
+                committed = True
+                if not isinstance(error, Exception):
+                    resume_credential_retirement()
+                    raise
+            elif stage_is_still_owned(observed):
+                abort_owned_stage()
+                if not isinstance(error, Exception):
+                    raise
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_ROTATION_IN_PROGRESS",
+                    "Credential rotation did not commit and was safely aborted.",
+                ) from error
             else:
-                resume_credential_retirement()
+                if not isinstance(error, Exception):
+                    raise
+                raise ApiError(
+                    503,
+                    "CREDENTIAL_ROTATION_STATE_UNCERTAIN",
+                    "Credential rotation state changed and must be inspected before retrying.",
+                ) from error
+        if not committed:
+            configuration_in_use = diagnosis_store.has_active_lease()
+            abort_owned_stage()
             raise ApiError(
                 409,
                 (

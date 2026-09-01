@@ -532,6 +532,11 @@ class DiagnosisStore:
                             .mappings()
                             .one()
                         )
+                        if (
+                            setup_row["credential_retirement_pending_version"]
+                            is not None
+                        ):
+                            raise DiagnosisCapacityError
                         provider_configuration = _provider_configuration_from_setup(setup_row)
                         connection.execute(
                             insert(diagnosis_jobs).values(
