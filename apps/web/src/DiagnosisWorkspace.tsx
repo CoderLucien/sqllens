@@ -8,7 +8,7 @@ import {
   RotateCcw,
   ShieldCheck
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 
 import {
   ApiClientError,
@@ -19,6 +19,8 @@ import {
 } from "./api";
 
 const MAX_SQL_BYTES = 65_536;
+const JOB_POLL_ATTEMPTS = 20;
+const JOB_POLL_INTERVAL_MS = 100;
 
 const MISSING_EVIDENCE_LABELS: Record<string, string> = {
   tidb_version: "TiDB 版本",
@@ -57,6 +59,7 @@ export function DiagnosisWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<DiagnosisJob | null>(null);
   const [diagnosisCase, setDiagnosisCase] = useState<DiagnosisCase | null>(null);
+  const submissionRef = useRef<{ intent: string; key: string } | null>(null);
   const byteCount = useMemo(() => new TextEncoder().encode(sql).byteLength, [sql]);
   const inputTooLarge = byteCount > MAX_SQL_BYTES;
   const canSubmit = sql.trim().length > 0 && !inputTooLarge && !busy;
@@ -70,25 +73,42 @@ export function DiagnosisWorkspace({
     setError(null);
     setJob(null);
     setDiagnosisCase(null);
+    const intent = sql;
+    if (submissionRef.current?.intent !== intent) {
+      submissionRef.current = { intent, key: createIdempotencyKey() };
+    }
+    const idempotencyKey = submissionRef.current.key;
     void (async () => {
       try {
         const created = await apiRequest<DiagnosisJob>(
           "/api/v1/cases/sql",
           {
             method: "POST",
-            headers: { "Idempotency-Key": createIdempotencyKey() },
+            headers: { "Idempotency-Key": idempotencyKey },
             body: JSON.stringify({ sql })
           },
           csrfToken
         );
+        const settled = await waitForDiagnosisJob(created);
+        if (settled.status === "failed") {
+          throw new ApiClientError(
+            settled.error?.code ?? "DIAGNOSIS_FAILED",
+            "诊断任务未完成，请重新提交。",
+            409
+          );
+        }
         const fetched = await apiRequest<DiagnosisCase>(
-          `/api/v1/cases/${encodeURIComponent(created.caseId)}`
+          `/api/v1/cases/${encodeURIComponent(settled.caseId)}`
         );
-        setJob(created);
+        setJob(settled);
         setDiagnosisCase(fetched);
+        submissionRef.current = null;
       } catch (requestError) {
         if (requestError instanceof ApiClientError && requestError.code === "AUTH_REQUIRED") {
           onAuthRequired?.();
+        }
+        if (requestError instanceof ApiClientError && isDeterministicClientRejection(requestError)) {
+          submissionRef.current = null;
         }
         setError(messageFor(requestError));
       } finally {
@@ -137,7 +157,11 @@ export function DiagnosisWorkspace({
               autoCorrect="off"
               id="diagnosis-sql"
               onChange={(event) => {
-                setSql(event.target.value);
+                const nextSql = event.target.value;
+                if (submissionRef.current?.intent !== nextSql) {
+                  submissionRef.current = null;
+                }
+                setSql(nextSql);
                 setError(null);
               }}
               placeholder="SELECT ..."
@@ -349,6 +373,32 @@ function createIdempotencyKey(): string {
   const random = new Uint8Array(16);
   crypto.getRandomValues(random);
   return `web-${Array.from(random, (value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function waitForDiagnosisJob(initial: DiagnosisJob): Promise<DiagnosisJob> {
+  let current = initial;
+  for (let attempt = 0; current.status === "in_progress" && attempt < JOB_POLL_ATTEMPTS; attempt += 1) {
+    await delay(JOB_POLL_INTERVAL_MS);
+    current = await apiRequest<DiagnosisJob>(
+      `/api/v1/jobs/${encodeURIComponent(current.jobId)}`
+    );
+  }
+  if (current.status === "in_progress") {
+    throw new Error("diagnosis job polling budget exhausted");
+  }
+  return current;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function isDeterministicClientRejection(error: ApiClientError): boolean {
+  return (
+    error.status >= 400 &&
+    error.status < 500 &&
+    ![408, 425, 429].includes(error.status)
+  );
 }
 
 function messageFor(error: unknown): string {

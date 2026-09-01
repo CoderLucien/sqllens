@@ -34,6 +34,13 @@ class EncryptedCredential:
     key_version: str
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class CredentialRotationPlan:
+    identifier: str
+    key_version: str
+    key: bytes
+
+
 class CredentialVault:
     def __init__(self, key_path: Path) -> None:
         self.key_path = key_path
@@ -49,6 +56,18 @@ class CredentialVault:
         previous: EncryptedCredential | None,
     ) -> EncryptedCredential:
         """Create a new versioned key without invalidating the current DB reference."""
+        plan = self.plan_rotation(previous)
+        try:
+            return self.materialize_rotation(plaintext, plan)
+        except Exception:
+            self._discard_path(self._versioned_path(plan.identifier))
+            raise
+
+    def plan_rotation(
+        self,
+        previous: EncryptedCredential | None,
+    ) -> CredentialRotationPlan:
+        """Create an ephemeral plan without writing key material to disk."""
         self._ensure_directory(create=True)
         previous_path = (
             self._path_for_version(previous.key_version)[0]
@@ -56,36 +75,143 @@ class CredentialVault:
             else self.key_path
         )
         self._validate_rotation_source(previous_path)
+        identifier = secrets.token_hex(16)
+        key = secrets.token_bytes(32)
+        return CredentialRotationPlan(
+            identifier=identifier,
+            key_version=self._versioned_key_version(identifier, key),
+            key=key,
+        )
 
-        for _attempt in range(4):
-            identifier = secrets.token_hex(16)
-            rotated_path = self._versioned_path(identifier)
-            try:
-                key = self._create_key_file(rotated_path)
-            except _KeyAlreadyExistsError:
-                continue
-            version = self._versioned_key_version(identifier, key)
-            try:
-                return self._encrypt_with_key(plaintext, key, version)
-            except Exception:
-                self._discard_path(rotated_path)
-                raise
-        raise CredentialUnavailableError("credential key rotation could not be allocated safely")
+    def materialize_rotation(
+        self,
+        plaintext: str,
+        plan: CredentialRotationPlan,
+    ) -> EncryptedCredential:
+        """Persist an already-staged rotation plan at its deterministic path."""
+        expected_version = self._versioned_key_version(plan.identifier, plan.key)
+        if plan.key_version != expected_version:
+            raise CredentialUnavailableError("credential rotation plan is invalid")
+        self._ensure_directory(create=True)
+        path = self._versioned_path(plan.identifier)
+        self._write_planned_key(path, plan.key)
+        return self._encrypt_with_key(plaintext, plan.key, plan.key_version)
 
     def discard_rotation(self, encrypted: EncryptedCredential) -> None:
         match = _VERSIONED_KEY_PATTERN.fullmatch(encrypted.key_version)
         if match is None:
-            return
-        self._discard_path(self._versioned_path(match.group("identifier")))
+            raise CredentialUnavailableError("rotated credential key version is unsupported")
+        self.retire_version(encrypted.key_version)
 
     def retire(self, encrypted: EncryptedCredential | None) -> None:
         if encrypted is None:
             return
+        self.retire_version(encrypted.key_version)
+
+    def retire_staged_version(self, version: str) -> None:
+        """Remove the exact safe path authorized by a durable staged version."""
+        if _VERSIONED_KEY_PATTERN.fullmatch(version) is None:
+            raise CredentialUnavailableError("staged credential key version is unsupported")
+        self.retire_version(version)
+
+    def assert_key_file_closure(self, authorized_versions: set[str]) -> None:
+        """Reject credential key files that have no durable database reference."""
         try:
-            path, _version = self._path_for_version(encrypted.key_version)
-        except CredentialUnavailableError:
+            self.key_path.parent.lstat()
+        except FileNotFoundError:
             return
-        self._discard_path(path)
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be inspected safely"
+            ) from error
+        self._ensure_directory(create=False)
+        authorized_names = {
+            self._path_for_version(version)[0].name for version in authorized_versions
+        }
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            directory_fd = os.open(self.key_path.parent, flags)
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be opened safely"
+            ) from error
+        try:
+            directory = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.geteuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700
+            ):
+                raise CredentialUnavailableError("credential directory permissions are invalid")
+            for name in os.listdir(directory_fd):
+                if name not in authorized_names:
+                    raise CredentialUnavailableError(
+                        "credential directory contains an unreferenced key"
+                    )
+                try:
+                    metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                except OSError as error:
+                    raise CredentialUnavailableError(
+                        "credential key cannot be inspected safely"
+                    ) from error
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                ):
+                    raise CredentialUnavailableError(
+                        "credential key permissions are invalid"
+                    )
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be inspected safely"
+            ) from error
+        finally:
+            os.close(directory_fd)
+
+    def retire_version(self, version: str) -> None:
+        """Strictly and idempotently remove one detached credential key version."""
+        path, _expected_version = self._path_for_version(version)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            directory_fd = os.open(path.parent, flags)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be opened safely"
+            ) from error
+        try:
+            directory = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.geteuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700
+            ):
+                raise CredentialUnavailableError("credential directory permissions are invalid")
+            try:
+                metadata = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            except OSError as error:
+                raise CredentialUnavailableError(
+                    "credential key cannot be inspected safely"
+                ) from error
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+            ):
+                raise CredentialUnavailableError("credential key is unsafe to retire")
+            try:
+                os.unlink(path.name, dir_fd=directory_fd)
+                os.fsync(directory_fd)
+            except OSError as error:
+                raise CredentialUnavailableError(
+                    "credential key cannot be retired safely"
+                ) from error
+        finally:
+            os.close(directory_fd)
 
     def decrypt(self, encrypted: EncryptedCredential) -> str:
         key_path, expected_version = self._path_for_version(encrypted.key_version)
@@ -180,6 +306,66 @@ class CredentialVault:
                 "credential key cannot be written safely"
             ) from error
         return key
+
+    def _write_planned_key(self, path: Path, key: bytes) -> None:
+        if len(key) != 32:
+            raise CredentialUnavailableError("credential rotation key has an invalid length")
+        try:
+            descriptor = os.open(
+                path,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except FileExistsError as error:
+            raise CredentialUnavailableError(
+                "credential rotation path already exists"
+            ) from error
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential key cannot be created safely"
+            ) from error
+
+        try:
+            os.fchmod(descriptor, 0o600)
+            remaining = memoryview(key)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise OSError("credential key write made no progress")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential key cannot be written safely"
+            ) from error
+        finally:
+            os.close(descriptor)
+
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            directory_fd = os.open(path.parent, flags)
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be opened safely"
+            ) from error
+        try:
+            directory = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.geteuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700
+            ):
+                raise CredentialUnavailableError("credential directory permissions are invalid")
+            os.fsync(directory_fd)
+        except OSError as error:
+            raise CredentialUnavailableError(
+                "credential directory cannot be synchronized safely"
+            ) from error
+        finally:
+            os.close(directory_fd)
 
     def _read_key(self, path: Path) -> bytes:
         self._ensure_directory(create=False)

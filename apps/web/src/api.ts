@@ -35,7 +35,7 @@ export interface OwnerSession {
   csrf_token: string | null;
 }
 
-export type ExplanationStatus = "not_requested" | "applied" | "degraded";
+export type ExplanationStatus = "pending" | "not_requested" | "applied" | "degraded";
 
 export interface DiagnosisExplanation {
   status: ExplanationStatus;
@@ -48,8 +48,12 @@ export interface DiagnosisExplanation {
 export interface DiagnosisJob {
   jobId: string;
   caseId: string;
-  status: "completed";
+  status: "in_progress" | "completed" | "failed";
   explanation: DiagnosisExplanation;
+  error?: {
+    code: string;
+    retryable: boolean;
+  };
 }
 
 export interface DiagnosisEvidence {
@@ -132,10 +136,12 @@ interface ErrorEnvelope {
 
 export class ApiClientError extends Error {
   readonly code: string;
+  readonly status: number;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, status: number) {
     super(message);
     this.code = code;
+    this.status = status;
   }
 }
 
@@ -160,7 +166,8 @@ export async function apiRequest<T>(
   if (!response.ok) {
     throw new ApiClientError(
       body.error?.code ?? "REQUEST_FAILED",
-      body.error?.message ?? "请求未完成，请重试。"
+      body.error?.message ?? "请求未完成，请重试。",
+      response.status
     );
   }
   return body;

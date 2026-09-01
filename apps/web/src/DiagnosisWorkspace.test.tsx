@@ -199,6 +199,71 @@ describe("diagnosis workspace", () => {
     expect(input.value).toBe("DELETE FROM orders");
   });
 
+  it("reuses the submission key after an ambiguous network failure", async () => {
+    const inProgressJob = {
+      ...completedJob("not_requested", null),
+      status: "in_progress",
+      explanation: {
+        status: "pending",
+        code: null,
+        policy: "pending/v1",
+        payloadSchema: null,
+        payloadDigest: null
+      }
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("connection closed after response"))
+      .mockResolvedValueOnce(jsonResponse(inProgressJob, 202))
+      .mockResolvedValueOnce(jsonResponse(completedJob("not_requested", null)))
+      .mockResolvedValueOnce(jsonResponse(diagnosisCase));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DiagnosisWorkspace csrfToken="owner-csrf" modelMode="rules" />);
+    fireEvent.change(screen.getByRole("textbox", { name: "SQL" }), {
+      target: { value: "  SELECT 1\r\n" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "生成诊断案例" }));
+    await screen.findByRole("alert");
+
+    fireEvent.click(screen.getByRole("button", { name: "生成诊断案例" }));
+    await screen.findByRole("heading", { name: "证据完整度" });
+
+    const firstHeaders = new Headers(fetchMock.mock.calls[0][1]?.headers);
+    const retryHeaders = new Headers(fetchMock.mock.calls[1][1]?.headers);
+    expect(firstHeaders.get("Idempotency-Key")).toMatch(/^web-/);
+    expect(retryHeaders.get("Idempotency-Key")).toBe(
+      firstHeaders.get("Idempotency-Key")
+    );
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/v1/jobs/job_1234567890abcdef");
+    expect(fetchMock.mock.calls[3][0]).toBe(`/api/v1/cases/${diagnosisCase.caseId}`);
+  });
+
+  it("rotates the submission key when any SQL payload byte changes", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("connection closed after response"))
+      .mockResolvedValueOnce(jsonResponse(completedJob("not_requested", null)))
+      .mockResolvedValueOnce(jsonResponse(diagnosisCase));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DiagnosisWorkspace csrfToken="owner-csrf" modelMode="rules" />);
+    const input = screen.getByRole("textbox", { name: "SQL" });
+    fireEvent.change(input, { target: { value: "  SELECT 1\r\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成诊断案例" }));
+    await screen.findByRole("alert");
+
+    fireEvent.change(input, { target: { value: "SELECT 1\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成诊断案例" }));
+    await screen.findByRole("heading", { name: "证据完整度" });
+
+    const firstHeaders = new Headers(fetchMock.mock.calls[0][1]?.headers);
+    const secondHeaders = new Headers(fetchMock.mock.calls[1][1]?.headers);
+    expect(secondHeaders.get("Idempotency-Key")).not.toBe(
+      firstHeaders.get("Idempotency-Key")
+    );
+  });
+
   it("returns an expired Owner session to the login shell", async () => {
     const onAuthRequired = vi.fn();
     vi.stubGlobal(

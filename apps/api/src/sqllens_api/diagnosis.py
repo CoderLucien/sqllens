@@ -9,18 +9,20 @@ from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 import sqlglot
-from sqlalchemy import Column, MetaData, String, Table, Text, insert, select
-from sqlalchemy.engine import Engine
+from sqlalchemy import Column, MetaData, String, Table, Text, delete, insert, select, update
+from sqlalchemy.engine import Engine, RowMapping
 from sqlalchemy.exc import IntegrityError
 from sqlglot import exp
 from sqlglot.errors import ErrorLevel, SqlglotError
 
+from sqllens_api.credentials import EncryptedCredential
 from sqllens_api.provider import (
     ModelEvidence,
     ModelEvidenceCompleteness,
     ModelHypothesis,
     ModelRankingPayload,
 )
+from sqllens_api.setup import diagnosis_admission, setup_state
 
 MAX_SQL_BYTES = 65_536
 MAX_IDEMPOTENCY_KEY_LENGTH = 128
@@ -47,6 +49,7 @@ diagnosis_jobs = Table(
     Column("case_id", String(80), nullable=False, unique=True),
     Column("idempotency_key", String(128), nullable=False, unique=True),
     Column("request_fingerprint", String(71), nullable=False),
+    Column("provider_snapshot", Text),
     Column("payload", Text, nullable=False),
     Column("created_at", String(40), nullable=False),
 )
@@ -84,6 +87,29 @@ class SqlDiagnosisError(RuntimeError):
 
 class IdempotencyConflictError(RuntimeError):
     pass
+
+
+class DiagnosisCapacityError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderConfiguration:
+    mode: Literal["rules", "external"]
+    revision: str | None
+    external_model_egress: bool
+    allowed_provider_hosts: tuple[str, ...]
+    base_url: str | None
+    model: str | None
+    credential: EncryptedCredential | None
+
+
+@dataclass(frozen=True, slots=True)
+class JobReservation:
+    job: dict[str, Any]
+    owner: bool
+    expected_payload: str | None = None
+    provider_configuration: ProviderConfiguration | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,9 +309,10 @@ def build_case(
     provider: str | None,
     model: str | None,
     prompt: str | None = None,
+    case_id: str | None = None,
 ) -> dict[str, Any]:
     timestamp = _rfc3339(now)
-    case_id = _identifier("case")
+    case_id = case_id or _identifier("case")
     evidence_id = _identifier("ev")
     structure_payload = json.dumps(
         asdict(structure),
@@ -445,54 +472,224 @@ class DiagnosisStore:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         diagnosis_metadata.create_all(engine)
+        diagnosis_admission.create(engine, checkfirst=True)
+        with self.engine.begin() as connection:
+            existing_columns = {
+                row[1]
+                for row in connection.exec_driver_sql("PRAGMA table_info(diagnosis_jobs)")
+            }
+            if "provider_snapshot" not in existing_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE diagnosis_jobs ADD COLUMN provider_snapshot TEXT"
+                )
 
-    def create_or_get(
+    def reserve_job(
         self,
         *,
         idempotency_key: str,
         fingerprint: str,
+        case_id: str | None = None,
+        now: datetime,
+    ) -> JobReservation:
+        job_id = _identifier("job")
+        case_id = case_id or _identifier("case")
+        job_payload: dict[str, Any] = {
+            "jobId": job_id,
+            "caseId": case_id,
+            "status": "in_progress",
+            "explanation": {
+                "status": "pending",
+                "code": None,
+                "policy": "pending/v1",
+                "payloadSchema": None,
+                "payloadDigest": None,
+            },
+        }
+        serialized_job = _serialize(job_payload)
+        created_at = _rfc3339(now)
+        try:
+            with self.engine.connect() as connection:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    existing = (
+                        connection.execute(
+                            select(
+                                diagnosis_jobs.c.request_fingerprint,
+                                diagnosis_jobs.c.payload,
+                            ).where(diagnosis_jobs.c.idempotency_key == idempotency_key)
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
+                    if existing is not None:
+                        reservation = JobReservation(
+                            job=self._resolve_replay(dict(existing), fingerprint),
+                            owner=False,
+                        )
+                    else:
+                        setup_row = (
+                            connection.execute(select(setup_state).where(setup_state.c.id == 1))
+                            .mappings()
+                            .one()
+                        )
+                        if (
+                            setup_row["credential_retirement_pending_version"]
+                            is not None
+                        ):
+                            raise DiagnosisCapacityError
+                        provider_configuration = _provider_configuration_from_setup(setup_row)
+                        connection.execute(
+                            insert(diagnosis_jobs).values(
+                                job_id=job_id,
+                                case_id=case_id,
+                                idempotency_key=idempotency_key,
+                                request_fingerprint=fingerprint,
+                                provider_snapshot=_serialize_provider_configuration(
+                                    provider_configuration
+                                ),
+                                payload=serialized_job,
+                                created_at=created_at,
+                            )
+                        )
+                        lease = connection.execute(
+                            insert(diagnosis_admission)
+                            .prefix_with("OR IGNORE")
+                            .values(slot=1, job_id=job_id, created_at=created_at)
+                        )
+                        if lease.rowcount != 1:
+                            raise DiagnosisCapacityError
+                        reservation = JobReservation(
+                            job=job_payload,
+                            owner=True,
+                            expected_payload=serialized_job,
+                            provider_configuration=provider_configuration,
+                        )
+                except BaseException:
+                    connection.rollback()
+                    raise
+                else:
+                    connection.commit()
+        except IntegrityError:
+            concurrent = self._job_by_idempotency_key(idempotency_key)
+            if concurrent is not None:
+                return JobReservation(
+                    job=self._resolve_replay(concurrent, fingerprint),
+                    owner=False,
+                )
+            if self.has_active_lease():
+                raise DiagnosisCapacityError from None
+            raise
+        return reservation
+
+    def complete_job(
+        self,
+        reservation: JobReservation,
+        *,
         case_payload: dict[str, Any],
         explanation: dict[str, str | None],
         now: datetime,
     ) -> dict[str, Any]:
-        existing = self._job_by_idempotency_key(idempotency_key)
-        if existing is not None:
-            return self._resolve_replay(existing, fingerprint)
-
-        job_id = _identifier("job")
+        if not reservation.owner or reservation.expected_payload is None:
+            return reservation.job
         case_id = cast(str, case_payload["caseId"])
-        job_payload: dict[str, Any] = {
-            "jobId": job_id,
+        if case_id != reservation.job["caseId"]:
+            raise RuntimeError("reserved case identifier changed")
+        completed = {
+            "jobId": reservation.job["jobId"],
             "caseId": case_id,
             "status": "completed",
             "explanation": explanation,
         }
-        created_at = _rfc3339(now)
-        try:
-            with self.engine.begin() as connection:
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(diagnosis_cases).values(
+                    case_id=case_id,
+                    payload=_serialize(case_payload),
+                    created_at=_rfc3339(now),
+                )
+            )
+            result = connection.execute(
+                update(diagnosis_jobs)
+                .where(
+                    diagnosis_jobs.c.job_id == reservation.job["jobId"],
+                    diagnosis_jobs.c.payload == reservation.expected_payload,
+                )
+                .values(payload=_serialize(completed))
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("diagnosis job ownership changed")
+            connection.execute(
+                delete(diagnosis_admission).where(
+                    diagnosis_admission.c.job_id == reservation.job["jobId"]
+                )
+            )
+        return completed
+
+    def fail_job(
+        self,
+        reservation: JobReservation,
+        *,
+        code: str,
+        retryable: bool = True,
+    ) -> dict[str, Any]:
+        if not reservation.owner or reservation.expected_payload is None:
+            return reservation.job
+        failed = _failed_job(reservation.job, code, retryable=retryable)
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(diagnosis_jobs)
+                .where(
+                    diagnosis_jobs.c.job_id == reservation.job["jobId"],
+                    diagnosis_jobs.c.payload == reservation.expected_payload,
+                )
+                .values(payload=_serialize(failed))
+            )
+            if result.rowcount == 1:
                 connection.execute(
-                    insert(diagnosis_cases).values(
-                        case_id=case_id,
-                        payload=_serialize(case_payload),
-                        created_at=created_at,
+                    delete(diagnosis_admission).where(
+                        diagnosis_admission.c.job_id == reservation.job["jobId"]
                     )
                 )
+        if result.rowcount == 1:
+            return failed
+        current = self.get_job(cast(str, reservation.job["jobId"]))
+        return current or failed
+
+    def cancel_job(self, reservation: JobReservation) -> dict[str, Any]:
+        return self.fail_job(reservation, code="REQUEST_CANCELLED")
+
+    def recover_interrupted_jobs(self) -> int:
+        recovered = 0
+        with self.engine.begin() as connection:
+            rows = (
                 connection.execute(
-                    insert(diagnosis_jobs).values(
-                        job_id=job_id,
-                        case_id=case_id,
-                        idempotency_key=idempotency_key,
-                        request_fingerprint=fingerprint,
-                        payload=_serialize(job_payload),
-                        created_at=created_at,
-                    )
+                    select(diagnosis_jobs.c.job_id, diagnosis_jobs.c.payload)
                 )
-        except IntegrityError:
-            concurrent = self._job_by_idempotency_key(idempotency_key)
-            if concurrent is None:
-                raise
-            return self._resolve_replay(concurrent, fingerprint)
-        return job_payload
+                .mappings()
+                .all()
+            )
+            for row in rows:
+                payload = _deserialize(row["payload"])
+                if payload.get("status") != "in_progress":
+                    continue
+                result = connection.execute(
+                    update(diagnosis_jobs)
+                    .where(
+                        diagnosis_jobs.c.job_id == row["job_id"],
+                        diagnosis_jobs.c.payload == row["payload"],
+                    )
+                    .values(payload=_serialize(_failed_job(payload, "PROCESS_INTERRUPTED")))
+                )
+                recovered += result.rowcount
+            connection.execute(delete(diagnosis_admission))
+        return recovered
+
+    def has_active_lease(self) -> bool:
+        with self.engine.connect() as connection:
+            return (
+                connection.execute(select(diagnosis_admission.c.slot).limit(1)).first()
+                is not None
+            )
 
     def resolve_idempotency(
         self,
@@ -547,12 +744,89 @@ class DiagnosisStore:
         return _deserialize(cast(str, existing["payload"]))
 
 
+def _provider_configuration_from_setup(
+    row: RowMapping,
+) -> ProviderConfiguration:
+    mode: Literal["rules", "external"] = (
+        "external" if row["model_mode"] == "external" else "rules"
+    )
+    credential = None
+    if row["provider_credential_ciphertext"] and row["provider_credential_key_version"]:
+        credential = EncryptedCredential(
+            ciphertext=cast(str, row["provider_credential_ciphertext"]),
+            key_version=cast(str, row["provider_credential_key_version"]),
+        )
+    allowed_hosts = tuple(
+        sorted(cast(list[str], json.loads(row["allowed_provider_hosts"] or "[]")))
+    )
+    revision = None
+    if mode == "external":
+        revision_payload = {
+            "allowedProviderHosts": allowed_hosts,
+            "baseUrl": row["provider_base_url"],
+            "credentialCiphertextDigest": (
+                hashlib.sha256(credential.ciphertext.encode("ascii")).hexdigest()
+                if credential is not None
+                else None
+            ),
+            "credentialKeyVersion": credential.key_version if credential is not None else None,
+            "externalModelEgress": row["external_model_egress"] is True,
+            "model": row["provider_model"],
+            "setupEpoch": row["setup_epoch"],
+        }
+        digest = hashlib.sha256(_serialize(revision_payload).encode("ascii")).hexdigest()
+        revision = f"openai-compatible@sha256:{digest}"
+    return ProviderConfiguration(
+        mode=mode,
+        revision=revision,
+        external_model_egress=row["external_model_egress"] is True,
+        allowed_provider_hosts=allowed_hosts,
+        base_url=cast(str | None, row["provider_base_url"]),
+        model=cast(str | None, row["provider_model"]),
+        credential=credential,
+    )
+
+
+def _serialize_provider_configuration(configuration: ProviderConfiguration) -> str:
+    return _serialize(
+        {
+            "mode": configuration.mode,
+            "revision": configuration.revision,
+            "externalModelEgress": configuration.external_model_egress,
+            "allowedProviderHosts": list(configuration.allowed_provider_hosts),
+            "baseUrl": configuration.base_url,
+            "model": configuration.model,
+            "credential": (
+                {
+                    "ciphertext": configuration.credential.ciphertext,
+                    "keyVersion": configuration.credential.key_version,
+                }
+                if configuration.credential is not None
+                else None
+            ),
+        }
+    )
+
+
 def _serialize(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
 def _deserialize(payload: str) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(payload))
+
+
+def _failed_job(
+    job: dict[str, Any],
+    code: str,
+    *,
+    retryable: bool = True,
+) -> dict[str, Any]:
+    return {
+        **job,
+        "status": "failed",
+        "error": {"code": code, "retryable": retryable},
+    }
 
 
 def _identifier(prefix: str) -> str:

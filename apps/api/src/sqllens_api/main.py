@@ -10,6 +10,7 @@ import uvicorn
 
 from sqllens_api.app import create_app
 from sqllens_api.config import Settings
+from sqllens_api.credentials import CredentialUnavailableError, CredentialVault
 from sqllens_api.setup import SetupStore
 
 _MAX_BOOTSTRAP_INPUT_BYTES = 256
@@ -40,7 +41,18 @@ def ingest_bootstrap_stdin(
     store = SetupStore(settings)
     timestamp = now or datetime.now(UTC)
     if replace_existing:
-        return store.reissue_bootstrap_code(code, timestamp)
+        prepared = store.prepare_bootstrap_reissue(code, timestamp)
+        if not prepared:
+            return False
+        pending = store.snapshot().credential_retirement_pending_version
+        if pending is not None:
+            CredentialVault(settings.credential_key_path).retire_version(pending)
+            if (
+                not store.complete_credential_retirement(pending, timestamp)
+                and store.snapshot().credential_retirement_pending_version is not None
+            ):
+                raise RuntimeError("credential retirement did not complete")
+        return True
     return store.ingest_bootstrap_code(code, timestamp)
 
 
@@ -63,6 +75,9 @@ def cli() -> None:
         except ValueError:
             print("Bootstrap input is invalid.", file=sys.stderr)
             raise SystemExit(64) from None
+        except (CredentialUnavailableError, RuntimeError):
+            print("Bootstrap recovery could not complete safely.", file=sys.stderr)
+            raise SystemExit(74) from None
         if args.command == "bootstrap-reissue" and not created:
             print("Setup is finalized; bootstrap recovery is unavailable.", file=sys.stderr)
             raise SystemExit(73)
