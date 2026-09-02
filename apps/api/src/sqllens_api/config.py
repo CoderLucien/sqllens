@@ -28,6 +28,9 @@ class Settings:
     bootstrap_ttl_seconds: int = 600
     bootstrap_max_attempts: int = 5
     setup_session_ttl_seconds: int = 1_800
+    first_owner_nonce_ttl_seconds: int = 300
+    first_owner_max_attempts: int = 5
+    first_owner_rate_window_seconds: int = 60
     owner_session_ttl_seconds: int = 28_800
     owner_login_max_attempts: int = 5
     owner_login_lock_seconds: int = 60

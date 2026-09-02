@@ -4,7 +4,7 @@ import { ReactNode } from "react";
 import { SetupStage, SetupStatus } from "./api";
 
 const SETUP_STEPS: Array<{ stage: SetupStage; label: string }> = [
-  { stage: "bootstrap_required", label: "验证身份" },
+  { stage: "owner_required", label: "创建 Owner" },
   { stage: "security_policy_required", label: "安全策略" },
   { stage: "model_required", label: "模型连接" },
   { stage: "ready", label: "完成" }
@@ -128,6 +128,9 @@ function DailyShell({
 }
 
 function stageIndex(stage: SetupStage): number {
+  if (stage === "bootstrap_required") {
+    return 0;
+  }
   if (stage === "model_recovery_required") {
     return SETUP_STEPS.length - 1;
   }

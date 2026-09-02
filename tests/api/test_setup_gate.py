@@ -248,7 +248,7 @@ def test_status_reports_local_model_as_unavailable_without_claiming_gpu_detectio
 
     status = client.get("/api/v1/setup/status").json()
 
-    assert status["state"] == "bootstrap_required"
+    assert status["state"] == "owner_required"
     assert status["initialized"] is False
     assert status["bootstrap_hash_persisted"] is False
     assert status["local_model"] == {

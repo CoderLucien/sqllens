@@ -83,11 +83,16 @@ class ApiRequestBodyLimitMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = str(scope.get("path", ""))
         method = str(scope.get("method", ""))
-        if scope["type"] != "http" or not path.startswith("/api/") or method not in {
-            "POST",
-            "PUT",
-            "PATCH",
-        }:
+        if (
+            scope["type"] != "http"
+            or not path.startswith("/api/")
+            or method
+            not in {
+                "POST",
+                "PUT",
+                "PATCH",
+            }
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -183,6 +188,11 @@ class BootstrapInput(BaseModel):
     code: str = Field(min_length=12, max_length=80)
 
 
+class FirstOwnerInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: SecretStr = Field(min_length=12, max_length=128)
+
+
 class SecurityPolicyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -227,7 +237,7 @@ class SecurityPolicyInput(BaseModel):
 class FinalizeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["external", "local", "rules"]
-    owner_password: SecretStr = Field(min_length=12, max_length=128)
+    owner_password: SecretStr | None = Field(default=None, min_length=12, max_length=128)
 
 
 class LoginInput(BaseModel):
@@ -271,11 +281,7 @@ def create_app(
     default_gateway = HttpxProviderGateway() if provider_gateway is None else None
     gateway = provider_gateway or default_gateway
     assert gateway is not None
-    model_gateway = (
-        explanation_gateway
-        or default_gateway
-        or UnavailableModelExplanationGateway()
-    )
+    model_gateway = explanation_gateway or default_gateway or UnavailableModelExplanationGateway()
     vault = CredentialVault(runtime_settings.credential_key_path)
     diagnosis_store = DiagnosisStore(store.engine)
     diagnosis_store.recover_interrupted_jobs()
@@ -339,9 +345,7 @@ def create_app(
         if snapshot.credential_retirement_operation in STAGED_CREDENTIAL_OPERATIONS:
             token = snapshot.credential_retirement_token
             if token is None:
-                raise CredentialUnavailableError(
-                    "staged credential rotation token is unavailable"
-                )
+                raise CredentialUnavailableError("staged credential rotation token is unavailable")
             vault.retire_staged_version(pending_version)
             operation = snapshot.credential_retirement_operation
             aborted = (
@@ -367,7 +371,7 @@ def create_app(
     def current_owner_token(request: Request) -> str | None:
         snapshot = store.snapshot()
         cookie = request.cookies.get(OWNER_COOKIE_NAME)
-        if cookie is None or not snapshot.initialized or not snapshot.owner_configured:
+        if cookie is None or not snapshot.owner_configured:
             return None
         return signer.verify_owner(
             cookie,
@@ -395,9 +399,7 @@ def create_app(
         is_logout_api = request.url.path == "/api/v1/auth/logout"
         response: Response
         retirement_error: ApiError | None = None
-        retirement_snapshot = (
-            store.snapshot() if request.url.path.startswith("/api/v1/") else None
-        )
+        retirement_snapshot = store.snapshot() if request.url.path.startswith("/api/v1/") else None
         if (
             retirement_snapshot is not None
             and retirement_snapshot.credential_retirement_pending_version is not None
@@ -462,8 +464,7 @@ def create_app(
         request: Request, error: RequestValidationError
     ) -> JSONResponse:
         if any(
-            item.get("type") == "string_too_long"
-            and tuple(item.get("loc", ())) == ("body", "sql")
+            item.get("type") == "string_too_long" and tuple(item.get("loc", ())) == ("body", "sql")
             for item in error.errors()
         ):
             return error_response(
@@ -498,6 +499,26 @@ def create_app(
         if not signer.verify_csrf(token, x_csrf_token):
             raise ApiError(403, "CSRF_INVALID", "The setup request could not be verified.")
         return token
+
+    def require_setup_authorization(
+        request: Request,
+        x_csrf_token: Annotated[str | None, Header()] = None,
+    ) -> str:
+        snapshot = store.snapshot()
+        if snapshot.initialized:
+            raise ApiError(
+                409,
+                "SETUP_ALREADY_FINALIZED",
+                "Setup is finalized and cannot be changed through the setup API.",
+            )
+        if snapshot.owner_configured:
+            token = current_owner_token(request)
+            if token is None:
+                raise ApiError(401, "AUTH_REQUIRED", "Owner authentication is required.")
+            if not signer.verify_csrf(token, x_csrf_token):
+                raise ApiError(403, "CSRF_INVALID", "The owner request could not be verified.")
+            return token
+        return require_setup_session(request, x_csrf_token)
 
     def require_setup_stage(required: str) -> None:
         snapshot = store.snapshot()
@@ -592,14 +613,24 @@ def create_app(
     async def health() -> Response:
         return JSONResponse(content={"status": "ok"})
 
+    def has_canonical_first_run_headers(request: Request, *, require_origin: bool) -> bool:
+        raw_headers = request.scope.get("headers", [])
+        host_values = [value for key, value in raw_headers if key.lower() == b"host"]
+        origin_values = [value for key, value in raw_headers if key.lower() == b"origin"]
+        has_forwarded_header = any(
+            key.lower() == b"forwarded" or key.lower().startswith(b"x-forwarded-")
+            for key, _value in raw_headers
+        )
+        if host_values != [b"localhost:18080"] or has_forwarded_header:
+            return False
+        return not require_origin or origin_values == [b"http://localhost:18080"]
+
     @app.get("/api/v1/setup/status")
-    async def setup_status(request: Request) -> dict[str, object]:
+    async def setup_status(request: Request) -> Response:
         snapshot = store.snapshot()
         cookie = request.cookies.get(SETUP_COOKIE_NAME)
         session_token = (
-            signer.verify(cookie, clock(), expected_epoch=snapshot.setup_epoch)
-            if cookie
-            else None
+            signer.verify(cookie, clock(), expected_epoch=snapshot.setup_epoch) if cookie else None
         )
         now_value = clock().astimezone(UTC).timestamp()
         recovery_reason: str | None = None
@@ -611,7 +642,12 @@ def create_app(
                 recovery_reason = "bootstrap_expired"
             elif snapshot.bootstrap_failed_attempts >= runtime_settings.bootstrap_max_attempts:
                 recovery_reason = "attempt_limit_reached"
-        elif not snapshot.initialized and session_token is None:
+        elif (
+            not snapshot.initialized
+            and not snapshot.owner_configured
+            and session_token is None
+            and snapshot.stage != "owner_required"
+        ):
             recovery_reason = "setup_session_missing"
         if snapshot.credential_retirement_pending_version is not None:
             recovery_reason = "credential_retirement_pending"
@@ -623,16 +659,29 @@ def create_app(
             and not credential_available
             else snapshot.stage
         )
-        return {
+        owner_token = current_owner_token(request)
+        first_owner_proof = (
+            store.issue_first_owner_nonce(clock())
+            if snapshot.stage == "owner_required"
+            and not snapshot.owner_configured
+            and has_canonical_first_run_headers(request, require_origin=False)
+            else None
+        )
+        active_session_token = owner_token or session_token
+        content: dict[str, object] = {
             "state": reported_state,
             "initialized": snapshot.initialized,
+            "owner_configured": snapshot.owner_configured,
             "bootstrap_hash_persisted": snapshot.bootstrap_persisted,
             "model_mode": snapshot.model_mode,
             "external_model": {
                 "credential_available": credential_available,
                 "egress_enabled": snapshot.external_model_egress is True,
             },
-            "csrf_token": signer.csrf_for(session_token) if session_token else None,
+            "csrf_token": (
+                signer.csrf_for(active_session_token) if active_session_token is not None else None
+            ),
+            "setup_nonce": first_owner_proof[1] if first_owner_proof else None,
             "recovery": {
                 "required": recovery_reason is not None,
                 "action": "bootstrap-reissue" if recovery_reason is not None else None,
@@ -645,6 +694,81 @@ def create_app(
                 "message": "No qualified local model runtime is exposed to this service.",
             },
         }
+        response = JSONResponse(content=content)
+        if first_owner_proof is not None:
+            response.set_cookie(
+                SETUP_COOKIE_NAME,
+                first_owner_proof[0],
+                max_age=runtime_settings.first_owner_nonce_ttl_seconds,
+                httponly=True,
+                secure=runtime_settings.cookie_secure,
+                samesite="strict",
+                path="/api/v1/setup",
+            )
+        return response
+
+    @app.post("/api/v1/setup/owner", status_code=201)
+    async def create_first_owner(
+        payload: FirstOwnerInput,
+        request: Request,
+        x_setup_nonce: Annotated[str | None, Header(alias="X-Setup-Nonce")] = None,
+    ) -> Response:
+        if not has_canonical_first_run_headers(request, require_origin=True):
+            raise ApiError(
+                403,
+                "FIRST_RUN_LOCALHOST_REQUIRED",
+                "First-run Owner creation is available only from the canonical localhost UI.",
+            )
+        result = store.create_first_owner(
+            password=payload.password.get_secret_value(),
+            cookie=request.cookies.get(SETUP_COOKIE_NAME),
+            nonce=x_setup_nonce,
+            now=clock(),
+        )
+        if result.status == "limited":
+            raise ApiError(
+                429,
+                "FIRST_OWNER_RATE_LIMITED",
+                "First-run Owner creation is temporarily unavailable. Try again later.",
+            )
+        if result.status == "already_configured":
+            raise ApiError(409, "OWNER_ALREADY_CONFIGURED", "The local Owner already exists.")
+        if result.status == "unavailable":
+            raise ApiError(
+                409,
+                "FIRST_RUN_UNAVAILABLE",
+                "First-run Owner creation is unavailable in the current setup state.",
+            )
+        if result.status != "created" or result.setup_epoch is None or result.session_epoch is None:
+            raise ApiError(
+                403,
+                "SETUP_NONCE_INVALID",
+                "The first-run browser proof is invalid or unavailable.",
+            )
+        owner_cookie, owner_csrf = signer.issue_owner(
+            clock(),
+            setup_epoch=result.setup_epoch,
+            session_epoch=result.session_epoch,
+        )
+        response = JSONResponse(
+            status_code=201,
+            content={
+                "state": "security_policy_required",
+                "authenticated": True,
+                "csrf_token": owner_csrf,
+            },
+        )
+        response.set_cookie(
+            OWNER_COOKIE_NAME,
+            owner_cookie,
+            max_age=runtime_settings.owner_session_ttl_seconds,
+            httponly=True,
+            secure=runtime_settings.cookie_secure,
+            samesite="strict",
+            path="/api/v1",
+        )
+        response.delete_cookie(SETUP_COOKIE_NAME, path="/api/v1/setup")
+        return response
 
     @app.post("/api/v1/setup/bootstrap")
     async def bootstrap(payload: BootstrapInput) -> Response:
@@ -673,7 +797,7 @@ def create_app(
     @app.put("/api/v1/setup/security-policy")
     async def save_security_policy(
         payload: SecurityPolicyInput,
-        _session: Annotated[str, Depends(require_setup_session)],
+        _session: Annotated[str, Depends(require_setup_authorization)],
     ) -> dict[str, str]:
         require_setup_stage("security_policy_required")
         try:
@@ -694,7 +818,7 @@ def create_app(
     @app.post("/api/v1/setup/model-probes")
     async def probe_model(
         payload: ProviderProbeRequest,
-        _session: Annotated[str, Depends(require_setup_session)],
+        _session: Annotated[str, Depends(require_setup_authorization)],
     ) -> Response:
         snapshot = store.snapshot()
         if snapshot.initialized:
@@ -879,7 +1003,7 @@ def create_app(
     @app.post("/api/v1/setup/finalize")
     async def finalize_setup(
         payload: FinalizeInput,
-        _session: Annotated[str, Depends(require_setup_session)],
+        _session: Annotated[str, Depends(require_setup_authorization)],
     ) -> Response:
         require_setup_stage("model_required")
         snapshot = store.snapshot()
@@ -907,7 +1031,11 @@ def create_app(
         try:
             setup_epoch, owner_epoch = store.finalize(
                 payload.mode,
-                payload.owner_password.get_secret_value(),
+                (
+                    payload.owner_password.get_secret_value()
+                    if payload.owner_password is not None
+                    else None
+                ),
                 clock(),
             )
         except RuntimeError as error:
@@ -1114,9 +1242,7 @@ def create_app(
             )
 
         try:
-            encrypted = vault.materialize_rotation(
-                payload.api_key.get_secret_value(), plan
-            )
+            encrypted = vault.materialize_rotation(payload.api_key.get_secret_value(), plan)
         except BaseException as error:
             abort_owned_stage()
             if not isinstance(error, CredentialUnavailableError):
@@ -1305,9 +1431,7 @@ def create_app(
                             explanation["status"] = "applied"
                             explanation["code"] = None
                         else:
-                            explanation["code"] = (
-                                model_result.code or "MODEL_OUTPUT_INVALID"
-                            )
+                            explanation["code"] = model_result.code or "MODEL_OUTPUT_INVALID"
             job = diagnosis_store.complete_job(
                 reservation,
                 case_payload=case_payload,

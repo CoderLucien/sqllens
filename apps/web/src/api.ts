@@ -1,4 +1,5 @@
 export type SetupStage =
+  | "owner_required"
   | "bootstrap_required"
   | "security_policy_required"
   | "model_required"
@@ -15,9 +16,11 @@ export interface LocalModelStatus {
 export interface SetupStatus {
   state: SetupStage;
   initialized: boolean;
+  owner_configured: boolean;
   bootstrap_hash_persisted: boolean;
   model_mode: "external" | "rules" | null;
   csrf_token: string | null;
+  setup_nonce: string | null;
   recovery: {
     required: boolean;
     action: "bootstrap-reissue" | null;

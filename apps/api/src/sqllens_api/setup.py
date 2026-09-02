@@ -79,8 +79,20 @@ setup_state = Table(
     Column("owner_session_epoch", Integer, nullable=False, default=0),
     Column("owner_failed_attempts", Integer, nullable=False, default=0),
     Column("owner_locked_until", Float),
+    Column("first_owner_attempts", Integer, nullable=False, default=0),
+    Column("first_owner_window_started_at", Float),
     Column("finalized_at", Float),
     Column("updated_at", Float, nullable=False),
+)
+first_owner_nonce = Table(
+    "first_owner_nonce",
+    metadata,
+    Column("cookie_digest", String(64), primary_key=True),
+    Column("nonce_digest", String(64), nullable=False),
+    Column("setup_epoch", Integer, nullable=False),
+    Column("expires_at", Float, nullable=False),
+    Column("consumed_at", Float),
+    Column("created_at", Float, nullable=False),
 )
 diagnosis_admission = Table(
     "diagnosis_admission",
@@ -137,6 +149,10 @@ def _derive_password_hash(password: str, salt: bytes) -> str:
     return _b64(derived)
 
 
+def _first_owner_digest(purpose: str, value: str) -> str:
+    return hashlib.sha256(f"sqllens:first-owner:{purpose}:{value}".encode()).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class SetupSnapshot:
     stage: str
@@ -168,6 +184,13 @@ class SetupSnapshot:
 @dataclass(frozen=True, slots=True)
 class OwnerAuthentication:
     status: Literal["authenticated", "invalid", "limited"]
+    setup_epoch: int | None = None
+    session_epoch: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FirstOwnerCreation:
+    status: Literal["created", "invalid", "limited", "already_configured", "unavailable"]
     setup_epoch: int | None = None
     session_epoch: int | None = None
 
@@ -229,6 +252,8 @@ class SetupStore:
                 "owner_session_epoch": "INTEGER NOT NULL DEFAULT 0",
                 "owner_failed_attempts": "INTEGER NOT NULL DEFAULT 0",
                 "owner_locked_until": "FLOAT",
+                "first_owner_attempts": "INTEGER NOT NULL DEFAULT 0",
+                "first_owner_window_started_at": "FLOAT",
             }
             for column, definition in migrations.items():
                 if column not in existing_columns:
@@ -242,14 +267,29 @@ class SetupStore:
                 connection.execute(
                     insert(setup_state).values(
                         id=_STATE_ID,
-                        stage="bootstrap_required",
                         bootstrap_failed_attempts=0,
                         setup_epoch=1,
                         owner_session_epoch=0,
                         owner_failed_attempts=0,
+                        first_owner_attempts=0,
                         send_sql_text=False,
+                        stage="owner_required",
                         updated_at=now,
                     )
+                )
+            else:
+                # Upgrade only a truly empty legacy volume. A persisted or consumed
+                # bootstrap flow remains an explicit recovery path.
+                connection.execute(
+                    update(setup_state)
+                    .where(
+                        setup_state.c.id == _STATE_ID,
+                        setup_state.c.stage == "bootstrap_required",
+                        setup_state.c.bootstrap_hash.is_(None),
+                        setup_state.c.owner_password_hash.is_(None),
+                        setup_state.c.finalized_at.is_(None),
+                    )
+                    .values(stage="owner_required", updated_at=now)
                 )
         self.settings.database_path.chmod(0o600)
 
@@ -278,9 +318,7 @@ class SetupStore:
             provider_model=row["provider_model"],
             provider_verified_at=row["provider_verified_at"],
             provider_credential=credential,
-            credential_retirement_pending_version=row[
-                "credential_retirement_pending_version"
-            ],
+            credential_retirement_pending_version=row["credential_retirement_pending_version"],
             credential_retirement_operation=row["credential_retirement_operation"],
             credential_retirement_token=row["credential_retirement_token"],
             bootstrap_reissue_pending=row["bootstrap_reissue_pending_hash"] is not None,
@@ -298,6 +336,174 @@ class SetupStore:
 
     def is_ready(self) -> bool:
         return self.snapshot().initialized
+
+    def issue_first_owner_nonce(self, now: datetime) -> tuple[str, str] | None:
+        """Issue one opaque, cookie-bound proof for the empty-instance Owner flow."""
+        now_value = _timestamp(now)
+        cookie = _b64(secrets.token_bytes(32))
+        nonce = _b64(secrets.token_bytes(32))
+        cookie_digest = _first_owner_digest("cookie", cookie)
+        nonce_digest = _first_owner_digest("nonce", nonce)
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(first_owner_nonce)
+                .where(
+                    first_owner_nonce.c.consumed_at.is_(None),
+                    first_owner_nonce.c.expires_at <= now_value,
+                )
+                .values(consumed_at=now_value)
+            )
+            state = (
+                connection.execute(select(setup_state).where(setup_state.c.id == _STATE_ID))
+                .mappings()
+                .one()
+            )
+            if (
+                state["stage"] != "owner_required"
+                or state["owner_password_hash"] is not None
+                or state["finalized_at"] is not None
+            ):
+                return None
+            connection.execute(
+                insert(first_owner_nonce).values(
+                    cookie_digest=cookie_digest,
+                    nonce_digest=nonce_digest,
+                    setup_epoch=state["setup_epoch"],
+                    expires_at=now_value + self.settings.first_owner_nonce_ttl_seconds,
+                    consumed_at=None,
+                    created_at=now_value,
+                )
+            )
+        return cookie, nonce
+
+    def create_first_owner(
+        self,
+        *,
+        password: str,
+        cookie: str | None,
+        nonce: str | None,
+        now: datetime,
+    ) -> FirstOwnerCreation:
+        """Atomically validate the browser proof and create the unique local Owner."""
+        now_value = _timestamp(now)
+        with self.engine.begin() as connection:
+            # The harmless write obtains SQLite's writer lock before state is read. That
+            # serializes concurrent first-run attempts before the expensive password hash.
+            connection.execute(
+                update(setup_state)
+                .where(setup_state.c.id == _STATE_ID)
+                .values(updated_at=setup_state.c.updated_at)
+            )
+            connection.execute(
+                update(first_owner_nonce)
+                .where(
+                    first_owner_nonce.c.consumed_at.is_(None),
+                    first_owner_nonce.c.expires_at <= now_value,
+                )
+                .values(consumed_at=now_value)
+            )
+            state = (
+                connection.execute(select(setup_state).where(setup_state.c.id == _STATE_ID))
+                .mappings()
+                .one()
+            )
+            if state["owner_password_hash"] is not None:
+                return FirstOwnerCreation("already_configured")
+            if state["stage"] != "owner_required" or state["finalized_at"] is not None:
+                return FirstOwnerCreation("unavailable")
+
+            window_started = state["first_owner_window_started_at"]
+            attempts = int(state["first_owner_attempts"] or 0)
+            if (
+                window_started is None
+                or now_value - float(window_started)
+                >= self.settings.first_owner_rate_window_seconds
+            ):
+                window_started = now_value
+                attempts = 0
+            if attempts >= self.settings.first_owner_max_attempts:
+                return FirstOwnerCreation("limited")
+            connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.setup_epoch == state["setup_epoch"],
+                    setup_state.c.owner_password_hash.is_(None),
+                )
+                .values(
+                    first_owner_attempts=attempts + 1,
+                    first_owner_window_started_at=window_started,
+                    updated_at=now_value,
+                )
+            )
+
+            if not cookie or not nonce:
+                return FirstOwnerCreation("invalid")
+            cookie_digest = _first_owner_digest("cookie", cookie)
+            proof = (
+                connection.execute(
+                    select(first_owner_nonce).where(
+                        first_owner_nonce.c.cookie_digest == cookie_digest
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if (
+                proof is None
+                or proof["setup_epoch"] != state["setup_epoch"]
+                or proof["consumed_at"] is not None
+            ):
+                return FirstOwnerCreation("invalid")
+            if proof["expires_at"] <= now_value:
+                connection.execute(
+                    update(first_owner_nonce)
+                    .where(first_owner_nonce.c.cookie_digest == cookie_digest)
+                    .values(consumed_at=now_value)
+                )
+                return FirstOwnerCreation("invalid")
+            supplied_nonce_digest = _first_owner_digest("nonce", nonce)
+            if not hmac.compare_digest(supplied_nonce_digest, proof["nonce_digest"]):
+                return FirstOwnerCreation("invalid")
+
+            owner_salt = secrets.token_bytes(16)
+            owner_hash = _derive_password_hash(password, owner_salt)
+            result = connection.execute(
+                update(setup_state)
+                .where(
+                    setup_state.c.id == _STATE_ID,
+                    setup_state.c.stage == "owner_required",
+                    setup_state.c.setup_epoch == state["setup_epoch"],
+                    setup_state.c.owner_password_hash.is_(None),
+                    setup_state.c.finalized_at.is_(None),
+                )
+                .values(
+                    stage="security_policy_required",
+                    owner_password_hash=owner_hash,
+                    owner_password_salt=_b64(owner_salt),
+                    owner_session_epoch=setup_state.c.owner_session_epoch + 1,
+                    owner_failed_attempts=0,
+                    owner_locked_until=None,
+                    first_owner_attempts=0,
+                    first_owner_window_started_at=None,
+                    updated_at=now_value,
+                )
+            )
+            if result.rowcount != 1:
+                return FirstOwnerCreation("already_configured")
+            connection.execute(
+                update(first_owner_nonce)
+                .where(
+                    first_owner_nonce.c.setup_epoch == state["setup_epoch"],
+                    first_owner_nonce.c.consumed_at.is_(None),
+                )
+                .values(consumed_at=now_value)
+            )
+            return FirstOwnerCreation(
+                "created",
+                setup_epoch=int(state["setup_epoch"]),
+                session_epoch=int(state["owner_session_epoch"]) + 1,
+            )
 
     def issue_bootstrap_code(self, now: datetime, *, code: str | None = None) -> str:
         normalized = normalize_bootstrap_code(code or "")
@@ -675,13 +881,11 @@ class SetupStore:
                     setup_state.c.stage == "model_required",
                     setup_state.c.finalized_at.is_(None),
                     setup_state.c.external_model_egress.is_(True),
-                    setup_state.c.credential_retirement_pending_version
-                    == credential.key_version,
+                    setup_state.c.credential_retirement_pending_version == credential.key_version,
                     setup_state.c.credential_retirement_operation == "staged_setup_probe",
                     setup_state.c.credential_retirement_token == token,
                     setup_state.c.credential_staged_setup_epoch.is_not(None),
-                    setup_state.c.setup_epoch
-                    == setup_state.c.credential_staged_setup_epoch,
+                    setup_state.c.setup_epoch == setup_state.c.credential_staged_setup_epoch,
                     expected_active_matches,
                     ~select(diagnosis_admission.c.slot).exists(),
                 )
@@ -714,7 +918,7 @@ class SetupStore:
     def finalize(
         self,
         mode: Literal["external", "rules"],
-        owner_password: str,
+        owner_password: str | None,
         now: datetime,
     ) -> tuple[int, int]:
         snapshot = self.snapshot()
@@ -730,8 +934,29 @@ class SetupStore:
             snapshot.provider_status != "verified" or snapshot.provider_credential is None
         ):
             raise RuntimeError("a verified external provider is required")
-        owner_salt = secrets.token_bytes(16)
-        owner_hash = _derive_password_hash(owner_password, owner_salt)
+        if not snapshot.owner_configured and owner_password is None:
+            raise RuntimeError("an Owner credential is required")
+        owner_values: dict[str, object]
+        if snapshot.owner_configured:
+            owner_values = {
+                "owner_failed_attempts": 0,
+                "owner_locked_until": None,
+            }
+            owner_state_condition = and_(
+                setup_state.c.owner_password_hash.is_not(None),
+                setup_state.c.owner_session_epoch == snapshot.owner_session_epoch,
+            )
+        else:
+            assert owner_password is not None
+            owner_salt = secrets.token_bytes(16)
+            owner_values = {
+                "owner_password_hash": _derive_password_hash(owner_password, owner_salt),
+                "owner_password_salt": _b64(owner_salt),
+                "owner_session_epoch": setup_state.c.owner_session_epoch + 1,
+                "owner_failed_attempts": 0,
+                "owner_locked_until": None,
+            }
+            owner_state_condition = setup_state.c.owner_password_hash.is_(None)
         now_value = _timestamp(now)
         with self.engine.begin() as connection:
             result = connection.execute(
@@ -740,6 +965,7 @@ class SetupStore:
                     setup_state.c.id == _STATE_ID,
                     setup_state.c.stage == "model_required",
                     setup_state.c.setup_epoch == snapshot.setup_epoch,
+                    owner_state_condition,
                     setup_state.c.finalized_at.is_(None),
                     setup_state.c.policy_committed_at == snapshot.policy_committed_at,
                     (
@@ -780,9 +1006,7 @@ class SetupStore:
                     stage="ready",
                     model_mode=mode,
                     provider_status=(snapshot.provider_status if mode == "external" else None),
-                    provider_base_url=(
-                        snapshot.provider_base_url if mode == "external" else None
-                    ),
+                    provider_base_url=(snapshot.provider_base_url if mode == "external" else None),
                     provider_model=(snapshot.provider_model if mode == "external" else None),
                     provider_verified_at=(
                         snapshot.provider_verified_at if mode == "external" else None
@@ -807,13 +1031,9 @@ class SetupStore:
                         if mode == "rules" and snapshot.provider_credential is not None
                         else None
                     ),
-                    owner_password_hash=owner_hash,
-                    owner_password_salt=_b64(owner_salt),
-                    owner_session_epoch=setup_state.c.owner_session_epoch + 1,
-                    owner_failed_attempts=0,
-                    owner_locked_until=None,
                     finalized_at=now_value,
                     updated_at=now_value,
+                    **owner_values,
                 )
             )
         if result.rowcount != 1:
@@ -829,7 +1049,7 @@ class SetupStore:
                 .mappings()
                 .one()
             )
-        if row["finalized_at"] is None or not row["owner_password_hash"]:
+        if not row["owner_password_hash"]:
             return OwnerAuthentication("invalid")
         if row["owner_locked_until"] is not None and row["owner_locked_until"] > now_value:
             return OwnerAuthentication("limited")
@@ -843,7 +1063,6 @@ class SetupStore:
                         setup_state.c.setup_epoch == row["setup_epoch"],
                         setup_state.c.owner_session_epoch == row["owner_session_epoch"],
                         setup_state.c.owner_password_hash == row["owner_password_hash"],
-                        setup_state.c.finalized_at.is_not(None),
                     )
                     .values(owner_failed_attempts=0, owner_locked_until=None, updated_at=now_value)
                 )
@@ -878,7 +1097,6 @@ class SetupStore:
                     setup_state.c.setup_epoch == row["setup_epoch"],
                     setup_state.c.owner_session_epoch == row["owner_session_epoch"],
                     setup_state.c.owner_password_hash == row["owner_password_hash"],
-                    setup_state.c.finalized_at.is_not(None),
                 )
                 .values(
                     owner_failed_attempts=failed_attempts,
@@ -896,7 +1114,7 @@ class SetupStore:
                     setup_state.c.id == _STATE_ID,
                     setup_state.c.setup_epoch == setup_epoch,
                     setup_state.c.owner_session_epoch == session_epoch,
-                    setup_state.c.finalized_at.is_not(None),
+                    setup_state.c.owner_password_hash.is_not(None),
                 )
                 .values(
                     owner_session_epoch=setup_state.c.owner_session_epoch + 1,
@@ -948,23 +1166,17 @@ class SetupStore:
                         else setup_state.c.provider_credential_key_version
                         == expected_credential.key_version
                     ),
-                    setup_state.c.provider_credential_key_version.is_distinct_from(
-                        staged_version
-                    ),
+                    setup_state.c.provider_credential_key_version.is_distinct_from(staged_version),
                 )
                 .values(
                     credential_retirement_pending_version=staged_version,
                     credential_retirement_operation="staged_setup_probe",
                     credential_retirement_token=token,
                     credential_staged_expected_ciphertext=(
-                        expected_credential.ciphertext
-                        if expected_credential is not None
-                        else None
+                        expected_credential.ciphertext if expected_credential is not None else None
                     ),
                     credential_staged_expected_key_version=(
-                        expected_credential.key_version
-                        if expected_credential is not None
-                        else None
+                        expected_credential.key_version if expected_credential is not None else None
                     ),
                     credential_staged_setup_epoch=expected_setup_epoch,
                     updated_at=_timestamp(now),
@@ -1012,23 +1224,17 @@ class SetupStore:
                         else setup_state.c.provider_credential_key_version
                         == expected_credential.key_version
                     ),
-                    setup_state.c.provider_credential_key_version.is_distinct_from(
-                        staged_version
-                    ),
+                    setup_state.c.provider_credential_key_version.is_distinct_from(staged_version),
                 )
                 .values(
                     credential_retirement_pending_version=staged_version,
                     credential_retirement_operation="staged_rotation",
                     credential_retirement_token=token,
                     credential_staged_expected_ciphertext=(
-                        expected_credential.ciphertext
-                        if expected_credential is not None
-                        else None
+                        expected_credential.ciphertext if expected_credential is not None else None
                     ),
                     credential_staged_expected_key_version=(
-                        expected_credential.key_version
-                        if expected_credential is not None
-                        else None
+                        expected_credential.key_version if expected_credential is not None else None
                     ),
                     credential_staged_setup_epoch=expected_setup_epoch,
                     updated_at=_timestamp(now),
@@ -1068,13 +1274,11 @@ class SetupStore:
                     setup_state.c.id == _STATE_ID,
                     setup_state.c.finalized_at.is_not(None),
                     setup_state.c.external_model_egress.is_(True),
-                    setup_state.c.credential_retirement_pending_version
-                    == credential.key_version,
+                    setup_state.c.credential_retirement_pending_version == credential.key_version,
                     setup_state.c.credential_retirement_operation == "staged_rotation",
                     setup_state.c.credential_retirement_token == token,
                     setup_state.c.credential_staged_setup_epoch.is_not(None),
-                    setup_state.c.setup_epoch
-                    == setup_state.c.credential_staged_setup_epoch,
+                    setup_state.c.setup_epoch == setup_state.c.credential_staged_setup_epoch,
                     expected_active_matches,
                     ~select(diagnosis_admission.c.slot).exists(),
                 )
@@ -1090,9 +1294,7 @@ class SetupStore:
                     ),
                     credential_retirement_operation=case(
                         (
-                            setup_state.c.credential_staged_expected_key_version.is_not(
-                                None
-                            ),
+                            setup_state.c.credential_staged_expected_key_version.is_not(None),
                             "rotation",
                         ),
                         else_=None,
@@ -1198,9 +1400,7 @@ class SetupStore:
                     provider_credential_ciphertext=None,
                     provider_credential_key_version=None,
                     credential_retirement_pending_version=(
-                        expected_credential.key_version
-                        if expected_credential is not None
-                        else None
+                        expected_credential.key_version if expected_credential is not None else None
                     ),
                     credential_retirement_operation=(
                         "delete" if expected_credential is not None else None
@@ -1210,6 +1410,7 @@ class SetupStore:
                 )
             )
         return result.rowcount == 1
+
 
 class SetupSessionSigner:
     def __init__(self, settings: Settings) -> None:
@@ -1228,10 +1429,7 @@ class SetupSessionSigner:
         try:
             descriptor = os.open(
                 path,
-                os.O_WRONLY
-                | os.O_CREAT
-                | os.O_EXCL
-                | getattr(os, "O_NOFOLLOW", 0),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                 0o600,
             )
         except FileExistsError:

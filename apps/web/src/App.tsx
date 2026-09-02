@@ -6,7 +6,6 @@ import {
   Cloud,
   Cpu,
   Database,
-  KeyRound,
   LoaderCircle,
   LogIn,
   LogOut,
@@ -23,11 +22,13 @@ import { pathForPhase, PhaseShell } from "./PhaseShell";
 import "./styles.css";
 
 const EMPTY_STATUS: SetupStatus = {
-  state: "bootstrap_required",
+  state: "owner_required",
   initialized: false,
+  owner_configured: false,
   bootstrap_hash_persisted: false,
   model_mode: null,
   csrf_token: null,
+  setup_nonce: null,
   recovery: {
     required: false,
     action: null,
@@ -72,7 +73,6 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [bootstrapCode, setBootstrapCode] = useState("");
   const [providerHost, setProviderHost] = useState("api.openai.com");
   const [providerUrl, setProviderUrl] = useState("https://api.openai.com/v1");
   const [model, setModel] = useState("");
@@ -88,6 +88,7 @@ export function App() {
   });
 
   const diagnosisReady = status.state === "ready" && ownerSession.authenticated;
+  const setupCsrf = ownerSession.csrf_token ?? status.csrf_token;
 
   async function loadStatus() {
     setLoading(true);
@@ -97,7 +98,7 @@ export function App() {
       setStatus(nextStatus);
       setStatusKnown(true);
       setExternalEgress(nextStatus.external_model.egress_enabled);
-      if (nextStatus.initialized) {
+      if (nextStatus.owner_configured) {
         setOwnerSession(await apiRequest<OwnerSession>("/api/v1/auth/session"));
       } else {
         setOwnerSession({ authenticated: false, csrf_token: null });
@@ -135,20 +136,43 @@ export function App() {
     }
   }
 
-  function submitBootstrap(event: FormEvent<HTMLFormElement>) {
+  function submitOwner(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void runAction(async () => {
-      const result = await apiRequest<{ state: SetupStage; csrf_token: string }>(
-        "/api/v1/setup/bootstrap",
+      if (ownerPassword !== ownerPasswordConfirm) {
+        throw new ApiClientError(
+          "PASSWORD_MISMATCH",
+          "两次输入的 Owner 密码不一致。",
+          422
+        );
+      }
+      if (!status.setup_nonce) {
+        throw new ApiClientError(
+          "SETUP_NONCE_UNAVAILABLE",
+          "本地初始化凭据已过期，请刷新页面重试。",
+          409
+        );
+      }
+      const result = await apiRequest<{
+        state: SetupStage;
+        authenticated: true;
+        csrf_token: string;
+      }>(
+        "/api/v1/setup/owner",
         {
           method: "POST",
-          body: JSON.stringify({ code: bootstrapCode.trim() })
+          headers: { "X-Setup-Nonce": status.setup_nonce },
+          body: JSON.stringify({ password: ownerPassword })
         }
       );
-      setBootstrapCode("");
+      setOwnerPassword("");
+      setOwnerPasswordConfirm("");
+      setOwnerSession({ authenticated: true, csrf_token: result.csrf_token });
       setStatus((current) => ({
         ...current,
         state: result.state,
+        owner_configured: true,
+        setup_nonce: null,
         csrf_token: result.csrf_token
       }));
     });
@@ -167,7 +191,7 @@ export function App() {
             send_sql_text: false
           })
         },
-        status.csrf_token
+        setupCsrf
       );
       setStatus((current) => ({ ...current, state: "model_required" }));
     });
@@ -187,7 +211,7 @@ export function App() {
             model: model.trim()
           })
         },
-        status.csrf_token
+        setupCsrf
       );
       setApiKey("");
       setProviderVerified(true);
@@ -196,13 +220,6 @@ export function App() {
 
   function finalize(mode: "external" | "rules") {
     void runAction(async () => {
-      if (ownerPassword !== ownerPasswordConfirm) {
-        throw new ApiClientError(
-          "PASSWORD_MISMATCH",
-          "两次输入的 Owner 密码不一致。",
-          422
-        );
-      }
       const result = await apiRequest<{
         state: SetupStage;
         model_mode: "external" | "rules";
@@ -212,12 +229,10 @@ export function App() {
         "/api/v1/setup/finalize",
         {
           method: "POST",
-          body: JSON.stringify({ mode, owner_password: ownerPassword })
+          body: JSON.stringify({ mode })
         },
-        status.csrf_token
+        setupCsrf
       );
-      setOwnerPassword("");
-      setOwnerPasswordConfirm("");
       setOwnerSession({ authenticated: true, csrf_token: result.owner_csrf_token });
       setStatus((current) => ({
         ...current,
@@ -337,34 +352,58 @@ export function App() {
                     </button>
                   </section>
                 )}
-                {!status.recovery.required && status.state === "bootstrap_required" && (
-                  <section aria-labelledby="bootstrap-title">
-                    <div className="section-icon"><KeyRound aria-hidden="true" size={22} /></div>
+                {!status.recovery.required && status.state === "owner_required" && (
+                  <section aria-labelledby="owner-title">
+                    <div className="section-icon"><UserRound aria-hidden="true" size={22} /></div>
                     <p className="eyebrow">步骤 1 / 3</p>
-                    <h1 id="bootstrap-title">验证这次本地安装</h1>
-                    <p className="section-summary">输入启动器显示的一次性初始化码。</p>
-                    <form className="setup-form" onSubmit={submitBootstrap}>
-                      <label htmlFor="bootstrap-code">一次性初始化码</label>
+                    <h1 id="owner-title">创建本地 Owner</h1>
+                    <p className="section-summary">
+                      Owner 密码只保存在本机，用于后续设置与诊断操作。
+                    </p>
+                    <form className="setup-form" onSubmit={submitOwner}>
+                      <label htmlFor="owner-password">Owner 密码</label>
                       <input
-                        id="bootstrap-code"
-                        autoComplete="one-time-code"
+                        autoComplete="new-password"
                         autoFocus
-                        maxLength={80}
-                        onChange={(event) => setBootstrapCode(event.target.value)}
-                        placeholder="XXXX-XXXX-XXXX-XXXX"
+                        id="owner-password"
+                        maxLength={128}
+                        minLength={12}
+                        onChange={(event) => setOwnerPassword(event.target.value)}
                         required
-                        spellCheck={false}
-                        value={bootstrapCode}
+                        type="password"
+                        value={ownerPassword}
                       />
-                      <button className="button button-primary" disabled={busy} type="submit">
+                      <label htmlFor="owner-password-confirm">确认 Owner 密码</label>
+                      <input
+                        autoComplete="new-password"
+                        id="owner-password-confirm"
+                        maxLength={128}
+                        minLength={12}
+                        onChange={(event) => setOwnerPasswordConfirm(event.target.value)}
+                        required
+                        type="password"
+                        value={ownerPasswordConfirm}
+                      />
+                      <button
+                        className="button button-primary"
+                        disabled={
+                          busy ||
+                          !status.setup_nonce ||
+                          ownerPassword.length < 12 ||
+                          ownerPassword !== ownerPasswordConfirm
+                        }
+                        type="submit"
+                      >
                         {busy ? <LoaderCircle className="spin" size={18} /> : <ArrowRight size={18} />}
-                        验证并继续
+                        创建 Owner 并继续
                       </button>
                     </form>
                   </section>
                 )}
 
-                {!status.recovery.required && status.state === "security_policy_required" && (
+                {!status.recovery.required &&
+                  status.state === "security_policy_required" &&
+                  ownerSession.authenticated && (
                   <section aria-labelledby="policy-title">
                     <div className="section-icon"><ShieldCheck aria-hidden="true" size={22} /></div>
                     <p className="eyebrow">步骤 2 / 3</p>
@@ -403,7 +442,9 @@ export function App() {
                   </section>
                 )}
 
-                {!status.recovery.required && status.state === "model_required" && (
+                {!status.recovery.required &&
+                  status.state === "model_required" &&
+                  ownerSession.authenticated && (
                   <section aria-labelledby="model-title">
                     <div className="section-icon"><Cloud aria-hidden="true" size={22} /></div>
                     <p className="eyebrow">步骤 3 / 3</p>
@@ -461,45 +502,12 @@ export function App() {
                         </button>
                       )}
                     </form>}
-                    <div className="owner-boundary">
-                      <UserRound aria-hidden="true" size={18} />
-                      <div>
-                        <strong>创建 Owner 密码</strong>
-                        <span>用于重启后的本机登录与所有诊断操作。</span>
-                      </div>
-                    </div>
-                    <div className="setup-form">
-                      <label htmlFor="owner-password">Owner 密码</label>
-                      <input
-                        autoComplete="new-password"
-                        id="owner-password"
-                        maxLength={128}
-                        minLength={12}
-                        onChange={(event) => setOwnerPassword(event.target.value)}
-                        required
-                        type="password"
-                        value={ownerPassword}
-                      />
-                      <label htmlFor="owner-password-confirm">确认 Owner 密码</label>
-                      <input
-                        autoComplete="new-password"
-                        id="owner-password-confirm"
-                        maxLength={128}
-                        minLength={12}
-                        onChange={(event) => setOwnerPasswordConfirm(event.target.value)}
-                        required
-                        type="password"
-                        value={ownerPasswordConfirm}
-                      />
-                    </div>
                     <div className="completion-actions">
                       <button
                         className="button button-primary"
                         disabled={
                           !externalEgress ||
                           !providerVerified ||
-                          ownerPassword.length < 12 ||
-                          ownerPassword !== ownerPasswordConfirm ||
                           busy
                         }
                         onClick={() => finalize("external")}
@@ -510,11 +518,7 @@ export function App() {
                       </button>
                       <button
                         className="button button-quiet"
-                        disabled={
-                          ownerPassword.length < 12 ||
-                          ownerPassword !== ownerPasswordConfirm ||
-                          busy
-                        }
+                        disabled={busy}
                         onClick={() => finalize("rules")}
                         type="button"
                       >
@@ -524,7 +528,7 @@ export function App() {
                   </section>
                 )}
 
-                {status.initialized && !ownerSession.authenticated && (
+                {status.owner_configured && !ownerSession.authenticated && (
                   <section aria-labelledby="login-title">
                     <div className="section-icon"><LogIn aria-hidden="true" size={22} /></div>
                     <p className="eyebrow">Owner 访问</p>

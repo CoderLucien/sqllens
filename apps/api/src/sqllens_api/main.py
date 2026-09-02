@@ -19,7 +19,13 @@ _BOOTSTRAP_INPUT_PATTERN = re.compile(r"^[A-Za-z0-9-]{12,80}$")
 
 def run() -> None:
     settings = Settings()
-    uvicorn.run(create_app(settings=settings), host=settings.bind_host, port=settings.port)
+    uvicorn.run(
+        create_app(settings=settings),
+        host=settings.bind_host,
+        port=settings.port,
+        proxy_headers=False,
+        forwarded_allow_ips="",
+    )
 
 
 def ingest_bootstrap_stdin(

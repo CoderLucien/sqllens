@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 
-const bootstrapStatus = {
-  state: "bootstrap_required",
+const ownerStatus = {
+  state: "owner_required",
   initialized: false,
-  bootstrap_hash_persisted: true,
+  owner_configured: false,
+  bootstrap_hash_persisted: false,
   model_mode: null,
   csrf_token: null,
+  setup_nonce: "owner-setup-nonce",
   recovery: { required: false, action: null, reason: null },
   external_model: { credential_available: false, egress_enabled: false },
   local_model: {
@@ -42,12 +44,16 @@ describe("setup application", () => {
     expect(screen.queryByRole("navigation", { name: "日常诊断导航" })).toBeNull();
   });
 
-  it("loads first-run status and submits the one-time initialization code", async () => {
+  it("loads first-run status and creates the local Owner with its browser nonce", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(bootstrapStatus))
+      .mockResolvedValueOnce(jsonResponse(ownerStatus))
       .mockResolvedValueOnce(
-        jsonResponse({ state: "security_policy_required", csrf_token: "csrf-1" })
+        jsonResponse({
+          state: "security_policy_required",
+          authenticated: true,
+          csrf_token: "owner-csrf"
+        }, 201)
       );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -55,25 +61,34 @@ describe("setup application", () => {
     expect(
       await screen.findByRole("navigation", { name: "安装与初始化导航" })
     ).toBeTruthy();
-    expect(window.location.pathname).toBe("/setup");
+    await waitFor(() => expect(window.location.pathname).toBe("/setup"));
     expect(screen.queryByRole("navigation", { name: "日常诊断导航" })).toBeNull();
-    const codeInput = await screen.findByLabelText("一次性初始化码");
-    fireEvent.change(codeInput, { target: { value: "ABCD-EFGH-JKLM-NPQR" } });
-    fireEvent.click(screen.getByRole("button", { name: "验证并继续" }));
+    expect(screen.queryByLabelText("一次性初始化码")).toBeNull();
+    fireEvent.change(await screen.findByLabelText("Owner 密码"), {
+      target: { value: "correct-horse-battery-staple" }
+    });
+    fireEvent.change(screen.getByLabelText("确认 Owner 密码"), {
+      target: { value: "correct-horse-battery-staple" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建 Owner 并继续" }));
 
     await screen.findByRole("heading", { name: "确认安全与出境策略" });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/v1/setup/bootstrap",
+      "/api/v1/setup/owner",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ code: "ABCD-EFGH-JKLM-NPQR" })
+        body: JSON.stringify({ password: "correct-horse-battery-staple" })
       })
+    );
+    const [, ownerOptions] = fetchMock.mock.calls[1];
+    expect(new Headers(ownerOptions?.headers).get("X-Setup-Nonce")).toBe(
+      "owner-setup-nonce"
     );
   });
 
   it("shows local inference as unavailable instead of claiming GPU support", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(bootstrapStatus)));
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(ownerStatus)));
 
     render(<App />);
 
@@ -86,7 +101,7 @@ describe("setup application", () => {
       "fetch",
       vi.fn<typeof fetch>().mockResolvedValue(
         jsonResponse({
-          ...bootstrapStatus,
+          ...ownerStatus,
           recovery: {
             required: true,
             action: "bootstrap-reissue",
@@ -108,9 +123,11 @@ describe("setup application", () => {
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         jsonResponse({
-          ...bootstrapStatus,
+          ...ownerStatus,
           state: "model_recovery_required",
           initialized: true,
+          owner_configured: true,
+          setup_nonce: null,
           model_mode: "external",
           external_model: { credential_available: false }
         })
@@ -131,15 +148,20 @@ describe("setup application", () => {
     expect(screen.queryByText(/诊断保持关闭/)).toBeNull();
   });
 
-  it("creates the Owner during rules finalization and keeps the returned session", async () => {
+  it("finalizes rules mode without resending or replacing the existing Owner password", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         jsonResponse({
-          ...bootstrapStatus,
+          ...ownerStatus,
           state: "model_required",
-          csrf_token: "setup-csrf"
+          owner_configured: true,
+          setup_nonce: null,
+          csrf_token: "owner-csrf"
         })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ authenticated: true, csrf_token: "owner-csrf" })
       )
       .mockResolvedValueOnce(
         jsonResponse({
@@ -153,51 +175,41 @@ describe("setup application", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("Owner 密码"), {
-      target: { value: "correct-horse-battery-staple" }
-    });
-    fireEvent.change(screen.getByLabelText("确认 Owner 密码"), {
-      target: { value: "correct-horse-battery-staple" }
-    });
-    fireEvent.click(screen.getByRole("button", { name: "使用规则模式" }));
+    fireEvent.click(await screen.findByRole("button", { name: "使用规则模式" }));
 
     await screen.findByRole("heading", { name: "诊断工作台已就绪" });
-    const [, finalizeOptions] = fetchMock.mock.calls[1];
-    expect(finalizeOptions?.body).toBe(
-      JSON.stringify({
-        mode: "rules",
-        owner_password: "correct-horse-battery-staple"
-      })
+    const [, finalizeOptions] = fetchMock.mock.calls[2];
+    expect(finalizeOptions?.body).toBe(JSON.stringify({ mode: "rules" }));
+    expect(new Headers(finalizeOptions?.headers).get("X-CSRF-Token")).toBe(
+      "owner-csrf"
     );
-    expect(new Headers(finalizeOptions?.headers).get("X-CSRF-Token")).toBe("setup-csrf");
   });
 
   it("restores a rules-only policy without exposing the external provider form", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
         jsonResponse({
-          ...bootstrapStatus,
+          ...ownerStatus,
           state: "model_required",
-          csrf_token: "setup-csrf",
+          owner_configured: true,
+          setup_nonce: null,
+          csrf_token: "owner-csrf",
           external_model: {
             credential_available: false,
             egress_enabled: false
           }
         })
       )
-    );
+      .mockResolvedValueOnce(
+        jsonResponse({ authenticated: true, csrf_token: "owner-csrf" })
+      );
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
 
     await screen.findByRole("heading", { name: "连接外部模型" });
     expect(screen.queryByLabelText("OpenAI 兼容地址")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Owner 密码"), {
-      target: { value: "correct-horse-battery-staple" }
-    });
-    fireEvent.change(screen.getByLabelText("确认 Owner 密码"), {
-      target: { value: "correct-horse-battery-staple" }
-    });
     expect(
       (screen.getByRole("button", { name: "使用规则模式" }) as HTMLButtonElement)
         .disabled
@@ -206,9 +218,11 @@ describe("setup application", () => {
 
   it("logs an Owner in after restart and revokes the session with CSRF", async () => {
     const readyStatus = {
-      ...bootstrapStatus,
+      ...ownerStatus,
       state: "ready",
       initialized: true,
+      owner_configured: true,
+      setup_nonce: null,
       model_mode: "rules",
       external_model: { credential_available: false }
     };
@@ -254,9 +268,11 @@ describe("setup application", () => {
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         jsonResponse({
-          ...bootstrapStatus,
+          ...ownerStatus,
           state: "model_recovery_required",
           initialized: true,
+          owner_configured: true,
+          setup_nonce: null,
           model_mode: "external",
           external_model: { credential_available: false }
         })
