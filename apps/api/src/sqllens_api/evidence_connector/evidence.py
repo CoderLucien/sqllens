@@ -9,7 +9,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, DecimalException
 from enum import StrEnum
 from typing import cast
 
@@ -140,7 +140,8 @@ def build_managed_evidence(
         storage_payload = strict_json_bytes(storage_document)
     except (TypeError, ValueError, UnicodeError, RecursionError) as error:
         raise EvidenceBuildError("query result content is not serializable") from error
-    if len(storage_payload) > query.budget.max_bytes:
+    effective_bytes = max(result.observed_bytes, len(storage_payload))
+    if effective_bytes > query.budget.max_bytes:
         raise EvidenceBuildError("query result content exceeded its byte budget")
 
     if kind == "slow_query":
@@ -156,7 +157,7 @@ def build_managed_evidence(
     truncated = (
         result.truncated
         or len(normalized_rows) == query.budget.max_rows
-        or result.observed_bytes == query.budget.max_bytes
+        or effective_bytes == query.budget.max_bytes
     )
     document: dict[str, JsonValue] = {
         "schemaVersion": "evidence/v2",
@@ -202,7 +203,7 @@ def build_managed_evidence(
                 "maxBytes": query.budget.max_bytes,
                 "elapsedMs": result.elapsed_ms,
                 "rowsRead": len(normalized_rows),
-                "bytesRead": result.observed_bytes,
+                "bytesRead": effective_bytes,
             },
         },
     }
@@ -353,7 +354,7 @@ def _extract_statement_summary(
                 current_plan, current_scans = current
                 if previous_plan != current_plan:
                     stability = "plan_changed"
-                elif previous_scans == current_scans:
+                elif _exact_scan_ratios_equal(previous_scans, current_scans):
                     stability = "plan_and_scan_stable"
 
     return {
@@ -366,7 +367,7 @@ def _extract_statement_summary(
 
 def _summary_window_signature(
     rows: list[dict[str, JsonValue]],
-) -> tuple[str, tuple[int, int]] | None:
+) -> tuple[str, tuple[tuple[int, int], tuple[int, int]]] | None:
     plan_digests: set[str] = set()
     weighted_total = 0
     weighted_processed = 0
@@ -391,9 +392,22 @@ def _summary_window_signature(
     return (
         next(iter(plan_digests)),
         (
-            _rounded_ratio(weighted_total, executions),
-            _rounded_ratio(weighted_processed, executions),
+            (weighted_total, executions),
+            (weighted_processed, executions),
         ),
+    )
+
+
+def _exact_scan_ratios_equal(
+    previous: tuple[tuple[int, int], tuple[int, int]],
+    current: tuple[tuple[int, int], tuple[int, int]],
+) -> bool:
+    return all(
+        previous_numerator * current_denominator == current_numerator * previous_denominator
+        for (previous_numerator, previous_denominator), (
+            current_numerator,
+            current_denominator,
+        ) in zip(previous, current, strict=True)
     )
 
 
@@ -470,9 +484,18 @@ def _seconds_to_milliseconds(value: JsonValue) -> int:
         raise EvidenceBuildError("query latency must be a numeric second value")
     try:
         seconds = Decimal(str(value))
-    except InvalidOperation as error:
+    except (DecimalException, ValueError, OverflowError) as error:
         raise EvidenceBuildError("query latency is invalid") from error
-    milliseconds = int((seconds * Decimal(1_000)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if seconds <= 0:
+        raise EvidenceBuildError("query latency is outside the typed Evidence range")
+    if seconds > Decimal(3_600):
+        raise EvidenceBuildError("query latency is out of range")
+    try:
+        milliseconds = int(
+            (seconds * Decimal(1_000)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        )
+    except (DecimalException, ValueError, OverflowError) as error:
+        raise EvidenceBuildError("query latency is invalid") from error
     if milliseconds < 1:
         raise EvidenceBuildError("query latency is outside the typed Evidence range")
     return milliseconds
@@ -483,9 +506,10 @@ def _rounded_average(values: list[int]) -> int:
 
 
 def _rounded_ratio(numerator: int, denominator: int) -> int:
-    return int(
-        (Decimal(numerator) / Decimal(denominator)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    )
+    if numerator < 0 or denominator < 1:
+        raise EvidenceBuildError("rounded ratio inputs are invalid")
+    quotient, remainder = divmod(numerator, denominator)
+    return quotient + int(remainder * 2 >= denominator)
 
 
 def _validate_slow_query_contract_ranges(typed: dict[str, JsonValue]) -> None:

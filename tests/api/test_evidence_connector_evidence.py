@@ -378,6 +378,67 @@ def test_statement_summary_exact_comparison_builds_stable_typed_evidence() -> No
     assert evidence["summaryZh"] == ("SQL 计划摘要和扫描行数与前一基线窗口接近。")
 
 
+def test_statement_summary_does_not_compare_rounded_weighted_averages() -> None:
+    previous_first = statement_summary_row(
+        begin="2026-09-02T08:00:00Z",
+        end="2026-09-02T08:10:00Z",
+        average_total_keys=1,
+        average_processed_keys=1,
+    )
+    previous_first["exec_count"] = 1
+    previous_second = statement_summary_row(
+        begin="2026-09-02T08:00:00Z",
+        end="2026-09-02T08:10:00Z",
+        average_total_keys=2,
+        average_processed_keys=2,
+    )
+    previous_second["exec_count"] = 1
+    current = statement_summary_row(
+        begin="2026-09-02T08:10:00Z",
+        end="2026-09-02T08:20:00Z",
+        average_total_keys=2,
+        average_processed_keys=2,
+    )
+    current["exec_count"] = 1
+    query, result, context = statement_summary_collection(
+        (previous_first, previous_second, current)
+    )
+
+    evidence = build_managed_evidence(
+        query=query,
+        result=result,
+        context=context,
+    ).document
+
+    assert evidence["payload"]["typed"]["sqlStability"] == "unknown"
+
+
+def test_statement_summary_accepts_equivalent_unreduced_weighted_ratios() -> None:
+    rows = []
+    for begin, end, execution_count in (
+        ("2026-09-02T08:00:00Z", "2026-09-02T08:10:00Z", 1),
+        ("2026-09-02T08:10:00Z", "2026-09-02T08:20:00Z", 2),
+    ):
+        for average_keys in (1, 2):
+            row = statement_summary_row(
+                begin=begin,
+                end=end,
+                average_total_keys=average_keys,
+                average_processed_keys=average_keys,
+            )
+            row["exec_count"] = execution_count
+            rows.append(row)
+    query, result, context = statement_summary_collection(tuple(rows))
+
+    evidence = build_managed_evidence(
+        query=query,
+        result=result,
+        context=context,
+    ).document
+
+    assert evidence["payload"]["typed"]["sqlStability"] == "plan_and_scan_stable"
+
+
 def statement_summary_collection(
     rows: tuple[dict[str, str | int | None], ...],
 ) -> tuple[Any, QueryResult, ManagedEvidenceContext]:
@@ -569,6 +630,39 @@ def test_serialized_storage_cannot_bypass_the_byte_budget() -> None:
         )
 
 
+def test_reported_byte_usage_cannot_understate_the_serialized_payload() -> None:
+    query, result, context, _ = slow_query_collection("tidb-8.5")
+
+    collected = build_managed_evidence(
+        query=query,
+        result=replace(result, observed_bytes=1),
+        context=context,
+    )
+
+    assert collected.document["collection"]["budget"]["bytesRead"] == len(collected.storage_payload)
+
+
+def test_serialized_payload_saturation_uses_the_same_effective_byte_count() -> None:
+    query, result, context, _ = slow_query_collection("tidb-8.5")
+    baseline = build_managed_evidence(query=query, result=result, context=context)
+    fractional_digits = query.budget.max_bytes - len(baseline.storage_payload) - 1
+    saturated_row = dict(result.rows[0])
+    saturated_row["observed_at"] = (
+        saturated_row["observed_at"][:-1] + "." + "0" * fractional_digits + "Z"
+    )
+
+    collected = build_managed_evidence(
+        query=query,
+        result=replace(result, rows=(saturated_row,), observed_bytes=1),
+        context=context,
+    )
+
+    assert len(collected.storage_payload) == query.budget.max_bytes
+    assert collected.document["collection"]["budget"]["bytesRead"] == query.budget.max_bytes
+    assert collected.document["collection"]["status"] == "truncated"
+    assert collected.document["payload"]["truncated"] is True
+
+
 def test_unencodable_result_content_fails_at_the_evidence_boundary() -> None:
     query, result, context, _ = slow_query_collection("tidb-8.5")
     invalid_row = dict(result.rows[0])
@@ -644,6 +738,30 @@ def test_slow_query_measurements_fail_closed_without_coercion(
         build_managed_evidence(
             query=query,
             result=replace(result, rows=(invalid_row,)),
+            context=context,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "extreme_value", "expected_error"),
+    [
+        ("query_time", 1e100, "query latency is out of range"),
+        ("total_keys", 10**100, "typed Slow Query field is out of range"),
+    ],
+)
+def test_extreme_slow_query_numbers_fail_at_the_evidence_boundary(
+    field: str,
+    extreme_value: int | float,
+    expected_error: str,
+) -> None:
+    query, result, context, _ = slow_query_collection("tidb-8.5")
+    row = dict(result.rows[0])
+    row[field] = extreme_value
+
+    with pytest.raises(EvidenceBuildError, match=expected_error):
+        build_managed_evidence(
+            query=query,
+            result=replace(result, rows=(row,)),
             context=context,
         )
 

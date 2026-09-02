@@ -15,7 +15,9 @@ usage, derives only contract-approved typed fields, produces the exact
 Evidence/v2 envelope, and returns the canonical confidential storage payload
 separately. A local canonical-JSON implementation is locked to the frozen
 `b5795e6` test vectors so runtime code does not import executable files from
-`docs/contracts`.
+`docs/contracts`. Budget auditing uses the greater of the executor-reported
+byte count and the serialized confidential payload size throughout validation,
+recording, and saturation detection.
 
 **Tech Stack:** Python 3.12, frozen dataclasses, `Decimal`, `hashlib`, strict
 standard-library JSON, SQLGlot 30.17.0, pytest 9.1.1.
@@ -165,7 +167,7 @@ assert evidence.document["collection"]["budget"] == {
     "maxBytes": query.budget.max_bytes,
     "elapsedMs": result.elapsed_ms,
     "rowsRead": len(result.rows),
-    "bytesRead": result.observed_bytes,
+    "bytesRead": max(result.observed_bytes, len(storage_payload)),
 }
 ```
 
@@ -205,17 +207,19 @@ cross-digest values rather than coercing them.
 
 Emit `unknown` unless at least two complete comparison windows make an exact
 plan/scan classification possible. Exact plan-digest difference emits
-`plan_changed`; identical plan digest plus identical average total/processed
-keys emits `plan_and_scan_stable`; other scan differences remain `unknown`
-because the frozen contract defines no connector-side regression threshold.
+`plan_changed`; identical plan digest plus exactly equal weighted
+total/processed-key ratios emits `plan_and_scan_stable`. Compare the unreduced
+rationals by cross multiplication rather than rounded display values. Other
+scan differences remain `unknown` because the frozen contract defines no
+connector-side regression threshold.
 
 - [x] **Step 7: Render contract-owned summaries and envelope metadata**
 
 Use `slow-query/v2` or `statement-summary/v2`,
 `evidence-extractor/v1`, `rfc8785-safe-integer/v1`,
 `evidence-redaction/v2`, and a versioned connector collector ID/revision.
-Derive truncation from the client flag or row/byte saturation, and mirror it in
-both payload and collection status.
+Derive truncation from the client flag or row/effective-byte saturation, and
+mirror it in both payload and collection status.
 
 - [x] **Step 8: Run GREEN and adversarial tests**
 
