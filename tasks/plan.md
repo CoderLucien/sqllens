@@ -69,7 +69,8 @@ Deliver:
 
 - vNext specification and ADR 0009-0011;
 - clickable customer-journey HTML;
-- Source/v1, DiagnosisCase/v2, and DiagnosisReport/v1 contract drafts;
+- Source/v1, standalone Evidence/v2, DiagnosisCase/v2, and
+  DiagnosisReport/v1 contract drafts;
 - three approved Chinese report fixtures: index access, statistics/estimation,
   and runtime/resource correlation;
 - code retain/refactor/remove map and task ledger.
@@ -77,8 +78,10 @@ Deliver:
 Verification:
 
 ~~~bash
-python docs/contracts/validate_examples.py
-python docs/contracts/validate_vnext_examples.py
+python3 docs/contracts/validate_examples.py
+python3 -m unittest discover -s docs/contracts -p 'test_*.py' -v
+python3 docs/contracts/validate_vnext_examples.py
+python3 docs/contracts/validate_vnext_negative_examples.py
 git diff --check
 ~~~
 
@@ -94,7 +97,8 @@ Maximum first iteration: one focused implementation cycle before checkpoint.
 Slice A:
 
 - replace bootstrap-code happy path with atomic localhost Owner creation;
-- tests for proxy spoofing, concurrency, replay, and restart.
+- tests for exact Host/Origin, DNS rebinding, proxy spoofing, cookie-bound setup
+  nonce expiry/replay, concurrency, and restart; Docker peer IP is not identity.
 
 Slice B:
 

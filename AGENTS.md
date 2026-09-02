@@ -19,8 +19,10 @@ Read only the sections relevant to your task:
 - Historical P0 baseline:
   `docs/superpowers/specs/2026-08-31-sqllens-p0-design.md`
 - Delivery order and verification: `tasks/plan.md`
-- Deployment/model boundary: `docs/adr/0001-one-package-two-model-modes.md`
-- Collection boundary: `docs/adr/0002-evidence-acquisition-boundaries.md`
+- Historical deployment/model context (superseded for vNext):
+  `docs/adr/0001-one-package-two-model-modes.md`
+- Active collection safety boundary, as clarified by vNext contracts:
+  `docs/adr/0002-evidence-acquisition-boundaries.md`
 - LLM trust boundary: `docs/adr/0003-llm-is-an-untrusted-explainer.md`
 - Direct Docker/first-run decision:
   `docs/adr/0009-direct-docker-and-local-first-run.md`
@@ -30,6 +32,7 @@ Read only the sections relevant to your task:
   `docs/adr/0011-versioned-read-only-source-lifecycle.md`
 - Security abuse cases: `docs/threat-model.md`
 - vNext draft contracts: `docs/contracts/source-v1.schema.json`,
+  `docs/contracts/evidence-v2.schema.json`,
   `docs/contracts/diagnosis-case-v2.schema.json`, and
   `docs/contracts/diagnosis-report-v1.schema.json`
 - Historical domain contract: `docs/contracts/diagnosis-case-v1.schema.json`

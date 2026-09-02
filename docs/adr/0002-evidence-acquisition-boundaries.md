@@ -1,7 +1,9 @@
 # ADR 0002: Evidence Acquisition Boundaries
 
-Status: Accepted for P0 baseline
+Status: Accepted safety boundary; active Plan Replayer capture deferred for vNext P0
 Date: 2026-08-31
+Clarified by: ADR 0010, ADR 0011, and Evidence/v2
+Superseded in scope by: SQLLens vNext Product Spec sections B1 and M3
 
 ## Context
 
@@ -30,9 +32,15 @@ P0 never performs DML, `EXPLAIN ANALYZE`, recommendation execution, or automatic
 Plan Replayer capture. Ordinary `EXPLAIN` is rejected when the relevant TiDB
 version or SQL construct may execute work during optimization.
 
-P0 retains the approved one-click Plan Replayer generation capability as a
-separate privileged workflow. It is not part of default diagnosis collection.
-Before execution, the UI and API must present:
+The earlier design approved one-click Plan Replayer generation as a separate
+privileged P0 workflow. **That approval is historical and is not an active
+vNext P0 capability.** The vNext P0 page provides version-aware, copyable steps
+for the customer to generate and download a package using TiDB/PingKaiDB tools,
+then accepts the uploaded archive through the bounded imported-evidence path.
+SQLLens does not hold a capture credential or invoke Plan Replayer generation.
+
+Reintroducing service-triggered capture requires a new ADR, Human scope gate,
+runtime contract, and security review. Any future proposal must present:
 
 - the exact operation and target statement digest;
 - the metadata/statistics categories and identifiers that may enter the archive;
@@ -41,19 +49,18 @@ Before execution, the UI and API must present:
 - the cancellation and kill-switch behavior;
 - the sensitivity warning and destination/retention policy.
 
-Only an authorized DBA/Admin can confirm the immutable preflight revision. The
-job is bounded, cancellable, fully audited, and fails closed on any version,
-privilege, policy, or budget mismatch. It never runs as an LLM tool call or an
-automatic response to a diagnosis. The captured archive then crosses into the
-same bounded imported-evidence boundary as an uploaded archive.
+Only an authorized DBA/Admin could confirm such an immutable preflight revision.
+Any future job must be bounded, cancellable, fully audited, and fail closed on
+version, privilege, policy, or budget mismatch. It must never run as an LLM tool
+call or an automatic response to a diagnosis. These are future admission
+conditions, not proof that a capture endpoint or job exists in vNext P0.
 
-The completed archive is addressed by an opaque job ID, not a filesystem path.
-Download requires a single-use, short-TTL token scoped to that archive and
-authenticated operator. The response includes an integrity digest and a
-content-disposition filename with no cluster identifiers. The temporary package
-is deleted on cancellation/failure, after successful single-use download, or at
-the configured short retention deadline, whichever happens first; cleanup is
-idempotent and audited. Tokens and package paths never enter normal logs.
+If a future ADR ever approves service-triggered capture, that future design
+would also need opaque job IDs, single-use short-TTL download tokens, integrity
+digests, identifier-safe filenames, bounded retention, idempotent audited
+cleanup, and log redaction for tokens and package paths. **No capture job,
+download token, archive response, or temporary-package lifecycle described by
+these future conditions exists in vNext P0.**
 
 Clinic URL reading is disabled until an official read API, supported auth scope,
 and test environment are available. Browser automation, SSO credential storage,
@@ -74,6 +81,6 @@ noise or resource thresholds are exceeded.
 
 - Layer and evidence completeness are visible in every case.
 - Missing or stale evidence lowers confidence or forces abstention.
-- The approved Plan Replayer capture requires the separate privileged workflow;
-  any other active collection feature requires a new scope and review.
+- vNext P0 provides Plan Replayer generation guidance and upload/import only;
+  active capture remains deferred until a new scope and review are approved.
 - Clinic URL mode remains outside P0.

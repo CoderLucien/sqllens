@@ -5,87 +5,670 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion",
-    "caseId",
-    "revision",
-    "inputMode",
-    "workflowState",
-    "outcome",
-    "effectiveMode",
-    "evidenceLevel",
-    "sourceSnapshots",
-    "evidence",
-    "facts",
-    "ruleFindings",
-    "aiSynthesis",
-    "actions",
-    "uncertainty",
-    "pinnedRevisions",
-    "createdAt",
-    "updatedAt"
+    "schemaVersion", "caseId", "profileSubjectRef", "profileObjectRef", "revision", "inputMode", "workflowState",
+    "outcome", "configuredMode", "effectiveMode", "evidenceLevel", "evidenceCompleteness", "subject",
+    "decision", "sourceSnapshots", "evidence", "facts", "ruleFindings",
+    "aiSynthesis", "actions", "uncertainty", "reviews", "feedback",
+    "transitionEvents", "pinnedRevisions", "createdAt", "updatedAt"
   ],
   "properties": {
     "schemaVersion": { "const": "diagnosis-case/v2" },
     "caseId": { "type": "string", "pattern": "^case_[a-z0-9]{16,64}$" },
+    "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+    "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
     "revision": { "type": "integer", "minimum": 1 },
     "inputMode": { "enum": ["managed_source", "plan_replayer", "manual"] },
-    "workflowState": {
-      "enum": ["queued", "collecting", "analyzing", "ready", "failed", "cancelled"]
-    },
-    "outcome": {
-      "enum": ["pending", "validated_effective", "rolled_back", "evidence_insufficient", "risk_accepted"]
-    },
+    "workflowState": { "enum": ["queued", "collecting", "analyzing", "ready", "failed", "cancelled"] },
+    "outcome": { "enum": ["pending", "validated_effective", "rolled_back", "evidence_insufficient", "risk_accepted"] },
+    "configuredMode": { "enum": ["rules", "rules_ai"] },
     "effectiveMode": { "enum": ["rules", "rules_ai"] },
     "evidenceLevel": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
+    "evidenceCompleteness": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "subject": { "$ref": "#/$defs/subject" },
+    "decision": { "$ref": "#/$defs/decision" },
     "sourceSnapshots": {
-      "type": "array",
-      "maxItems": 32,
+      "type": "array", "maxItems": 32,
       "items": { "$ref": "#/$defs/sourceSnapshot" }
     },
     "evidence": {
-      "type": "array",
-      "maxItems": 512,
-      "items": { "$ref": "#/$defs/evidence" }
+      "type": "array", "maxItems": 512,
+      "items": { "$ref": "https://example.invalid/sqllens/contracts/evidence-v2.schema.json" }
     },
     "facts": {
-      "type": "array",
-      "maxItems": 256,
+      "type": "array", "maxItems": 256,
       "items": { "$ref": "#/$defs/fact" }
     },
     "ruleFindings": {
-      "type": "array",
-      "maxItems": 128,
+      "type": "array", "maxItems": 128,
       "items": { "$ref": "#/$defs/ruleFinding" }
     },
-    "aiSynthesis": {
-      "oneOf": [
-        { "type": "null" },
-        { "$ref": "#/$defs/aiSynthesis" }
-      ]
-    },
+    "aiSynthesis": { "$ref": "#/$defs/aiSynthesis" },
     "actions": {
-      "type": "array",
-      "maxItems": 32,
+      "type": "array", "maxItems": 32,
       "items": { "$ref": "#/$defs/action" }
     },
     "uncertainty": {
-      "type": "array",
-      "maxItems": 64,
+      "type": "array", "maxItems": 64,
       "items": { "$ref": "#/$defs/uncertainty" }
     },
+    "reviews": {
+      "type": "array", "maxItems": 128,
+      "items": { "$ref": "#/$defs/review" }
+    },
+    "feedback": {
+      "type": "array", "maxItems": 256,
+      "items": { "$ref": "#/$defs/feedback" }
+    },
+    "transitionEvents": {
+      "type": "array", "minItems": 1, "maxItems": 512,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/workflowTransitionEvent" },
+          { "$ref": "#/$defs/outcomeTransitionEvent" }
+        ]
+      }
+    },
+    "pinnedRevisions": { "$ref": "#/$defs/pinnedRevisions" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "configuredMode": { "const": "rules" } }, "required": ["configuredMode"] },
+      "then": {
+        "properties": {
+          "effectiveMode": { "const": "rules" },
+          "aiSynthesis": {
+            "allOf": [
+              { "$ref": "#/$defs/aiSynthesis" },
+              { "properties": { "status": { "const": "not_requested" } } }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "effectiveMode": { "const": "rules_ai" } }, "required": ["effectiveMode"] },
+      "then": {
+        "properties": {
+          "aiSynthesis": {
+            "allOf": [
+              { "$ref": "#/$defs/aiSynthesis" },
+              { "properties": { "status": { "const": "applied" }, "claims": { "minItems": 1 } } }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "configuredMode": { "const": "rules_ai" },
+          "effectiveMode": { "const": "rules" }
+        },
+        "required": ["configuredMode", "effectiveMode"]
+      },
+      "then": {
+        "properties": {
+          "aiSynthesis": {
+            "allOf": [
+              { "$ref": "#/$defs/aiSynthesis" },
+              { "properties": { "status": { "enum": ["degraded", "abstained"] } } }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aiSynthesis": {
+            "type": "object",
+            "properties": { "status": { "enum": ["applied", "degraded"] } },
+            "required": ["status"]
+          }
+        },
+        "required": ["aiSynthesis"]
+      },
+      "then": {
+        "properties": {
+          "pinnedRevisions": {
+            "properties": {
+              "provider": { "type": "string", "minLength": 1 },
+              "model": { "type": "string", "minLength": 1 },
+              "prompt": { "type": "string", "minLength": 1 },
+              "payload": { "type": "string", "minLength": 1 },
+              "payloadDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "not": { "properties": { "outcome": { "const": "pending" } }, "required": ["outcome"] } },
+      "then": { "properties": { "workflowState": { "const": "ready" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": { "templateId": { "const": "decision.evidence_insufficient" } },
+            "required": ["templateId"]
+          }
+        },
+        "required": ["decision"]
+      },
+      "then": {
+        "properties": {
+          "actions": { "maxItems": 0 },
+          "ruleFindings": { "maxItems": 0 },
+          "aiSynthesis": { "properties": { "claims": { "maxItems": 0 } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "validated_effective" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "reviews": { "contains": { "properties": { "decision": { "const": "approved" } }, "required": ["decision"] } },
+          "feedback": {
+            "allOf": [
+              { "contains": { "properties": { "kind": { "const": "implemented" } }, "required": ["kind"] } },
+              { "contains": { "properties": { "kind": { "const": "validated" } }, "required": ["kind"] } }
+            ]
+          },
+          "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "validated_effective" } }, "required": ["type", "toOutcome"] } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "rolled_back" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "reviews": { "contains": { "properties": { "decision": { "const": "approved" } }, "required": ["decision"] } },
+          "feedback": {
+            "allOf": [
+              { "contains": { "properties": { "kind": { "const": "implemented" } }, "required": ["kind"] } },
+              { "contains": { "properties": { "kind": { "const": "rolled_back" } }, "required": ["kind"] } }
+            ]
+          },
+          "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "rolled_back" } }, "required": ["type", "toOutcome"] } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "evidence_insufficient" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "actions": { "maxItems": 0 },
+          "ruleFindings": { "maxItems": 0 },
+          "decision": {
+            "allOf": [
+              { "$ref": "#/$defs/decision" },
+              { "properties": { "templateId": { "const": "decision.evidence_insufficient" } } }
+            ]
+          },
+          "uncertainty": { "minItems": 1 },
+          "feedback": { "contains": { "properties": { "kind": { "const": "evidence_insufficient" } }, "required": ["kind"] } },
+          "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "evidence_insufficient" } }, "required": ["type", "toOutcome"] } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "risk_accepted" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "actions": { "minItems": 1 },
+          "reviews": { "contains": { "properties": { "decision": { "const": "risk_accepted" } }, "required": ["decision"] } },
+          "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "risk_accepted" } }, "required": ["type", "toOutcome"] } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["clusterZh", "databaseZh", "sqlDigest", "timeWindowZh", "businessZh", "businessEvidenceIds"],
+      "properties": {
+        "clusterZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "databaseZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sqlDigest": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "timeWindowZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "businessZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "businessEvidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" }
+      }
+    },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["templateId", "templateRevision", "params", "titleZh", "priority", "conclusionZh", "evidenceSummary", "evidenceIds", "ruleIds", "claimIds", "actionIds"],
+      "properties": {
+        "templateId": { "enum": ["decision.index_scan_priority", "decision.statistics_estimation", "decision.runtime_hotspot", "decision.evidence_insufficient"] },
+        "templateRevision": { "const": "v1" },
+        "params": { "type": "object" },
+        "titleZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "priority": { "enum": ["P0", "P1", "P2", "P3", "observe"] },
+        "conclusionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "evidenceSummary": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": { "$ref": "#/$defs/evidenceSummary" }
+        },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" },
+        "ruleIds": { "$ref": "#/$defs/ruleIds" },
+        "claimIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 32,
+          "items": { "type": "string", "pattern": "^claim_[a-z0-9]{16,64}$" }
+        },
+        "actionIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 3,
+          "items": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "templateId": { "const": "decision.index_scan_priority" } }, "required": ["templateId"] },
+          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" }, "ruleIds": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "decision.statistics_estimation" } }, "required": ["templateId"] },
+          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" }, "ruleIds": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "decision.runtime_hotspot" } }, "required": ["templateId"] },
+          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" }, "ruleIds": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "decision.evidence_insufficient" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "params": { "$ref": "#/$defs/profileFactDecisionParams" },
+              "ruleIds": { "maxItems": 0 },
+              "claimIds": { "maxItems": 0 },
+              "actionIds": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "evidenceSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["labelZh", "valueZh", "evidenceIds"],
+      "properties": {
+        "labelZh": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "valueZh": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIds" }
+      }
+    },
+    "sourceSnapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sourceId", "revision", "type", "product", "versionFamily"],
+      "properties": {
+        "sourceId": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "type": { "enum": ["tidb", "prometheus", "tem", "alertmanager"] },
+        "product": { "enum": ["tidb", "pingkaidb", "prometheus", "tem", "alertmanager"] },
+        "versionFamily": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "fact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["factId", "templateId", "templateRevision", "params", "kind", "statementZh", "valueText", "evidenceIds"],
+      "properties": {
+        "factId": { "type": "string", "pattern": "^fact_[a-z0-9]{16,64}$" },
+        "templateId": { "enum": ["fact.index_scan_profile", "fact.statistics_estimation_profile", "fact.runtime_hotspot_profile", "fact.evidence_gap_profile"] },
+        "templateRevision": { "const": "v1" },
+        "params": { "type": "object" },
+        "kind": { "enum": ["scan_amplification", "estimation_error", "time_window_correlation", "evidence_gap"] },
+        "statementZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "valueText": { "type": ["string", "null"], "maxLength": 512 },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIds" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "templateId": { "const": "fact.index_scan_profile" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "kind": { "const": "scan_amplification" },
+              "params": { "$ref": "#/$defs/indexScanFactParams" },
+              "evidenceIds": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "fact.statistics_estimation_profile" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "kind": { "const": "estimation_error" },
+              "params": { "$ref": "#/$defs/statisticsFactParams" },
+              "evidenceIds": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "fact.runtime_hotspot_profile" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "kind": { "const": "time_window_correlation" },
+              "params": { "$ref": "#/$defs/runtimeHotspotFactParams" },
+              "evidenceIds": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "fact.evidence_gap_profile" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "kind": { "const": "evidence_gap" },
+              "params": { "$ref": "#/$defs/evidenceGapFactParams" }
+            }
+          }
+        }
+      ]
+    },
+    "ruleFinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ruleId", "status", "severity", "minimumEvidenceLevel", "conclusionZh", "evidenceIds", "documentRefs"],
+      "properties": {
+        "ruleId": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" },
+        "status": { "enum": ["hit", "conflicted", "not_applicable"] },
+        "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+        "minimumEvidenceLevel": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
+        "conclusionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "evidenceIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 64,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "documentRefs": {
+          "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 16,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        }
+      }
+    },
+    "aiClaim": {
+      "type": "object", "additionalProperties": false,
+      "required": ["claimId", "audience", "templateId", "templateRevision", "params", "textZh", "evidenceIds", "ruleIds"],
+      "properties": {
+        "claimId": { "type": "string", "pattern": "^claim_[a-z0-9]{16,64}$" },
+        "audience": { "enum": ["all", "dba_sre", "developer", "incident_owner"] },
+        "templateId": { "enum": ["ai.index_candidate_priority", "ai.resource_hotspot_priority"] },
+        "templateRevision": { "const": "v1" },
+        "params": { "type": "object" },
+        "textZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" },
+        "ruleIds": { "$ref": "#/$defs/ruleIdsNonEmpty" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "templateId": { "const": "ai.index_candidate_priority" } }, "required": ["templateId"] },
+          "then": { "properties": { "params": { "$ref": "#/$defs/aiIndexCandidateParams" } } }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "ai.resource_hotspot_priority" } }, "required": ["templateId"] },
+          "then": { "properties": { "params": { "$ref": "#/$defs/aiResourceHotspotParams" } } }
+        }
+      ]
+    },
+    "aiSynthesis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "code", "messageZh", "invocation", "claims"],
+      "properties": {
+        "status": { "enum": ["applied", "degraded", "abstained", "not_requested"] },
+        "code": { "type": ["string", "null"], "maxLength": 128 },
+        "messageZh": { "type": ["string", "null"], "maxLength": 2048 },
+        "invocation": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/aiInvocation" }
+          ]
+        },
+        "claims": {
+          "type": "array", "maxItems": 32,
+          "items": { "$ref": "#/$defs/aiClaim" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "applied" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "code": { "type": "null" },
+              "messageZh": { "type": "null" },
+              "invocation": { "$ref": "#/$defs/aiInvocation" },
+              "claims": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "degraded" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "code": { "enum": ["MODEL_TIMEOUT", "PROVIDER_ERROR", "INVALID_MODEL_OUTPUT"] },
+              "messageZh": { "type": "string", "minLength": 1 },
+              "invocation": { "$ref": "#/$defs/aiInvocation" },
+              "claims": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "abstained" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "code": { "const": "EVIDENCE_POLICY_ABSTENTION" },
+              "messageZh": { "const": "证据策略不允许调用外部模型，本报告仅使用确定性规则。" },
+              "invocation": { "type": "null" },
+              "claims": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "not_requested" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "code": { "const": "AI_NOT_REQUESTED" },
+              "messageZh": { "const": "此诊断配置为仅规则模式，未调用外部模型。" },
+              "invocation": { "type": "null" },
+              "claims": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "action": {
+      "type": "object", "additionalProperties": false,
+      "required": ["actionId", "templateId", "templateRevision", "params", "family", "titleZh", "rationaleZh", "risk", "ownerRole", "prerequisitesZh", "stepsZh", "validation", "rollbackZh", "evidenceIds", "ruleIds", "requiresHumanApproval"],
+      "properties": {
+        "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
+        "templateId": { "enum": ["action.index_candidate_isolated", "action.statistics_refresh_isolated", "action.resource_hotspot_runbook"] },
+        "templateRevision": { "const": "v1" },
+        "params": { "type": "object" },
+        "family": { "enum": ["sql_rewrite", "index_candidate", "statistics_refresh", "plan_binding_candidate", "evidence_collection", "resource_investigation"] },
+        "titleZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "rationaleZh": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "risk": { "enum": ["low", "medium", "high", "critical"] },
+        "ownerRole": { "enum": ["dba", "sre", "developer", "incident_owner"] },
+        "prerequisitesZh": {
+          "type": "array", "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
+        "stepsZh": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "validation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["metricZh", "targetZh"],
+          "properties": {
+            "metricZh": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "targetZh": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        },
+        "rollbackZh": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" },
+        "ruleIds": { "$ref": "#/$defs/ruleIdsNonEmpty" },
+        "requiresHumanApproval": { "const": true }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "templateId": { "const": "action.index_candidate_isolated" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "family": { "const": "index_candidate" },
+              "params": { "$ref": "#/$defs/indexCandidateActionParams" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "action.statistics_refresh_isolated" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "family": { "const": "statistics_refresh" },
+              "params": { "$ref": "#/$defs/statisticsRefreshActionParams" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "action.resource_hotspot_runbook" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "family": { "const": "resource_investigation" },
+              "params": { "$ref": "#/$defs/resourceHotspotActionParams" }
+            }
+          }
+        }
+      ]
+    },
+    "uncertainty": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "descriptionZh", "requiredEvidenceKinds"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,127}$" },
+        "descriptionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "requiredEvidenceKinds": {
+          "type": "array", "uniqueItems": true, "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+        }
+      }
+    },
+    "actor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "displayName"],
+      "properties": {
+        "kind": { "enum": ["system", "user", "team", "role"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reviewId", "caseRevision", "reviewer", "authorizationSnapshot", "decision", "actionIds", "createdAt", "comment"],
+      "properties": {
+        "reviewId": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" },
+        "caseRevision": { "type": "integer", "minimum": 1 },
+        "reviewer": { "$ref": "#/$defs/actor" },
+        "authorizationSnapshot": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/authorizationSnapshot" }
+          ]
+        },
+        "decision": { "enum": ["approved", "rejected", "needs_changes", "risk_accepted"] },
+        "actionIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 32,
+          "items": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "comment": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "feedback": {
+      "type": "object", "additionalProperties": false,
+      "required": ["feedbackId", "caseRevision", "actor", "kind", "actionId", "evidenceIds", "createdAt", "comment"],
+      "properties": {
+        "feedbackId": { "type": "string", "pattern": "^fb_[a-z0-9]{16,64}$" },
+        "caseRevision": { "type": "integer", "minimum": 1 },
+        "actor": { "$ref": "#/$defs/actor" },
+        "kind": { "enum": ["useful", "not_useful", "incorrect", "implemented", "validated", "rolled_back", "evidence_insufficient"] },
+        "actionId": { "type": ["string", "null"], "pattern": "^act_[a-z0-9]{16,64}$" },
+        "evidenceIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "comment": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "workflowTransitionEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventId", "caseRevision", "type", "fromWorkflowState", "toWorkflowState", "actor", "createdAt", "reason"],
+      "properties": {
+        "eventId": { "type": "string", "pattern": "^evt_[a-z0-9]{16,64}$" },
+        "caseRevision": { "type": "integer", "minimum": 1 },
+        "type": { "const": "workflow_state" },
+        "fromWorkflowState": { "enum": [null, "queued", "collecting", "analyzing", "ready", "failed", "cancelled"] },
+        "toWorkflowState": { "enum": ["queued", "collecting", "analyzing", "ready", "failed", "cancelled"] },
+        "actor": { "$ref": "#/$defs/actor" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "outcomeTransitionEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventId", "caseRevision", "type", "fromOutcome", "toOutcome", "actor", "createdAt", "reason", "outcomeTuple", "reviewIds", "feedbackIds", "actionIds", "evidenceIds"],
+      "properties": {
+        "eventId": { "type": "string", "pattern": "^evt_[a-z0-9]{16,64}$" },
+        "caseRevision": { "type": "integer", "minimum": 1 },
+        "type": { "const": "outcome" },
+        "fromOutcome": { "enum": ["pending", "validated_effective", "rolled_back", "evidence_insufficient", "risk_accepted"] },
+        "toOutcome": { "enum": ["pending", "validated_effective", "rolled_back", "evidence_insufficient", "risk_accepted"] },
+        "actor": { "$ref": "#/$defs/actor" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "outcomeTuple": { "$ref": "#/$defs/outcomeTuple" },
+        "reviewIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 128,
+          "items": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" }
+        },
+        "feedbackIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 256,
+          "items": { "type": "string", "pattern": "^fb_[a-z0-9]{16,64}$" }
+        },
+        "actionIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 32,
+          "items": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" }
+        },
+        "evidenceIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        }
+      }
+    },
+    "authorizationSnapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["auditRecordId", "attestationRevision"],
+      "properties": {
+        "auditRecordId": { "type": "string", "pattern": "^authz_[a-z0-9]{16,64}$" },
+        "attestationRevision": { "const": "server-authorization-audit/v1" }
+      }
+    },
+    "outcomeTuple": {
+      "type": "object", "additionalProperties": false,
+      "required": ["actionId", "approvalReviewId", "implementationFeedbackId", "resultEvidenceIds", "terminalFeedbackId"],
+      "properties": {
+        "actionId": { "type": ["string", "null"], "pattern": "^act_[a-z0-9]{16,64}$" },
+        "approvalReviewId": { "type": ["string", "null"], "pattern": "^rev_[a-z0-9]{16,64}$" },
+        "implementationFeedbackId": { "type": ["string", "null"], "pattern": "^fb_[a-z0-9]{16,64}$" },
+        "resultEvidenceIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 8,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "terminalFeedbackId": { "type": ["string", "null"], "pattern": "^fb_[a-z0-9]{16,64}$" }
+      }
+    },
     "pinnedRevisions": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "rulePack",
-        "documentPack",
-        "parser",
-        "policy",
-        "redaction",
-        "provider",
-        "model",
-        "prompt"
-      ],
+      "type": "object", "additionalProperties": false,
+      "required": ["rulePack", "documentPack", "parser", "policy", "redaction", "provider", "model", "prompt", "payload", "payloadDigest"],
       "properties": {
         "rulePack": { "type": "string", "minLength": 1, "maxLength": 128 },
         "documentPack": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -94,249 +677,162 @@
         "redaction": { "type": "string", "minLength": 1, "maxLength": 128 },
         "provider": { "type": ["string", "null"], "maxLength": 128 },
         "model": { "type": ["string", "null"], "maxLength": 256 },
-        "prompt": { "type": ["string", "null"], "maxLength": 128 }
+        "prompt": { "type": ["string", "null"], "maxLength": 128 },
+        "payload": { "type": ["string", "null"], "maxLength": 128 },
+        "payloadDigest": { "type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$" }
       }
     },
-    "createdAt": { "type": "string", "format": "date-time" },
-    "updatedAt": { "type": "string", "format": "date-time" }
-  },
-  "$defs": {
-    "sourceSnapshot": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["sourceId", "revision", "type", "product", "versionFamily"],
+    "aiInvocation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["providerRevision", "modelRevision", "promptRevision", "payloadRevision", "payloadDigest", "redactionRevision"],
       "properties": {
-        "sourceId": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" },
-        "revision": { "type": "integer", "minimum": 1 },
-        "type": { "enum": ["tidb", "prometheus", "tem", "alertmanager", "upload", "manual"] },
-        "product": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "versionFamily": { "type": "string", "minLength": 1, "maxLength": 64 }
+        "providerRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "modelRevision": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "promptRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "payloadRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "payloadDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "redactionRevision": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
-    "evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "evidenceId",
-        "kind",
-        "sourceId",
-        "observedAt",
-        "collectedAt",
-        "freshness",
-        "coverage",
-        "sensitivity",
-        "integrityDigest",
-        "summaryZh"
-      ],
+    "aiIndexCandidateParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["preferredActionFamily", "deprioritizedActionFamily"],
       "properties": {
-        "evidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" },
-        "kind": {
-          "enum": [
-            "sql_structure",
-            "statement_summary",
-            "slow_query",
-            "schema",
-            "index",
-            "statistics",
-            "ordinary_plan",
-            "runtime_metric",
-            "alert",
-            "validation_result"
-          ]
-        },
-        "sourceId": {
-          "type": ["string", "null"],
-          "pattern": "^src_[a-z0-9]{16,64}$"
-        },
-        "observedAt": { "type": "string", "format": "date-time" },
-        "collectedAt": { "type": "string", "format": "date-time" },
-        "freshness": { "enum": ["fresh", "stale", "unknown"] },
-        "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
-        "sensitivity": { "enum": ["public", "metadata", "confidential"] },
-        "integrityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-        "summaryZh": { "type": "string", "minLength": 1, "maxLength": 4096 }
+        "preferredActionFamily": { "const": "index_candidate" },
+        "deprioritizedActionFamily": { "const": "resource_investigation" }
       }
     },
-    "fact": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["factId", "kind", "statementZh", "valueText", "evidenceIds"],
+    "profileFactDecisionParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profileFactId"],
       "properties": {
-        "factId": { "type": "string", "pattern": "^fact_[a-z0-9]{16,64}$" },
-        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "statementZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "valueText": { "type": ["string", "null"], "maxLength": 512 },
-        "evidenceIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 64,
-          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
-        }
+        "profileFactId": { "type": "string", "pattern": "^fact_[a-z0-9]{16,64}$" }
       }
     },
-    "ruleFinding": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "ruleId",
-        "status",
-        "severity",
-        "minimumEvidenceLevel",
-        "conclusionZh",
-        "evidenceIds",
-        "documentRefs"
-      ],
+    "indexScanFactParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["windowMinutes", "callCount", "p95Ms", "averageScanRows", "averageReturnRows", "tableName", "filterColumns", "accessPath", "indexCoverage", "runtimeEvidenceId", "planEvidenceId", "indexEvidenceId"],
       "properties": {
-        "ruleId": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" },
-        "status": { "enum": ["hit", "conflicted", "not_applicable"] },
-        "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
-        "minimumEvidenceLevel": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
-        "conclusionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "evidenceIds": {
-          "type": "array",
-          "uniqueItems": true,
-          "maxItems": 64,
-          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        "windowMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+        "callCount": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "p95Ms": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+        "averageScanRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "averageReturnRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "tableName": { "type": "string", "pattern": "^[A-Za-z0-9_$]{1,64}$" },
+        "filterColumns": {
+          "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9_$]{1,64}$" }
         },
-        "documentRefs": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 16,
-          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
-        }
+        "accessPath": { "const": "table_full_scan" },
+        "indexCoverage": { "const": "no_matching_composite_index" },
+        "runtimeEvidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" },
+        "planEvidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" },
+        "indexEvidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
       }
     },
-    "aiClaim": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["claimId", "audience", "textZh", "evidenceIds", "ruleIds"],
+    "statisticsFactParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["estimatedRows", "actualRows", "statisticsFreshness", "statisticsEvidenceId"],
       "properties": {
-        "claimId": { "type": "string", "pattern": "^claim_[a-z0-9]{16,64}$" },
-        "audience": { "enum": ["all", "dba_sre", "developer", "incident_owner"] },
-        "textZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "evidenceIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 64,
-          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
-        },
-        "ruleIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 32,
-          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" }
-        }
+        "estimatedRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "actualRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "statisticsFreshness": { "const": "predates_bulk_import" },
+        "statisticsEvidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
       }
     },
-    "aiSynthesis": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["status", "code", "claims"],
+    "runtimeHotspotFactParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sqlStability", "resourceCorrelation", "alertScope", "statementEvidenceId", "runtimeEvidenceId", "alertEvidenceId"],
       "properties": {
-        "status": { "enum": ["applied", "degraded", "not_requested"] },
-        "code": { "type": ["string", "null"], "maxLength": 128 },
-        "claims": {
-          "type": "array",
-          "maxItems": 32,
-          "items": { "$ref": "#/$defs/aiClaim" }
-        }
+        "sqlStability": { "const": "plan_and_scan_stable" },
+        "resourceCorrelation": { "const": "same_window_elevated" },
+        "alertScope": { "const": "cluster_component_window_match" },
+        "statementEvidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" },
+        "runtimeEvidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" },
+        "alertEvidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
       }
     },
-    "action": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "actionId",
-        "family",
-        "titleZh",
-        "rationaleZh",
-        "risk",
-        "ownerRole",
-        "prerequisitesZh",
-        "stepsZh",
-        "validation",
-        "rollbackZh",
-        "evidenceIds",
-        "ruleIds",
-        "requiresHumanApproval"
-      ],
+    "evidenceGapFactParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attemptedDecisionTemplateId", "attemptedDecisionTemplateRevision", "profileIdentity", "roleAssessments"],
       "properties": {
-        "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
-        "family": {
-          "enum": [
-            "sql_rewrite",
-            "index_candidate",
-            "statistics_refresh",
-            "plan_binding_candidate",
-            "evidence_collection",
-            "resource_investigation"
-          ]
-        },
-        "titleZh": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "rationaleZh": { "type": "string", "minLength": 1, "maxLength": 4096 },
-        "risk": { "enum": ["low", "medium", "high", "critical"] },
-        "ownerRole": { "enum": ["dba", "sre", "developer", "incident_owner"] },
-        "prerequisitesZh": {
-          "type": "array",
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
-        },
-        "stepsZh": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
-        },
-        "validation": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["metricZh", "targetZh"],
+        "attemptedDecisionTemplateId": { "enum": ["decision.index_scan_priority", "decision.statistics_estimation", "decision.runtime_hotspot"] },
+        "attemptedDecisionTemplateRevision": { "const": "v1" },
+        "profileIdentity": {
+          "type": "object", "additionalProperties": false,
+          "required": ["profileSubjectRef", "profileObjectRef"],
           "properties": {
-            "metricZh": { "type": "string", "minLength": 1, "maxLength": 512 },
-            "targetZh": { "type": "string", "minLength": 1, "maxLength": 512 }
+            "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+            "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 }
           }
         },
-        "rollbackZh": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
-        },
-        "evidenceIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 64,
-          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
-        },
-        "ruleIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 32,
-          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" }
-        },
-        "requiresHumanApproval": { "const": true }
-      }
-    },
-    "uncertainty": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["code", "descriptionZh", "requiredEvidenceKinds"],
-      "properties": {
-        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$" },
-        "descriptionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "requiredEvidenceKinds": {
-          "type": "array",
-          "uniqueItems": true,
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+        "roleAssessments": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": { "$ref": "#/$defs/evidenceRoleAssessment" }
         }
       }
+    },
+    "evidenceRoleAssessment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "expectedKind", "evidenceId", "eligible", "reasonCodes"],
+      "properties": {
+        "role": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{1,63}$" },
+        "expectedKind": { "enum": ["slow_query", "ordinary_plan", "index", "statistics", "statement_summary", "runtime_metric", "alert"] },
+        "evidenceId": { "type": ["string", "null"], "pattern": "^ev_[a-z0-9]{16,64}$" },
+        "eligible": { "type": "boolean" },
+        "reasonCodes": {
+          "type": "array", "uniqueItems": true, "maxItems": 8,
+          "items": { "enum": ["MISSING_EVIDENCE", "NOT_FRESH", "COVERAGE_BELOW_POLICY", "NO_RECORDS", "TRUNCATED", "COLLECTION_INCOMPLETE", "NO_ROWS_READ"] }
+        }
+      }
+    },
+    "aiResourceHotspotParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["preferredActionFamily", "causality"],
+      "properties": {
+        "preferredActionFamily": { "const": "resource_investigation" },
+        "causality": { "const": "correlated_not_proven" }
+      }
+    },
+    "indexCandidateActionParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minScanReductionPct", "maxP95Ms", "maxWriteRegressionBasisPoints"],
+      "properties": {
+        "minScanReductionPct": { "type": "integer", "minimum": 50, "maximum": 99 },
+        "maxP95Ms": { "type": "integer", "minimum": 10, "maximum": 60000 },
+        "maxWriteRegressionBasisPoints": { "type": "integer", "minimum": 0, "maximum": 5000 }
+      }
+    },
+    "statisticsRefreshActionParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maxEstimateRatio", "maxDurationMinutes"],
+      "properties": {
+        "maxEstimateRatio": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "maxDurationMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
+      }
+    },
+    "resourceHotspotActionParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observationMinutes"],
+      "properties": {
+        "observationMinutes": { "type": "integer", "minimum": 1, "maximum": 120 }
+      }
+    },
+    "evidenceIdsNonEmpty": {
+      "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 512,
+      "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+    },
+    "evidenceIds": {
+      "type": "array", "uniqueItems": true, "maxItems": 512,
+      "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+    },
+    "ruleIds": {
+      "type": "array", "uniqueItems": true, "maxItems": 128,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" }
+    },
+    "ruleIdsNonEmpty": {
+      "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 128,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" }
     }
   }
 }

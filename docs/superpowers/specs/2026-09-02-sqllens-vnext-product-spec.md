@@ -69,11 +69,15 @@ packages, and source builds are outside the P0 customer journey.
 
 #### A2. Create the local Owner
 
-On an empty instance, the first localhost visit creates the Owner password. No
-default password or terminal bootstrap code is shown. The endpoint is available
-only while the instance is uninitialized, the request is loopback-originated,
-and no Owner record exists. Creation atomically closes the first-run endpoint.
-Recovery is a separate local, audited flow.
+On an empty instance, the first canonical `http://localhost:18080` visit creates
+the Owner password. No default password or terminal bootstrap code is shown.
+Owner creation requires the exact Host and Origin plus a short-lived,
+single-use setup nonce bound to an HttpOnly SameSite=Strict cookie. Docker
+loopback publication is exposure control; container peer IP and proxy headers
+are not caller identity. Creation atomically closes the first-run endpoint.
+The no-code P0 journey explicitly trusts the local operating-system/Docker
+administrator during empty-instance setup. Recovery is a separate local,
+audited flow.
 
 #### A3. Configure initial sources
 
@@ -97,13 +101,17 @@ normal logs, or model payloads.
 
 The user explicitly selects:
 
-- **Rules + AI**: deterministic evidence/rules plus a validated model-authored
-  Chinese explanation and recommendation layer;
+- **Rules + AI**: deterministic evidence/rules plus validated model selection
+  of allowlisted Chinese explanation and recommendation templates;
 - **Rules only**: the same deterministic facts without model-authored content.
 
 The configured and effective mode are visible globally and on every report.
 Provider preflight verifies model discovery and one minimal real structured
-diagnosis request. A failed provider degrades visibly to rules-only mode.
+diagnosis request. A failed provider degrades visibly to rules-only mode with a
+server-owned reason. Rules-only configuration never invokes a model and is
+reported as `not_requested`; a Rules + AI request that does not invoke because
+of policy is `abstained`, while an attempted but failed invocation is
+`degraded`.
 
 ### Phase B: Daily Diagnosis
 
@@ -122,10 +130,13 @@ Data sources, and System settings. It does not expose the first-run wizard.
 
 **Plan Replayer**
 
-The page provides version-aware, copyable steps to generate, locate, download,
-inspect, and upload a Plan Replayer package. It explains token expiry, package
-sensitivity, unsupported versions, parser errors, and the fact that a replay
-package does not prove production runtime performance.
+The page provides version-aware, copyable steps for the customer to operate the
+customer-operated upstream Plan Replayer, then inspect and upload only the ZIP
+package to SQLLens. Any file token, download URL, and expiry belong to that
+customer-operated upstream tool: SQLLens neither requests nor persists those
+credentials. The page also explains package sensitivity, unsupported versions,
+parser errors, and the fact that a replay package does not prove production
+runtime performance.
 
 **Manual materials**
 
@@ -181,6 +192,19 @@ rotate credential, and delete. A source revision includes:
 A diagnosis snapshots the source revision and evidence. Later source edits or
 deletion affect only new jobs and do not rewrite historical reports.
 
+Admission also pins the credential revision and acquires a lease. Rotation,
+disable, and delete stop new admission and enter drain without changing the
+authoritative active lease set. Every runtime admission first records a unique
+`leaseId`/`jobId`; each later normal release or forced cancellation must name an
+active identity, remove exactly that identity, and append an immutable lease
+event. The displayed count must equal the replayed active set and cannot be
+edited independently. A force cancellation is valid only after an explicit
+drain operation has stopped new admissions.
+Rotation activates a new revision for new jobs; deletion destroys the usable
+secret only after leases reach zero and retains a metadata-only tombstone. A
+forced cancel requires a prior Owner confirmation bound to its audit event.
+Hard deletion with active leases is forbidden.
+
 ### Database read-only account
 
 The guided scripts cover TiDB v8.5.x and PingKaiDB v7.1.x. Required privileges
@@ -224,15 +248,46 @@ export. SQLLens never acknowledges, closes, silences, or modifies alerts.
 
 ### Evidence levels
 
-- **E0**: SQL structure only. No production root-cause claim.
-- **E1**: SQL + schema/index metadata.
-- **E2**: E1 + statistics + ordinary plan.
-- **E3**: E2 + runtime Statement/Slow Query evidence.
-- **E4**: E3 + correlated Prometheus/TEM evidence.
+- **E0**: no eligible diagnostic Evidence; no diagnosis may become ready.
+- **E1**: at least one eligible bounded observation, but no stronger registered
+  role set is complete.
+- **E2**: eligible SQL/Statement/Slow Query/schema/index/ordinary-plan Evidence
+  supports a bounded structural finding but not a full database rule chain.
+- **E3**: either eligible statistics Evidence or the registered Slow Query +
+  ordinary-plan + index role set supports a database diagnosis.
+- **E4**: the registered Statement Summary + runtime metric + alert role set is
+  fresh and complete for one correlated window.
+
+Eligibility is versioned policy, not a caller flag. Each required role checks
+kind, freshness, minimum coverage, collection completion, truncation, record
+count, and rows read. `evidenceLevel` is derived only from Evidence bound to the
+typed Fact; unrelated Evidence cannot raise it. `evidenceCompleteness` is the
+percentage of that Fact's required roles that are eligible, and uncertainty is
+rendered from server-owned codes for missing or degraded roles.
+
+An incomplete role set remains a legal typed gap Fact. It renders a bounded,
+actionless `evidence_insufficient` decision with per-role reasons and derived
+level/completeness; it cannot support a ready rule hit, AI claim, or Action.
+The service selects role candidates: a matching Case Evidence candidate cannot
+be hidden behind `MISSING_EVIDENCE`, and an eligible candidate takes precedence
+over an ineligible one for the same role. A candidate must match the required
+kind and the profile's explicitly registered server-owned
+`profileSubjectRef`/`profileObjectRef`. The server extractor places both in the
+canonical typed payload and the Evidence envelope must be its exact projection,
+so callers cannot relabel an unchanged payload. Candidate identity is not
+inferred from measurement fields. A gap Fact preserves that attempted identity
+even when a role is absent. Same-kind Evidence for another object is unrelated,
+all selected roles bind one identity, and table-scoped typed Evidence must agree
+with its declared object reference.
 
 Rules declare minimum evidence level, supported product/version range, required
 fields, incompatible conditions, confidence ceiling, recommended action
 template, validation, rollback, and official references.
+
+The pinned database version selects one immutable rule-pack revision. For each
+rule, its predicate/threshold, status, severity, conclusion template, Evidence
+roles and document references are evaluated and rendered together. Only a
+`hit` rule can support a Decision, AI Claim, or Action.
 
 The first rule pack is derived from the official SQL tuning documentation,
 including SQL tuning overview, execution plan interpretation, indexes,
@@ -246,9 +301,12 @@ Deterministic code owns source/version detection, evidence integrity and
 completeness, measured values and derived features, rule matches and conflicts,
 permission policy, and the recommendation allowlist.
 
-AI may synthesize a Chinese explanation from validated facts and rule cards,
-rank findings, propose bounded non-executing recommendations, and identify
-missing evidence or competing explanations.
+AI may select allowlisted Chinese explanation templates and typed parameters
+from validated facts and rule cards, rank findings, propose bounded
+non-executing recommendation templates, and identify missing evidence or
+competing explanations. It does not persist customer-facing prose. The service
+renders typed facts plus the full decision (title, priority, conclusion, and
+evidence summary), claims, and actions deterministically.
 
 AI may not create or alter evidence, measurements, versions, or rule matches;
 invent object names, SQL literals, gains, or confidence; invoke tools, fetch
@@ -257,7 +315,9 @@ output that fails the schema and reference validator.
 
 Each AI claim references existing evidence IDs and rule IDs. Invalid,
 unreferenced, unsupported, timed-out, or oversized output is rejected and the
-report degrades to rules only.
+report degrades to rules only. A failed attempted call is labeled `degraded`
+with complete invocation provenance and a code/reason; a policy decision not to
+call is labeled `abstained` with no invocation pins and its own code/reason.
 
 ## Initial Contracts
 
@@ -267,12 +327,50 @@ Source metadata is separate from an encrypted credential reference. Mutating
 operations require CSRF protection, optimistic revision checks, and an audit
 reason. Tests return capability details, not just a Boolean.
 
+### Evidence/v2
+
+Evidence is a standalone immutable envelope bound to one Case and, when
+collected from a managed Source, one exact Source revision. It records payload
+integrity, observation/collection time, freshness, coverage, sensitivity,
+collector/query/redaction revisions, and timeout/row/byte budget consumption.
+Large or sensitive payloads remain behind a storage reference.
+Callers never submit an Evidence JSON record directly: managed collectors and
+upload parsers allocate the profile identity and construct the immutable typed
+record before Case validation.
+
+Typed payload digests pin `rfc8785-safe-integer/v1`, a restricted RFC 8785/JCS
+profile with integer base-unit measurements in the IEEE-754 safe range; NaN, Infinity,
+fractional typed measurements, and implementation-dependent number rendering
+fail closed. Every JSON ingress rejects duplicate object members before
+canonicalization.
+
 ### DiagnosisCase/v2
 
-Raw evidence, derived facts, rule findings, AI contribution, actions, and
-validation results are separate typed collections. Every reference resolves
-within the Case. Provider, model, prompt, rule pack, parser, redaction, source,
-and document revisions are pinned.
+Raw evidence, derived facts, rule findings, AI contribution, actions,
+review/feedback, workflow/outcome transition events, and validation results are
+separate typed collections. Every reference resolves within the Case. Decision
+parameters reference typed fact profiles bound to exact evidence IDs and kinds;
+derived ratios and display values are reconstructed from raw fact measurements;
+facts and every customer-visible decision/claim/action field are deterministic
+renderings of server-owned templates. All diagnosis evidence is collected no
+later than the ready event and Case revision `updatedAt`. The first
+`pending -> terminal` event carries one singular
+Action/approval/implementation/result/terminal-feedback tuple; its legacy ID
+arrays are an exact projection and a later self-transition cannot backfill it.
+Approval is a user actor bound by an opaque audit ID to a trusted server-owned
+authorization ledger, including the exact canonical Action digest. The audit
+snapshot is no older than Case creation and, for a new terminal revision,
+strictly newer than the prior revision; all terminal tuple records belong to the
+current Case revision. Effect and rollback Evidence must pass eligibility. Each Action
+template owns a complete metric/unit/predicate set, and the service recomputes
+the outcome from numeric measurements rather than accepting a writable
+`passed` flag. `validated_effective` requires every predicate; `rolled_back`
+requires a failed predicate and confirmed rollback. Strict `below` predicates
+reject equality; inclusive `at_most` predicates accept it, matching the approved
+Action copy exactly.
+Provider, model, prompt,
+redacted-payload, payload digest, rule pack, parser, redaction, source, and
+document revisions are pinned with field labels.
 
 ### DiagnosisReport/v1
 

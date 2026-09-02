@@ -34,10 +34,11 @@ Docker selects the matching architecture. Customers do not compile source,
 edit environment files, run migrations, choose an override, or enter product
 parameters before opening the Web UI.
 
-An empty instance accepts Owner creation only from loopback and only while no
-Owner exists. Creation is atomic and closes the first-run endpoint. There is no
-default password and no terminal bootstrap code in the happy path. Local
-recovery remains explicit, audited, and separate.
+An empty instance accepts Owner creation only through the canonical browser
+origin `http://localhost:18080` and only while no Owner exists. Creation is
+atomic and closes the first-run endpoint. There is no default password and no
+terminal bootstrap code in the happy path. Local recovery remains explicit,
+audited, and separate.
 
 Remote/LAN binding, custom ports, offline packages, Kubernetes, source builds,
 upgrade orchestration, signatures, SBOM, and provenance remain release or P1
@@ -46,14 +47,42 @@ the release gate publishes a real signed digest.
 
 ## Security Conditions
 
-- Proxy headers cannot turn a remote request into a loopback request.
+- Docker's loopback port publication limits network exposure; it does not prove
+  caller identity. Container peer IP is never used as a localhost trust signal
+  because Docker NAT commonly makes a host browser appear as a bridge peer.
+- The server accepts the exact `Host: localhost:18080` and exact
+  `Origin: http://localhost:18080` for first-run mutation. It rejects IP-literal,
+  alternate-host, forwarded-host, missing-origin, cross-origin, and malformed
+  forms. CORS is disabled and `Forwarded`/`X-Forwarded-*` never influence trust.
+- A pre-auth status GET using the canonical Host issues a short-lived,
+  single-use setup nonce bound to an HttpOnly, SameSite=Strict setup cookie.
+  Owner creation requires that cookie, the nonce in a dedicated CSRF header,
+  and the exact Origin. Success or expiry consumes the nonce; replay fails.
 - The first-run check and Owner creation occur in one database transaction.
 - A second concurrent creation attempt fails without changing credentials.
+- Rate limits apply before password hashing and are keyed independently of
+  proxy-controlled headers.
 - Setup endpoints other than status and Owner creation remain unavailable
   before authentication.
 - Secrets never enter image layers, command arguments, logs, or responses.
 - Port publication remains loopback-only unless a later reviewed ADR defines
   authenticated remote deployment.
+
+## Local Host Trust Assumption
+
+The no-code happy path cannot cryptographically distinguish the intended human
+browser from another process already controlling the same operating-system
+account, Docker daemon, browser profile, or localhost. Such local processes
+can obtain the same setup nonce. P0 therefore trusts the local host and Docker
+administrator during empty-instance first run. Protecting against a malicious
+local peer requires an out-of-band secret, client identity, or operating-system
+integration and is outside this ADR. Tests must demonstrate this limitation
+rather than claiming bridge-peer attribution is possible.
+
+Security tests cover hostile Origin, DNS-rebinding Host, forwarded-header
+spoofing, missing/mismatched nonce and cookie, nonce replay, rate limits, and
+concurrent Owner creation. A bridge-peer request with all canonical browser
+proofs remains inside the declared local-host trust boundary.
 
 ## Consequences
 

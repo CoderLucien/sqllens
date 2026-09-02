@@ -5,14 +5,23 @@
 The vNext product baseline adds:
 
 - `source-v1.schema.json`: revisioned database/Prometheus/TEM/Alertmanager
-  metadata and capability state; credentials are references, never values.
+  metadata, exact product/version/auth matrix, and append-only lifecycle audit;
+  credentials are references, never values.
+- `evidence-v2.schema.json`: standalone immutable evidence envelope with Case
+  and Source revision bindings, payload digest, freshness, redaction revision,
+  collector/query revision, and collection budgets.
 - `diagnosis-case-v2.schema.json`: separates evidence, facts, rule findings,
-  validated AI claims, actions, uncertainty, and pinned revisions.
+  typed fact profiles, fully server-rendered decisions/AI claims/actions,
+  uncertainty, transition audit, review/feedback, and labeled
+  provider/model/prompt/payload/redaction pins.
 - `diagnosis-report-v1.schema.json`: Chinese audience projection backed by one
   immutable Case revision.
 
 Review fixtures:
 
+- `examples/diagnosis-case-v2.valid.json`
+- `examples/diagnosis-case-v2.statistics.valid.json`
+- `examples/diagnosis-case-v2.runtime-correlation.valid.json`
 - `examples/diagnosis-report-v1.index-access.review.json`
 - `examples/diagnosis-report-v1.statistics.review.json`
 - `examples/diagnosis-report-v1.runtime-correlation.review.json`
@@ -20,13 +29,157 @@ Review fixtures:
 Validate the vNext drafts and their reference integrity with:
 
 ```bash
+python3 -m unittest discover -s docs/contracts -p 'test_*.py' -v
 python3 docs/contracts/validate_vnext_examples.py
+python3 docs/contracts/validate_vnext_negative_examples.py
 ```
+
+The positive validator checks all three Case/Report pairs, an explicit
+non-invoked AI abstention, one complete Source lease-drain chain, complete
+`validated_effective` and `rolled_back` transitions, and a separately rendered
+actionless `evidence_insufficient` Case/Report path. A report must be an exact
+projection of one Case revision for mode, conclusion, priority, business
+impact, evidence summary, rule/AI reasoning, ordered actions, uncertainty, and
+complete provenance. It cannot add an evidence ID, action, measurement, or
+business impact that the Case did not bind.
+
+The executable domain policy is deliberately split into independently tested
+models instead of accumulating conditions in the fixture runner:
+
+- `vnext_canonical_json.py` owns the restricted RFC 8785/JCS digest profile;
+- `vnext_diagnosis_policy.py` owns versioned Evidence eligibility, typed
+  Evidence -> Fact extraction, rule predicates/templates, and derived level,
+  completeness, and uncertainty (`diagnosis-policy/v4`);
+- `vnext_outcome_policy.py` owns the singular authorized outcome tuple and its
+  causal/effect semantics;
+- `vnext_source_ledger.py` performs one full-history replay of Source state and
+  lease events.
+
+DiagnosisCase/v2 records both workflow and business-outcome transition events.
+A non-pending outcome requires `workflowState=ready` and exactly one first
+`pending -> terminal` outcome event whose own references contain the complete
+prerequisite chain; a later terminal self-transition cannot backfill it. Effect
+claims require an ordered approval -> implementation -> result-evidence ->
+terminal feedback -> outcome-event chain. The terminal event contains one
+structured tuple and its legacy ID arrays must be its exact projection; records
+from another tuple cannot collectively satisfy an outcome. Human approval is a
+user actor bound through an opaque ID to a trusted, server-owned authorization
+audit ledger; the public Case cannot manufacture or rehash this attestation.
+The audit record binds the exact canonical Action snapshot as well as the Case,
+revision, review, principal, permission, and policy revision. Its capture time
+must fall between Case creation and the review; when a terminal revision is
+validated against its prior revision, the capture must also be strictly later
+than the prior revision's `updatedAt`, so an old role snapshot cannot be replayed.
+Each Action template owns an ordered set of required metric codes, units,
+thresholds, and comparison predicates. The outcome policy recomputes every
+predicate from numeric result Evidence and rejects a missing measurement; no
+persisted `passed` Boolean is authoritative. `validated_effective` requires
+every predicate to hold; `rolled_back` requires a failed predicate plus
+confirmed rollback for that same Action. Result Evidence must itself pass the
+Evidence eligibility policy. Predicate names freeze boundary semantics:
+`*_below` is strict and rejects equality, while `*_at_most` is inclusive. These
+comparisons use
+`effect-metric-comparison/v2`. The global event replay requires the
+workflow to be ready, rejects records created after the event, and requires all
+evidence used by the frozen diagnosis to have been collected no later than the
+ready event and that Case revision's `updatedAt`. Prior/proposed Case validation
+keeps old collections append-only and freezes the ready diagnosis.
+`risk_accepted` and `evidence_insufficient` have separate, explicit audit
+records and cannot be inferred from status text.
+
+Source/v1 lifecycle validation treats a Source revision and credential revision
+as separate immutable identities. Admission pins both and acquires a lease.
+Rotation, disable, and delete stop new admission and enter `draining`; normal
+retirement waits for zero leases. The authoritative lease ledger starts with a
+runtime-emitted acquisition event and exposes an exact active `leaseId`/`jobId`
+snapshot; the numeric count is only a derived cross-check. Every loaded snapshot
+is replayed from revision 1 by one combined state/lease model before it may be
+used as a prior revision. Admission may occur only in an enabled
+`leases_updated` revision strictly before its state snapshot; release/cancel
+events must belong to an allowed lease revision and also be strictly earlier
+than its state snapshot. Equal timestamps do not establish causal order and are
+rejected; multiple lease events in one revision are also strictly ordered.
+Entering drain preserves the active set. Each later normal release or forced
+cancellation names an acquired lease and job, removes exactly that identity,
+and appends an immutable lease event;
+forced cancellation also binds a prior Owner approval. The Source state event
+cannot precede the lease events recorded by the same revision. Delete removes
+the usable credential and retains only a non-queryable metadata tombstone. Every
+Source revision appends a chronological state event. Prior/proposed validation
+rejects audit rewrite, revision or credentialRevision rollback, invented or
+silently erased leases in every state, operation/pending-operation mismatch,
+contradictory verification state, and drain completion that does not match its
+pending operation.
+
+AI text, the customer-facing decision, and customer actions are not free-form
+persistence fields. The model may select only an allowlisted template and typed
+parameters. Decision parameters reference typed facts bound to exact evidence
+roles, kinds, schema revision, extraction revision, and typed payload fields;
+the validator verifies a canonical typed-payload digest, rebuilds fact
+parameters from those fields, then evaluates the database-version-selected rule
+pack. Predicate/threshold, status, severity, minimum evidence level, Chinese
+conclusion, evidence roles, and document references are one deterministic rule
+projection. Only a `hit` rule may support a Decision, Claim, or Action. The
+service then re-renders the fact and every customer-visible decision field
+(including priority and evidence summary), claim, action, and uncertainty and
+rejects any mismatch. Ratios and display-scale values are derived from typed raw
+measurements rather than accepted as independent parameters. An applied or
+failed/degraded invocation carries labeled
+provider, model, prompt, redacted-payload, payload digest, and redaction
+revisions. A policy abstention records a code and Chinese reason without
+invocation pins. `rules_ai -> rules` must use one of those two explicit paths,
+while `rules -> rules` must be `not_requested` with no invocation or provider
+pins. Reports project every AI status, server-owned code, and server-owned
+Chinese reason exactly.
+
+Standalone Evidence fixtures run the same observation/collection time, Source
+binding, digest, truncation, and budget semantics as Evidence embedded in a Case.
+
+Typed payload digests pin `rfc8785-safe-integer/v1`, a restricted RFC
+8785-compatible canonical form:
+object keys use UTF-16 ordering and measurements use integer base units within
+the IEEE-754 safe range. Every JSON ingress rejects duplicate object members
+before parsing can collapse them. NaN, Infinity, fractional typed
+measurements, and language-dependent number rendering are rejected; strict
+JSON serialization uses `allow_nan=False`.
+
+Evidence qualification is not inferred from a valid digest alone. The pinned
+policy checks kind-specific freshness, coverage, collection completion,
+truncation, record count, and rows read for every required Fact/rule role.
+`evidenceLevel` is computed only from those supporting roles, so unrelated
+Evidence cannot raise the ceiling. `evidenceCompleteness` is the percentage of
+eligible required roles, and uncertainty text is a server-owned code/template
+projection rather than caller-authored prose. Incomplete Evidence is retained
+as an explicit typed gap Fact with per-role eligibility and reasons. It may
+produce an actionless `evidence_insufficient` decision and terminal outcome,
+but it cannot support a ready rule hit or Action. Role selection is also
+server-owned: a role cannot be marked `MISSING_EVIDENCE` while a matching Case
+Evidence candidate exists, and an ineligible candidate cannot be selected when
+an eligible candidate for that role is available. “Matching” means both the
+required kind and the exact server-owned `profileSubjectRef` +
+`profileObjectRef` declared by that profile role agree. Both fields are part of
+the canonical typed payload produced by the Evidence extractor; the redundant
+Evidence envelope projection must match them and cannot relabel a payload.
+The Evidence JSON is not caller-authored input: managed collectors and upload
+parsers allocate the subject/object binding while constructing the immutable
+record, before it enters Case validation.
+Every supported profile explicitly lists those candidate identity fields;
+identity is never inferred from whichever measurement names happen to repeat
+across roles. The gap Fact pins the attempted profile identity even when a role
+has no Evidence. All selected roles must bind that same identity, while
+same-kind Evidence for another object cannot suppress an honest gap. For
+table-scoped plan, index, and statistics Evidence, `profileObjectRef` must also
+equal the typed `tableName`. The seven diagnostic typed payloads carrying this
+binding use their `v2` schema revisions.
 
 These fixtures are product-review baselines, not claims that the current
 runtime can generate them.
 
 ## Historical v1 contract
+
+Everything below this heading describes the historical DiagnosisCase/v1
+contract and validator. It does not override the vNext Source/Evidence/Case/
+Report rules above.
 
 `diagnosis-case-v1.schema.json` defines the serializable P0 case envelope.
 
@@ -111,9 +264,9 @@ Outcome prerequisites are cumulative:
 | Outcome | Required records in the case |
 | --- | --- |
 | `pending` | None |
-| `validated_effective` | An `approved` review, `implemented` feedback, and linked `validated` feedback citing `effect_metric_comparison` evidence |
-| `rolled_back` | An `approved` review, `implemented` feedback, and linked `rolled_back` feedback citing both `effect_metric_comparison` and `rollback_confirmation` evidence |
-| `evidence_insufficient` | `insufficient` completeness, non-empty missing-evidence details, no recommendations, and `evidence_insufficient` feedback |
+| `validated_effective` | An `approved` review, `implemented` feedback, and linked `validated` feedback citing the complete Action-owned metric set whose predicates are recomputed as satisfied |
+| `rolled_back` | An `approved` review, `implemented` feedback, and linked `rolled_back` feedback citing the complete Action-owned metric set with at least one failed predicate plus `rollback_confirmation` evidence |
+| `evidence_insufficient` | A typed gap Fact, derived sub-100 completeness and evidence ceiling, no rule hit/Action/Claim, and `evidence_insufficient` feedback |
 | `risk_accepted` | A `risk_accepted` review linked to at least one recommendation |
 
 The four business outcomes are terminal; re-analysis creates a new case rather
@@ -128,8 +281,9 @@ state machines.
 Effect outcomes cannot be grounded only by a comment or recommendation ID.
 Their terminal feedback has a non-empty `evidenceIds` binding; domain validation
 rejects empty, dangling, or policy-inappropriate evidence kinds. The P0 policy
-requires a metric comparison for both effect outcomes and separate rollback
-confirmation for `rolled_back`.
+requires the complete versioned Action measurement set for both effect outcomes
+and separate rollback confirmation for `rolled_back`. It derives the result
+from the measurements rather than accepting a writable success flag.
 
 Each effect result must form one causal chain for the same recommendation:
 
