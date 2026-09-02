@@ -2039,7 +2039,7 @@ LIMIT 100;</div>
           <div class="notice info"><div><strong>适合数据库网络无法直连的场景</strong><p>Plan Replayer 包不含表数据，但包含 SQL、Schema、Stats、Bindings、配置与计划上下文，上传前仍需按客户数据策略检查。默认只使用 EXPLAIN；EXPLAIN ANALYZE 会执行 SQL，必须由客户另行批准。</p></div></div>
           <div class="layout-two">
             <section class="section">
-              <div class="section-header"><div><h2>生成并上传 Plan Replayer</h2><p>页面按官方命令逐步引导，不再只显示一个上传框。</p></div><a href="https://pingkai.cn/docs/tidb/stable/sql-plan-replayer/" target="_blank" rel="noreferrer">查看官方说明</a></div>
+              <div class="section-header"><div><h2>在客户环境生成并上传 Plan Replayer</h2><p>页面仅指导客户操作上游 TiDB/PingKaiDB 工具；SQLLens 不代为执行，也不接收文件 token。</p></div><a href="https://pingkai.cn/docs/tidb/stable/sql-plan-replayer/" target="_blank" rel="noreferrer">查看官方说明</a></div>
               <div class="section-body operation-steps">
                 <div class="operation-step"><span class="operation-number">1</span><div class="operation-copy"><h3>确认产品版本和目标 SQL</h3><p>在目标集群的 SQL 客户端执行，只记录版本和数据库名；不要把密码复制到本页。</p><div class="code-block">SELECT VERSION();
 SELECT DATABASE();</div></div></div>
@@ -2047,8 +2047,8 @@ SELECT DATABASE();</div></div></div>
 WITH STATS AS OF TIMESTAMP '2026-09-02 14:00:00'
 EXPLAIN
 SELECT ... ;</div></div></div>
-                <div class="operation-step"><span class="operation-number">3</span><div class="operation-copy"><h3>取得临时文件标识</h3><p>命令结果会返回文件标识，也可在同一会话读取最后一次 token。</p><div class="code-block">SELECT @@tidb_last_plan_replayer_token;</div></div></div>
-                <div class="operation-step"><span class="operation-number">4</span><div class="operation-copy"><h3>在一小时内下载 ZIP</h3><p>使用任意 TiDB Server 的 status port；文件在集群侧最多保留一小时，过期后需要重新生成。</p><div class="code-block">curl --fail --show-error \
+                <div class="operation-step"><span class="operation-number">3</span><div class="operation-copy"><h3>在客户 SQL 会话取得临时文件标识</h3><p>该 token 只属于客户操作的上游数据库工具；不要粘贴到 SQLLens，SQLLens 只接收最终 ZIP。</p><div class="code-block">SELECT @@tidb_last_plan_replayer_token;</div></div></div>
+                <div class="operation-step"><span class="operation-number">4</span><div class="operation-copy"><h3>由客户在一小时内下载 ZIP</h3><p>客户从 TiDB Server 的 status port 下载；文件在上游集群侧最多保留一小时，SQLLens 不保存下载 URL 或 token。</p><div class="code-block">curl --fail --show-error \
   "http://&lt;tidb-server&gt;:10080/plan_replayer/dump/&lt;file_token&gt;" \
   -o plan_replayer.zip</div></div></div>
                 <div class="operation-step"><span class="operation-number">5</span><div class="operation-copy"><h3>检查并上传</h3><p>先确认文件来源、大小和共享授权；系统再做 ZIP 路径穿越、版本、errors.txt、SQL 字面量与对象名检查。</p><div class="upload-zone"><div><strong>拖入 plan_replayer.zip</strong><span>最大 500 MB · 不接受解压目录或重新打包文件</span><button class="button" id="simulate-replayer-upload" type="button" style="margin-top:10px">选择并预检</button></div></div><div class="result-box" id="replayer-result" aria-live="polite"><div class="result-title">预检通过，可以创建离线诊断</div><div class="result-grid"><div class="result-item"><b>版本</b><span>TiDB v8.5.2 · 规则包 tidb-8.5 匹配</span></div><div class="result-item"><b>内容</b><span>SQL / Schema / Stats / Binding / Plan 均可解析</span></div><div class="result-item"><b>限制</b><span>缺少线上时间窗指标，最高发布 E3 结论</span></div></div></div></div></div>
@@ -2058,11 +2058,11 @@ SELECT ... ;</div></div></div>
             <aside class="guide">
               <div class="guide-head"><strong>常见失败与处理</strong><span>失败时给可执行下一步。</span></div>
               <div class="guide-body">
-                <div class="guide-item"><strong>token 或下载链接过期</strong><p>文件最多保留一小时；回到目标 SQL 会话重新生成，不复用旧 token。</p></div>
+                <div class="guide-item"><strong>上游 token 或下载链接过期</strong><p>这是客户数据库工具的临时凭据；回到目标 SQL 会话重新生成，不要把 token 提交给 SQLLens。</p></div>
                 <div class="guide-item"><strong>errors.txt 有内容</strong><p>展示具体缺失项；若历史 Stats 不存在，可选择以最新 Stats 继续，但报告必须标记时间不一致。</p></div>
                 <div class="guide-item"><strong>版本暂未完全适配</strong><p>仍解析通用证据，但禁用未验证规则，只允许 AI 生成待验证假设。</p></div>
                 <div class="guide-item"><strong>敏感信息命中</strong><p>阻止继续上传，列出命中文件与字段类别；由客户在源端重新生成或取得明确授权。</p></div>
-                <div class="guide-item"><strong>偶发计划抓不到</strong><p>高级流程可使用 PLAN REPLAYER CAPTURE，以 SQL Digest 和 Plan Digest 定向抓取。</p></div>
+                <div class="guide-item"><strong>偶发计划抓不到</strong><p>vNext P0 不提供主动 CAPTURE 端点或代执行流程；请由 DBA 按客户变更流程处理，SQLLens 仅导入获批后的 ZIP。</p></div>
               </div>
             </aside>
           </div>

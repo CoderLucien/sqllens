@@ -13,41 +13,60 @@
     "databaseZh": "billing",
     "sqlDigest": "digest:3ac8...e112",
     "timeWindowZh": "2026-09-02 15:20-15:35 CST",
-    "businessZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。"
+    "businessZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。",
+    "businessEvidenceIds": [
+      "ev_0000000000000014"
+    ]
   },
   "evidenceSummary": [
     {
       "labelZh": "估算偏差",
       "valueZh": "estRows 120，运行时 rows 180000，偏差约 1500 倍",
-      "evidenceIds": ["ev_0000000000000011", "ev_0000000000000012"]
+      "evidenceIds": [
+        "ev_0000000000000011"
+      ]
     },
     {
       "labelZh": "统计健康",
       "valueZh": "目标表统计更新时间早于最近一次大批量导入",
-      "evidenceIds": ["ev_0000000000000013"]
+      "evidenceIds": [
+        "ev_0000000000000011"
+      ]
     }
   ],
   "reasoning": {
     "ruleFindingsZh": [
-      "规则 STATS_ESTIMATION_001 命中：估算/实际行数偏差超过版本规则阈值，且统计早于数据变更。"
+      "估算/实际行数偏差超过版本规则阈值，且统计早于数据变更。"
     ],
     "aiContributionZh": null,
-    "degradationZh": "外部模型超时，本报告使用确定性规则生成；事实、动作和证据不受影响。"
+    "aiStatus": "degraded",
+    "aiCode": "MODEL_TIMEOUT",
+    "aiReasonZh": "外部模型超时，本报告使用确定性规则生成；事实、动作和证据不受影响。"
   },
   "actions": [
     {
       "actionId": "act_0000000000000011",
       "order": 1,
       "titleZh": "在隔离环境验证统计刷新后的计划",
-      "ownerZh": "DBA",
-      "riskZh": "中等：ANALYZE 会消耗资源，必须按客户窗口和采样策略执行。",
-      "stepsZh": [
-        "使用 Plan Replayer 或测试集群复现当前统计和计划。",
-        "按版本文档选择受控统计刷新策略。",
-        "对比刷新前后 Join 顺序、估算偏差与任务耗时。"
+      "rationaleZh": "估算偏差和统计时效性共同支持先验证统计，而不是直接增加索引。",
+      "ownerRole": "dba",
+      "risk": "medium",
+      "prerequisitesZh": [
+        "准备 Plan Replayer 或测试集群",
+        "确认受控 ANALYZE 的资源窗口和采样策略"
       ],
-      "validationZh": "估算偏差下降到 10 倍以内，Join 顺序稳定，批处理耗时回到 6 分钟以内。",
-      "rollbackZh": "若计划退化，不在生产执行刷新；保留原统计与计划证据并重新评估绑定候选。"
+      "stepsZh": [
+        "复现当前统计和执行计划",
+        "按版本文档刷新统计并对比 Join 顺序与任务耗时"
+      ],
+      "validation": {
+        "metricZh": "估算偏差、Join 顺序和批处理耗时",
+        "targetZh": "估算偏差低于 10 倍，Join 顺序稳定，批处理耗时回到 6 分钟以内"
+      },
+      "rollbackZh": [
+        "若计划退化，不在生产执行统计刷新",
+        "保留原统计与计划证据并重新评估绑定候选"
+      ]
     }
   ],
   "uncertainty": [
@@ -58,16 +77,35 @@
     "evidenceLevel": "E3",
     "evidenceIds": [
       "ev_0000000000000011",
-      "ev_0000000000000012",
-      "ev_0000000000000013"
+      "ev_0000000000000014"
     ],
-    "ruleIds": ["STATS_ESTIMATION_001"],
+    "ruleIds": [
+      "STATS_ESTIMATION_001"
+    ],
     "claimIds": [],
-    "sourceRevisions": ["src_0000000000000011@2"],
-    "pinnedRevisions": [
-      "tidb-8.5-rules/v1",
-      "tidb-sql-tuning@2026-09-02",
-      "model-degraded:MODEL_TIMEOUT"
-    ]
+    "sourceRevisions": [
+      "src_0000000000000011@2"
+    ],
+    "aiInvocation": {
+      "providerRevision": "openai-compatible/v1",
+      "modelRevision": "gpt-5.6-sol",
+      "promptRevision": "evidence-bound-synthesis/v1",
+      "payloadRevision": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "redactionRevision": "evidence-redaction/v2"
+    },
+    "pinnedRevisions": {
+      "rulePack": "tidb-8.5-rules/v2",
+      "documentPack": "tidb-sql-tuning@2026-09-02",
+      "parser": "sqlglot/mysql@30.17.0",
+      "policy": "diagnosis-policy/v4",
+      "redaction": "evidence-redaction/v2",
+      "provider": "openai-compatible/v1",
+      "model": "gpt-5.6-sol",
+      "prompt": "evidence-bound-synthesis/v1",
+      "payload": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "evidenceCompleteness": 100
   }
 }

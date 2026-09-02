@@ -1,12 +1,73 @@
 {
   "schemaVersion": "diagnosis-case/v2",
   "caseId": "case_0000000000000002",
+  "profileSubjectRef": "subject_0000000000000002",
+  "profileObjectRef": "orders",
   "revision": 1,
   "inputMode": "managed_source",
   "workflowState": "ready",
   "outcome": "pending",
+  "configuredMode": "rules_ai",
   "effectiveMode": "rules_ai",
   "evidenceLevel": "E3",
+  "subject": {
+    "clusterZh": "生产订单集群",
+    "databaseZh": "order_center",
+    "sqlDigest": "digest:7f3a...91c2",
+    "timeWindowZh": "2026-09-02 16:00-16:10 CST",
+    "businessZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。",
+    "businessEvidenceIds": [
+      "ev_0000000000000004"
+    ]
+  },
+  "decision": {
+    "templateId": "decision.index_scan_priority",
+    "templateRevision": "v1",
+    "params": {
+      "profileFactId": "fact_0000000000000001"
+    },
+    "titleZh": "订单查询存在高频全表扫描，优先验证复合索引候选",
+    "priority": "P1",
+    "conclusionZh": "该 SQL 是当前 10 分钟窗口的主要可行动瓶颈：842 次调用平均扫描 126 万行，普通计划为全表扫描，建议先在隔离环境验证索引候选。",
+    "evidenceSummary": [
+      {
+        "labelZh": "运行表现",
+        "valueZh": "842 次调用，P95 2.8 秒，平均扫描 126 万行",
+        "evidenceIds": [
+          "ev_0000000000000001"
+        ]
+      },
+      {
+        "labelZh": "执行计划",
+        "valueZh": "orders 表 TableFullScan，扫描/返回比 3150:1",
+        "evidenceIds": [
+          "ev_0000000000000002"
+        ]
+      },
+      {
+        "labelZh": "索引覆盖",
+        "valueZh": "现有索引未匹配 tenant_id、status、created_at 的过滤顺序",
+        "evidenceIds": [
+          "ev_0000000000000003"
+        ]
+      }
+    ],
+    "evidenceIds": [
+      "ev_0000000000000001",
+      "ev_0000000000000002",
+      "ev_0000000000000003",
+      "ev_0000000000000004"
+    ],
+    "ruleIds": [
+      "IDX_ACCESS_001"
+    ],
+    "claimIds": [
+      "claim_0000000000000001"
+    ],
+    "actionIds": [
+      "act_0000000000000001"
+    ]
+  },
   "sourceSnapshots": [
     {
       "sourceId": "src_0000000000000001",
@@ -18,49 +79,255 @@
   ],
   "evidence": [
     {
+      "schemaVersion": "evidence/v2",
       "evidenceId": "ev_0000000000000001",
+      "revision": 1,
+      "caseId": "case_0000000000000002",
+      "profileSubjectRef": "subject_0000000000000002",
+      "profileObjectRef": "orders",
+      "origin": "managed_source",
       "kind": "slow_query",
-      "sourceId": "src_0000000000000001",
+      "sourceRef": {
+        "sourceId": "src_0000000000000001",
+        "revision": 3
+      },
       "observedAt": "2026-09-02T08:00:00Z",
       "collectedAt": "2026-09-02T08:05:00Z",
       "freshness": "fresh",
       "coverage": 0.96,
       "sensitivity": "confidential",
       "integrityDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-      "summaryZh": "该 SQL 在 10 分钟窗口内执行 842 次，P95 2.8 秒，平均扫描 126 万行。"
+      "summaryZh": "该 SQL 在 10 分钟窗口内执行 842 次，P95 2.8 秒，平均扫描 126 万行。",
+      "payload": {
+        "schemaRevision": "slow-query/v2",
+        "storageRef": "payload_0000000000000001",
+        "recordCount": 1,
+        "truncated": false,
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "slow_query",
+          "profileSubjectRef": "subject_0000000000000002",
+          "profileObjectRef": "orders",
+          "windowMinutes": 10,
+          "callCount": 842,
+          "p95Ms": 2800,
+          "averageScanRows": 1260000,
+          "averageReturnRows": 400
+        },
+        "typedDigest": "sha256:9b10ce079c8610618e4ac8959b580ecc67b3d180df4ca475d176533677d417a7",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
+      },
+      "collection": {
+        "collectorId": "pingkaidb-readonly",
+        "collectorRevision": "v1",
+        "queryId": "slow-query-by-digest",
+        "queryRevision": "pingkaidb-7.1/v1",
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 83,
+          "rowsRead": 1,
+          "bytesRead": 2048
+        }
+      }
     },
     {
+      "schemaVersion": "evidence/v2",
       "evidenceId": "ev_0000000000000002",
+      "revision": 1,
+      "caseId": "case_0000000000000002",
+      "profileSubjectRef": "subject_0000000000000002",
+      "profileObjectRef": "orders",
+      "origin": "managed_source",
       "kind": "ordinary_plan",
-      "sourceId": "src_0000000000000001",
+      "sourceRef": {
+        "sourceId": "src_0000000000000001",
+        "revision": 3
+      },
       "observedAt": "2026-09-02T08:04:00Z",
       "collectedAt": "2026-09-02T08:05:00Z",
       "freshness": "fresh",
       "coverage": 1,
       "sensitivity": "metadata",
       "integrityDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-      "summaryZh": "普通执行计划显示 orders 表发生 TableFullScan，过滤条件未形成可用访问路径。"
+      "summaryZh": "普通执行计划显示 orders 表发生 TableFullScan，过滤条件未形成可用访问路径。",
+      "payload": {
+        "schemaRevision": "ordinary-plan/v2",
+        "storageRef": "payload_0000000000000002",
+        "recordCount": 1,
+        "truncated": false,
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "ordinary_plan",
+          "profileSubjectRef": "subject_0000000000000002",
+          "profileObjectRef": "orders",
+          "tableName": "orders",
+          "accessPath": "table_full_scan"
+        },
+        "typedDigest": "sha256:2417b982605c2ad9dd16a6e1a3a8589130509923d9ab7d963c67e4f3449bdfa0",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
+      },
+      "collection": {
+        "collectorId": "pingkaidb-readonly",
+        "collectorRevision": "v1",
+        "queryId": "ordinary-explain-by-sql",
+        "queryRevision": "pingkaidb-7.1/v1",
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 41,
+          "rowsRead": 8,
+          "bytesRead": 4096
+        }
+      }
     },
     {
+      "schemaVersion": "evidence/v2",
       "evidenceId": "ev_0000000000000003",
+      "revision": 1,
+      "caseId": "case_0000000000000002",
+      "profileSubjectRef": "subject_0000000000000002",
+      "profileObjectRef": "orders",
+      "origin": "managed_source",
       "kind": "index",
-      "sourceId": "src_0000000000000001",
+      "sourceRef": {
+        "sourceId": "src_0000000000000001",
+        "revision": 3
+      },
       "observedAt": "2026-09-02T08:04:00Z",
       "collectedAt": "2026-09-02T08:05:00Z",
       "freshness": "fresh",
       "coverage": 1,
       "sensitivity": "metadata",
       "integrityDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-      "summaryZh": "现有索引没有同时覆盖 tenant_id、status 与 created_at 的过滤顺序。"
+      "summaryZh": "现有索引没有同时覆盖 tenant_id、status 与 created_at 的过滤顺序。",
+      "payload": {
+        "schemaRevision": "index-metadata/v2",
+        "storageRef": "payload_0000000000000003",
+        "recordCount": 4,
+        "truncated": false,
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "index",
+          "profileSubjectRef": "subject_0000000000000002",
+          "profileObjectRef": "orders",
+          "tableName": "orders",
+          "filterColumns": [
+            "tenant_id",
+            "status",
+            "created_at"
+          ],
+          "indexCoverage": "no_matching_composite_index"
+        },
+        "typedDigest": "sha256:d8a9bb12d612ebeaa18a9ccf12d44250f1f67c7e07186f365fcb91e2e03c17b8",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
+      },
+      "collection": {
+        "collectorId": "pingkaidb-readonly",
+        "collectorRevision": "v1",
+        "queryId": "table-indexes",
+        "queryRevision": "pingkaidb-7.1/v1",
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 27,
+          "rowsRead": 4,
+          "bytesRead": 3072
+        }
+      }
+    },
+    {
+      "schemaVersion": "evidence/v2",
+      "evidenceId": "ev_0000000000000004",
+      "revision": 1,
+      "caseId": "case_0000000000000002",
+      "profileSubjectRef": "subject_0000000000000002",
+      "profileObjectRef": "orders",
+      "origin": "manual",
+      "kind": "business_observation",
+      "sourceRef": null,
+      "observedAt": "2026-09-02T08:00:00Z",
+      "collectedAt": "2026-09-02T08:05:00Z",
+      "freshness": "fresh",
+      "coverage": 1,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "summaryZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。",
+      "payload": {
+        "schemaRevision": "business-observation/v1",
+        "storageRef": "payload_0000000000000004",
+        "recordCount": 1,
+        "truncated": false,
+        "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "business_observation",
+          "textZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。"
+        },
+        "typedDigest": "sha256:1b82aefc2a46f4a96e0665bb1a827935ea648e50fa43753a431ad64141be6fa5",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
+      },
+      "collection": {
+        "collectorId": "manual-input",
+        "collectorRevision": "v1",
+        "queryId": null,
+        "queryRevision": null,
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {
+          "timeoutMs": 1000,
+          "maxRows": 1,
+          "maxBytes": 65536,
+          "elapsedMs": 0,
+          "rowsRead": 1,
+          "bytesRead": 256
+        }
+      }
     }
   ],
   "facts": [
     {
       "factId": "fact_0000000000000001",
+      "templateId": "fact.index_scan_profile",
+      "templateRevision": "v1",
+      "params": {
+        "windowMinutes": 10,
+        "callCount": 842,
+        "p95Ms": 2800,
+        "averageScanRows": 1260000,
+        "averageReturnRows": 400,
+        "tableName": "orders",
+        "filterColumns": [
+          "tenant_id",
+          "status",
+          "created_at"
+        ],
+        "accessPath": "table_full_scan",
+        "indexCoverage": "no_matching_composite_index",
+        "runtimeEvidenceId": "ev_0000000000000001",
+        "planEvidenceId": "ev_0000000000000002",
+        "indexEvidenceId": "ev_0000000000000003"
+      },
       "kind": "scan_amplification",
-      "statementZh": "扫描行数与返回行数比值为 3150:1，访问路径放大明显。",
+      "statementZh": "当前 10 分钟内调用 842 次，P95 为 2800 ms，平均扫描 126 万行；orders 表为 TableFullScan，扫描/返回比 3150:1，且现有索引未匹配 tenant_id、status、created_at 的过滤顺序。",
       "valueText": "3150:1",
-      "evidenceIds": ["ev_0000000000000001", "ev_0000000000000002"]
+      "evidenceIds": [
+        "ev_0000000000000001",
+        "ev_0000000000000002",
+        "ev_0000000000000003"
+      ]
     }
   ],
   "ruleFindings": [
@@ -84,23 +351,47 @@
   "aiSynthesis": {
     "status": "applied",
     "code": null,
+    "messageZh": null,
+    "invocation": {
+      "providerRevision": "openai-compatible/v1",
+      "modelRevision": "gpt-5.6-sol",
+      "promptRevision": "evidence-bound-synthesis/v1",
+      "payloadRevision": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "redactionRevision": "evidence-redaction/v2"
+    },
     "claims": [
       {
         "claimId": "claim_0000000000000001",
         "audience": "all",
+        "templateId": "ai.index_candidate_priority",
+        "templateRevision": "v1",
+        "params": {
+          "preferredActionFamily": "index_candidate",
+          "deprioritizedActionFamily": "resource_investigation"
+        },
         "textZh": "该 SQL 是当前窗口的主要可行动瓶颈；应先在隔离环境验证复合索引候选，而不是调整集群资源。",
         "evidenceIds": [
           "ev_0000000000000001",
           "ev_0000000000000002",
           "ev_0000000000000003"
         ],
-        "ruleIds": ["IDX_ACCESS_001"]
+        "ruleIds": [
+          "IDX_ACCESS_001"
+        ]
       }
     ]
   },
   "actions": [
     {
       "actionId": "act_0000000000000001",
+      "templateId": "action.index_candidate_isolated",
+      "templateRevision": "v1",
+      "params": {
+        "minScanReductionPct": 90,
+        "maxP95Ms": 500,
+        "maxWriteRegressionBasisPoints": 500
+      },
       "family": "index_candidate",
       "titleZh": "在隔离环境验证复合索引候选",
       "rationaleZh": "现有计划为全表扫描，过滤列组合没有匹配的访问路径。",
@@ -116,7 +407,7 @@
       ],
       "validation": {
         "metricZh": "扫描行数、P95 延迟和写入开销",
-        "targetZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归在审批阈值内"
+        "targetZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归不超过 5%"
       },
       "rollbackZh": [
         "若收益或写入开销不达标，删除隔离环境候选索引并停止灰度",
@@ -127,7 +418,9 @@
         "ev_0000000000000002",
         "ev_0000000000000003"
       ],
-      "ruleIds": ["IDX_ACCESS_001"],
+      "ruleIds": [
+        "IDX_ACCESS_001"
+      ],
       "requiresHumanApproval": true
     }
   ],
@@ -135,19 +428,85 @@
     {
       "code": "PARAMETER_DISTRIBUTION_UNKNOWN",
       "descriptionZh": "当前证据未覆盖所有参数分布，索引收益必须在代表性数据上验证。",
-      "requiredEvidenceKinds": ["statistics", "validation_result"]
+      "requiredEvidenceKinds": [
+        "statistics",
+        "validation_result"
+      ]
+    }
+  ],
+  "reviews": [],
+  "feedback": [],
+  "transitionEvents": [
+    {
+      "eventId": "evt_0000000000000001",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": null,
+      "toWorkflowState": "queued",
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
+      "createdAt": "2026-09-02T08:05:00Z",
+      "reason": "任务已创建"
+    },
+    {
+      "eventId": "evt_0000000000000002",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "queued",
+      "toWorkflowState": "collecting",
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
+      "createdAt": "2026-09-02T08:05:00.200Z",
+      "reason": "开始采集证据"
+    },
+    {
+      "eventId": "evt_0000000000000003",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "collecting",
+      "toWorkflowState": "analyzing",
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
+      "createdAt": "2026-09-02T08:05:00.900Z",
+      "reason": "证据采集完成"
+    },
+    {
+      "eventId": "evt_0000000000000004",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "analyzing",
+      "toWorkflowState": "ready",
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
+      "createdAt": "2026-09-02T08:05:02Z",
+      "reason": "规则和报告投影完成"
     }
   ],
   "pinnedRevisions": {
-    "rulePack": "pingkaidb-7.1-rules/v1",
+    "rulePack": "pingkaidb-7.1-rules/v2",
     "documentPack": "pingkaidb-sql-tuning@2026-09-02",
     "parser": "sqlglot/mysql@30.17.0",
-    "policy": "diagnosis-policy/v2",
+    "policy": "diagnosis-policy/v4",
     "redaction": "evidence-redaction/v2",
-    "provider": "openai-compatible",
+    "provider": "openai-compatible/v1",
     "model": "gpt-5.6-sol",
-    "prompt": "evidence-bound-synthesis/v1"
+    "prompt": "evidence-bound-synthesis/v1",
+    "payload": "diagnosis-ai-payload/v1",
+    "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   },
   "createdAt": "2026-09-02T08:05:00Z",
-  "updatedAt": "2026-09-02T08:05:02Z"
+  "updatedAt": "2026-09-02T08:05:02Z",
+  "evidenceCompleteness": 100
 }
