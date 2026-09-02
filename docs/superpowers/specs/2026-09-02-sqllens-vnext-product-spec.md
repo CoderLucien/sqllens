@@ -101,8 +101,8 @@ normal logs, or model payloads.
 
 The user explicitly selects:
 
-- **Rules + AI**: deterministic evidence/rules plus a validated model-authored
-  Chinese explanation and recommendation layer;
+- **Rules + AI**: deterministic evidence/rules plus validated model selection
+  of allowlisted Chinese explanation and recommendation templates;
 - **Rules only**: the same deterministic facts without model-authored content.
 
 The configured and effective mode are visible globally and on every report.
@@ -186,11 +186,13 @@ A diagnosis snapshots the source revision and evidence. Later source edits or
 deletion affect only new jobs and do not rewrite historical reports.
 
 Admission also pins the credential revision and acquires a lease. Rotation,
-disable, and delete stop new admission and drain existing leases. Rotation
-activates a new revision for new jobs; deletion destroys the usable secret only
-after leases reach zero and retains a metadata-only tombstone. A forced cancel
-requires Owner confirmation and an audit record. Hard deletion with active
-leases is forbidden.
+disable, and delete stop new admission and enter drain without changing the
+current lease count. Each later normal release or forced cancellation names the
+lease and job, decrements the count by one, and appends an immutable lease event.
+Rotation activates a new revision for new jobs; deletion destroys the usable
+secret only after leases reach zero and retains a metadata-only tombstone. A
+forced cancel requires a prior Owner confirmation bound to its audit event.
+Hard deletion with active leases is forbidden.
 
 ### Database read-only account
 
@@ -257,9 +259,12 @@ Deterministic code owns source/version detection, evidence integrity and
 completeness, measured values and derived features, rule matches and conflicts,
 permission policy, and the recommendation allowlist.
 
-AI may synthesize a Chinese explanation from validated facts and rule cards,
-rank findings, propose bounded non-executing recommendations, and identify
-missing evidence or competing explanations.
+AI may select allowlisted Chinese explanation templates and typed parameters
+from validated facts and rule cards, rank findings, propose bounded
+non-executing recommendation templates, and identify missing evidence or
+competing explanations. It does not persist customer-facing prose. The service
+renders typed facts plus the full decision (title, priority, conclusion, and
+evidence summary), claims, and actions deterministically.
 
 AI may not create or alter evidence, measurements, versions, or rule matches;
 invent object names, SQL literals, gains, or confidence; invoke tools, fetch
@@ -268,7 +273,9 @@ output that fails the schema and reference validator.
 
 Each AI claim references existing evidence IDs and rule IDs. Invalid,
 unreferenced, unsupported, timed-out, or oversized output is rejected and the
-report degrades to rules only.
+report degrades to rules only. A failed attempted call is labeled `degraded`
+with complete invocation provenance and a code/reason; a policy decision not to
+call is labeled `abstained` with no invocation pins and its own code/reason.
 
 ## Initial Contracts
 
@@ -290,10 +297,16 @@ Large or sensitive payloads remain behind a storage reference.
 
 Raw evidence, derived facts, rule findings, AI contribution, actions,
 review/feedback, workflow/outcome transition events, and validation results are
-separate typed collections. Every reference resolves within the Case. AI claims
-and actions are deterministic renderings of server-owned templates with typed
-parameters. Provider, model, prompt, redacted-payload, payload digest, rule pack,
-parser, redaction, source, and document revisions are pinned with field labels.
+separate typed collections. Every reference resolves within the Case. Decision
+parameters reference typed fact profiles bound to exact evidence IDs and kinds;
+derived ratios and display values are reconstructed from raw fact measurements;
+facts and every customer-visible decision/claim/action field are deterministic
+renderings of server-owned templates. All diagnosis evidence is collected no
+later than the ready event and Case revision `updatedAt`. The first
+`pending -> terminal` event carries its complete review/feedback/action/evidence
+chain; a later self-transition cannot backfill it. Provider, model, prompt,
+redacted-payload, payload digest, rule pack, parser, redaction, source, and
+document revisions are pinned with field labels.
 
 ### DiagnosisReport/v1
 

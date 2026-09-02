@@ -35,11 +35,15 @@ fall back to it.
 
 Disable and delete use the same admission barrier. A normal operation enters
 `draining`, records the pending operation and retirement deadline, rejects new
-jobs, and waits for leases to reach zero. An explicit force operation may cancel
-leased jobs but must name the jobs, require Owner confirmation, and emit audit
-events. Delete then destroys the credential and writes a metadata-only
-`tombstoned` Source revision. Tombstones cannot be enabled or queried and retain
-no usable endpoint credential. Hard deletion while a lease exists is forbidden.
+jobs, preserves the current active-lease count in that admission revision, and
+waits for leases to reach zero. Every later normal release names its lease and
+job, decrements the count by exactly one, and appends an immutable lease event.
+An explicit force operation follows the same count chain but must name the job,
+bind an Owner approval created no later than the cancellation event, and emit a
+separate forced-cancel lease event. Delete then destroys the credential and
+writes a metadata-only `tombstoned` Source revision. Tombstones cannot be enabled
+or queried and retain no usable endpoint credential. Hard deletion while a
+lease exists is forbidden.
 
 The lifecycle transitions are:
 
@@ -54,9 +58,13 @@ The lifecycle transitions are:
 Each transition uses optimistic revision checks and is idempotent. Every Source
 revision appends a typed, chronological state event; prior events are immutable.
 Revision and credentialRevision are monotonic, and the prior/proposed validator
-rejects old-event rewrites, skipped revisions, lease growth while draining, and
-completion inconsistent with the pending operation. Crash recovery resumes the
-recorded pending operation; it never guesses whether a secret was retired.
+rejects old-event rewrites, skipped revisions, lease growth or silent lease
+erasure while draining, discontinuous per-lease counts, operation/pending-
+operation mismatch, contradictory state/verification pairs, and completion
+inconsistent with the pending operation. A drain starts only through an explicit
+Owner action; lease release revisions and completion remain separate. Crash
+recovery resumes the recorded pending operation; it never guesses whether a
+secret was retired.
 
 Every connector supplies an in-product acquisition guide:
 

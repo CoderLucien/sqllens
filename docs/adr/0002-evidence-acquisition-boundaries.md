@@ -55,13 +55,12 @@ version, privilege, policy, or budget mismatch. It must never run as an LLM tool
 call or an automatic response to a diagnosis. These are future admission
 conditions, not proof that a capture endpoint or job exists in vNext P0.
 
-The completed archive is addressed by an opaque job ID, not a filesystem path.
-Download requires a single-use, short-TTL token scoped to that archive and
-authenticated operator. The response includes an integrity digest and a
-content-disposition filename with no cluster identifiers. The temporary package
-is deleted on cancellation/failure, after successful single-use download, or at
-the configured short retention deadline, whichever happens first; cleanup is
-idempotent and audited. Tokens and package paths never enter normal logs.
+If a future ADR ever approves service-triggered capture, that future design
+would also need opaque job IDs, single-use short-TTL download tokens, integrity
+digests, identifier-safe filenames, bounded retention, idempotent audited
+cleanup, and log redaction for tokens and package paths. **No capture job,
+download token, archive response, or temporary-package lifecycle described by
+these future conditions exists in vNext P0.**
 
 Clinic URL reading is disabled until an official read API, supported auth scope,
 and test environment are available. Browser automation, SSO credential storage,

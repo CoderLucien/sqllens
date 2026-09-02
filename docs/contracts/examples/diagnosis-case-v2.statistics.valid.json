@@ -20,8 +20,7 @@
     "templateId": "decision.statistics_estimation",
     "templateRevision": "v1",
     "params": {
-      "estimatedRows": 120,
-      "actualRows": 180000
+      "profileFactId": "fact_0000000000000011"
     },
     "titleZh": "统计信息偏差导致 Join 顺序失真，先验证统计而不是直接加索引",
     "priority": "P1",
@@ -141,8 +140,16 @@
   "facts": [
     {
       "factId": "fact_0000000000000011",
+      "templateId": "fact.statistics_estimation_profile",
+      "templateRevision": "v1",
+      "params": {
+        "estimatedRows": 120,
+        "actualRows": 180000,
+        "statisticsFreshness": "predates_bulk_import",
+        "statisticsEvidenceId": "ev_0000000000000011"
+      },
       "kind": "estimation_error",
-      "statementZh": "核心表估算行数与实际行数相差约 1500 倍。",
+      "statementZh": "核心表估算 120 行、实际 180000 行，相差约 1500 倍；目标表统计更新时间早于最近一次大批量导入。",
       "valueText": "1500x",
       "evidenceIds": ["ev_0000000000000011"]
     }

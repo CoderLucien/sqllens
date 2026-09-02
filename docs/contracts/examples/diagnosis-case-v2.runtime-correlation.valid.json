@@ -19,7 +19,9 @@
   "decision": {
     "templateId": "decision.runtime_hotspot",
     "templateRevision": "v1",
-    "params": {},
+    "params": {
+      "profileFactId": "fact_0000000000000021"
+    },
     "titleZh": "SQL 延迟与 TiKV 热点时间窗一致，优先处置热点而不是改写 SQL",
     "priority": "P0",
     "conclusionZh": "告警窗口内 SQL 计划和扫描量稳定，但目标 Region 的 TiKV 延迟与热点指标同步升高；当前更支持资源热点，而不是 SQL 结构退化。",
@@ -206,10 +208,20 @@
   "facts": [
     {
       "factId": "fact_0000000000000021",
+      "templateId": "fact.runtime_hotspot_profile",
+      "templateRevision": "v1",
+      "params": {
+        "sqlStability": "plan_and_scan_stable",
+        "resourceCorrelation": "same_window_elevated",
+        "alertScope": "cluster_component_window_match",
+        "statementEvidenceId": "ev_0000000000000021",
+        "runtimeEvidenceId": "ev_0000000000000023",
+        "alertEvidenceId": "ev_0000000000000025"
+      },
       "kind": "time_window_correlation",
       "statementZh": "SQL 延迟与 TiKV 热点在同一时间窗异常，SQL 计划本身保持稳定。",
       "valueText": "correlated",
-      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023"]
+      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"]
     }
   ],
   "ruleFindings": [

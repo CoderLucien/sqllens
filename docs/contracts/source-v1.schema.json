@@ -8,7 +8,7 @@
     "schemaVersion", "sourceId", "revision", "type", "name", "state",
     "product", "version", "endpoint", "auth", "credentialLifecycle",
     "associatedSourceIds", "allowedSchemas", "capabilities", "budgets",
-    "owner", "verification", "transitionEvents", "createdAt", "updatedAt"
+    "owner", "verification", "transitionEvents", "leaseEvents", "createdAt", "updatedAt"
   ],
   "properties": {
     "schemaVersion": { "const": "source/v1" },
@@ -102,6 +102,10 @@
     "transitionEvents": {
       "type": "array", "minItems": 1, "maxItems": 256,
       "items": { "$ref": "#/$defs/sourceTransitionEvent" }
+    },
+    "leaseEvents": {
+      "type": "array", "maxItems": 4096,
+      "items": { "$ref": "#/$defs/leaseEvent" }
     },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" }
@@ -288,6 +292,25 @@
       }
     },
     {
+      "if": { "properties": { "state": { "const": "verification_failed" } }, "required": ["state"] },
+      "then": {
+        "properties": {
+          "verification": {
+            "properties": {
+              "status": { "const": "failed" },
+              "testedAt": { "type": "string" },
+              "identityDigest": { "type": "null" },
+              "errorCode": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "verification": { "properties": { "status": { "const": "failed" } }, "required": ["status"] } }, "required": ["verification"] },
+      "then": { "properties": { "state": { "const": "verification_failed" } } }
+    },
+    {
       "if": { "properties": { "credentialLifecycle": { "properties": { "state": { "const": "tombstoned" } }, "required": ["state"] } }, "required": ["credentialLifecycle"] },
       "then": { "properties": { "state": { "const": "tombstoned" } } }
     },
@@ -334,12 +357,23 @@
   "$defs": {
     "actor": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "id", "displayName"],
+      "required": ["kind", "role", "id", "displayName"],
       "properties": {
         "kind": { "enum": ["system", "user"] },
+        "role": { "enum": ["system", "owner"] },
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "user" } }, "required": ["kind"] },
+          "then": { "properties": { "role": { "const": "owner" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "system" } }, "required": ["kind"] },
+          "then": { "properties": { "role": { "const": "system" } } }
+        }
+      ]
     },
     "sourceTransitionEvent": {
       "type": "object", "additionalProperties": false,
@@ -348,7 +382,7 @@
         "eventId": { "type": "string", "pattern": "^sevt_[a-z0-9]{16,64}$" },
         "sourceRevision": { "type": "integer", "minimum": 1 },
         "type": { "const": "source_state" },
-        "operation": { "enum": ["registered", "verified", "enabled", "edited", "rotation_started", "rotation_completed", "disable_started", "disabled", "delete_started", "tombstoned", "verification_failed"] },
+        "operation": { "enum": ["registered", "verified", "enabled", "edited", "rotation_started", "rotation_completed", "disable_started", "disabled", "delete_started", "leases_drained", "tombstoned", "verification_failed"] },
         "fromState": { "enum": [null, "draft", "enabled", "disabled", "draining", "verification_failed", "tombstoned"] },
         "toState": { "enum": ["draft", "enabled", "disabled", "draining", "verification_failed", "tombstoned"] },
         "credentialRevision": { "type": ["integer", "null"], "minimum": 1 },
@@ -356,6 +390,52 @@
         "createdAt": { "type": "string", "format": "date-time" },
         "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
       }
+    },
+    "ownerApproval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvedBy", "approvedAt", "reason"],
+      "properties": {
+        "approvedBy": {
+          "allOf": [
+            { "$ref": "#/$defs/actor" },
+            { "properties": { "kind": { "const": "user" } } }
+          ]
+        },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "leaseEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventId", "sourceRevision", "operation", "leaseId", "jobId", "fromLeaseCount", "toLeaseCount", "actor", "ownerApproval", "createdAt", "reason"],
+      "properties": {
+        "eventId": { "type": "string", "pattern": "^levt_[a-z0-9]{16,64}$" },
+        "sourceRevision": { "type": "integer", "minimum": 1 },
+        "operation": { "enum": ["lease_released", "lease_force_cancelled"] },
+        "leaseId": { "type": "string", "pattern": "^lease_[a-z0-9]{16,64}$" },
+        "jobId": { "type": "string", "pattern": "^job_[a-z0-9]{16,64}$" },
+        "fromLeaseCount": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "toLeaseCount": { "type": "integer", "minimum": 0, "maximum": 1023 },
+        "actor": { "$ref": "#/$defs/actor" },
+        "ownerApproval": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/ownerApproval" }
+          ]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "lease_released" } }, "required": ["operation"] },
+          "then": { "properties": { "ownerApproval": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "lease_force_cancelled" } }, "required": ["operation"] },
+          "then": { "properties": { "ownerApproval": { "$ref": "#/$defs/ownerApproval" } } }
+        }
+      ]
     },
     "capability": {
       "type": "object", "additionalProperties": false,

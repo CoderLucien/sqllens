@@ -20,9 +20,7 @@
     "templateId": "decision.index_scan_priority",
     "templateRevision": "v1",
     "params": {
-      "windowMinutes": 10,
-      "callCount": 842,
-      "averageScanRowsTenThousands": 126
+      "profileFactId": "fact_0000000000000001"
     },
     "titleZh": "订单查询存在高频全表扫描，优先验证复合索引候选",
     "priority": "P1",
@@ -196,10 +194,30 @@
   "facts": [
     {
       "factId": "fact_0000000000000001",
+      "templateId": "fact.index_scan_profile",
+      "templateRevision": "v1",
+      "params": {
+        "windowMinutes": 10,
+        "callCount": 842,
+        "p95Ms": 2800,
+        "averageScanRows": 1260000,
+        "averageReturnRows": 400,
+        "tableName": "orders",
+        "filterColumns": [
+          "tenant_id",
+          "status",
+          "created_at"
+        ],
+        "accessPath": "table_full_scan",
+        "indexCoverage": "no_matching_composite_index",
+        "runtimeEvidenceId": "ev_0000000000000001",
+        "planEvidenceId": "ev_0000000000000002",
+        "indexEvidenceId": "ev_0000000000000003"
+      },
       "kind": "scan_amplification",
-      "statementZh": "扫描行数与返回行数比值为 3150:1，访问路径放大明显。",
+      "statementZh": "当前 10 分钟内调用 842 次，P95 为 2800 ms，平均扫描 126 万行；orders 表为 TableFullScan，扫描/返回比 3150:1，且现有索引未匹配 tenant_id、status、created_at 的过滤顺序。",
       "valueText": "3150:1",
-      "evidenceIds": ["ev_0000000000000001", "ev_0000000000000002"]
+      "evidenceIds": ["ev_0000000000000001", "ev_0000000000000002", "ev_0000000000000003"]
     }
   ],
   "ruleFindings": [

@@ -29,9 +29,13 @@ the authority for facts and safety. They produce:
 
 The model receives only an allowlisted, redacted structured payload. It may
 return template IDs, typed parameters, and existing evidence/rule IDs. It does
-not return persisted customer-facing prose or executable steps. The service
-deterministically renders the approved Chinese decision/claim/action templates
-for:
+not return persisted customer-facing prose or executable steps. Numeric and
+object parameters used by a decision reference a typed fact profile whose raw
+fields are bound to exact evidence IDs and evidence kinds; ratios and
+display-scale values are recomputed from those raw fields. The service
+deterministically renders the fact plus every customer-visible decision field
+(title, priority, conclusion, and evidence summary) and the approved Chinese
+claim/action templates for:
 
 - an executive conclusion assembled from validated facts;
 - ordering and explanation of rule findings;
@@ -44,10 +48,18 @@ recommendation references an allowed action family and includes risk,
 prerequisites, validation, rollback, and human-approval requirements.
 
 The validator rejects unknown IDs/templates, parameter mismatch, altered
-rendered text, unknown action families, new measurements, new object names,
-unsupported confidence, extra fields, unsafe verbs, and output above the
-evidence ceiling. Invalid, unavailable, timed-out, or oversized output degrades
-to a deterministic Chinese rules report.
+rendered fact/decision/claim/action fields, unknown action families, new
+measurements, new object names, unsupported confidence, extra fields, unsafe
+verbs, and output above the evidence ceiling. Invalid, unavailable, timed-out,
+or oversized output degrades to a deterministic Chinese rules report.
+
+AI state is explicit. `applied` means a validated invocation contributed at
+least one claim. `degraded` means an invocation was attempted and failed and
+therefore retains the labeled invocation provenance plus a code and Chinese
+reason. `abstained` means policy prevented invocation and therefore carries a
+code and Chinese reason but no invocation pins. A configured `rules_ai` request
+may become effective `rules` only through `degraded` or `abstained`; silence is
+not a valid fallback.
 
 The model cannot create evidence, change rule results, invoke a tool, fetch a
 URL, execute SQL, apply a recommendation, or authorize data egress.
@@ -63,8 +75,8 @@ The report exposes:
 - the digest of the exact redacted structured payload;
 - degradation or abstention reason.
 
-Audience projections may rephrase emphasis but cannot alter facts, priority,
-evidence, or action state.
+Audience projections may select emphasis but cannot alter the deterministic
+facts, decision priority or summary, evidence, or action state.
 
 ## Consequences
 

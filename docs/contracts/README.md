@@ -11,8 +11,9 @@ The vNext product baseline adds:
   and Source revision bindings, payload digest, freshness, redaction revision,
   collector/query revision, and collection budgets.
 - `diagnosis-case-v2.schema.json`: separates evidence, facts, rule findings,
-  server-template-rendered AI claims/actions, uncertainty, transition audit,
-  review/feedback, and labeled provider/model/prompt/payload/redaction pins.
+  typed fact profiles, fully server-rendered decisions/AI claims/actions,
+  uncertainty, transition audit, review/feedback, and labeled
+  provider/model/prompt/payload/redaction pins.
 - `diagnosis-report-v1.schema.json`: Chinese audience projection backed by one
   immutable Case revision.
 
@@ -32,38 +33,53 @@ python3 docs/contracts/validate_vnext_examples.py
 python3 docs/contracts/validate_vnext_negative_examples.py
 ```
 
-The positive validator checks all three Case/Report pairs plus one complete
-`validated_effective` transition. A report must be an exact projection of one
-Case revision for mode, conclusion, business impact, evidence summary, rule/AI
-reasoning, ordered actions, uncertainty, and complete provenance. It cannot add
-an evidence ID, action, measurement, or business impact that the Case did not
-bind.
+The positive validator checks all three Case/Report pairs, an explicit
+non-invoked AI abstention, one complete Source lease-drain chain, and one
+complete `validated_effective` transition. A report must be an exact projection
+of one Case revision for mode, conclusion, priority, business impact, evidence
+summary, rule/AI reasoning, ordered actions, uncertainty, and complete
+provenance. It cannot add an evidence ID, action, measurement, or business
+impact that the Case did not bind.
 
 DiagnosisCase/v2 records both workflow and business-outcome transition events.
-A non-pending outcome requires `workflowState=ready`, a same-revision outcome
-event, and linked review/feedback/action/evidence prerequisites. Effect claims
-require an ordered approval -> implementation -> result-evidence -> terminal
-feedback -> outcome-event chain. The global event replay requires the workflow
-to be ready and rejects records created after the event. Prior/proposed Case
-validation keeps old collections append-only and freezes the ready diagnosis.
+A non-pending outcome requires `workflowState=ready` and exactly one first
+`pending -> terminal` outcome event whose own references contain the complete
+prerequisite chain; a later terminal self-transition cannot backfill it. Effect
+claims require an ordered approval -> implementation -> result-evidence ->
+terminal feedback -> outcome-event chain. The global event replay requires the
+workflow to be ready, rejects records created after the event, and requires all
+evidence used by the frozen diagnosis to have been collected no later than the
+ready event and that Case revision's `updatedAt`. Prior/proposed Case validation
+keeps old collections append-only and freezes the ready diagnosis.
 `risk_accepted` and `evidence_insufficient` have separate, explicit audit
 records and cannot be inferred from status text.
 
 Source/v1 lifecycle validation treats a Source revision and credential revision
 as separate immutable identities. Admission pins both and acquires a lease.
 Rotation, disable, and delete stop new admission and enter `draining`; normal
-retirement waits for zero leases. Delete removes the usable credential and
-retains only a non-queryable metadata tombstone. Every Source revision appends a
-chronological transition event. Prior/proposed validation rejects audit rewrite,
-revision or credentialRevision rollback, lease growth while draining, and a
-drain completion that does not match its pending operation.
+retirement waits for zero leases. Entering drain preserves the admitted lease
+count. Each later normal release or forced cancellation names the lease and job,
+decrements the count by exactly one, and appends an immutable lease event;
+forced cancellation also binds a prior Owner approval. Delete removes the usable
+credential and retains only a non-queryable metadata tombstone. Every Source
+revision appends a chronological state event. Prior/proposed validation rejects
+audit rewrite, revision or credentialRevision rollback, lease growth or silent
+lease erasure while draining, operation/pending-operation mismatch, contradictory
+verification state, and drain completion that does not match its pending
+operation.
 
 AI text, the customer-facing decision, and customer actions are not free-form
 persistence fields. The model may select only an allowlisted template and typed
-parameters. The validator re-renders every Chinese decision/claim/action and
-rejects any mismatch. An applied or degraded invocation carries labeled
+parameters. Decision parameters reference typed facts bound to exact evidence
+kinds; the validator re-renders the fact text and every customer-visible
+decision field (including priority and evidence summary), claim, and action and
+rejects any mismatch. Ratios and display-scale values are derived from typed raw
+measurements rather than accepted as independent parameters. An applied or
+failed/degraded invocation carries labeled
 provider, model, prompt, redacted-payload, payload digest, and redaction
-revisions; reports project those labels exactly.
+revisions. A policy abstention records a code and Chinese reason without
+invocation pins. `rules_ai -> rules` must use one of those two explicit paths,
+and reports project the labels and reason exactly.
 
 Standalone Evidence fixtures run the same observation/collection time, Source
 binding, digest, truncation, and budget semantics as Evidence embedded in a Case.
