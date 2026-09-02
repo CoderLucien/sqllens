@@ -15,6 +15,7 @@ class QueryResult:
     rows: tuple[Mapping[str, QueryValue], ...]
     truncated: bool
     observed_bytes: int
+    elapsed_ms: int
 
 
 class ReadOnlyQueryClient(Protocol):

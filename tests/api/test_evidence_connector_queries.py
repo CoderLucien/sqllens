@@ -9,6 +9,7 @@ from sqllens_api.evidence_connector import (
     QueryBudget,
     QueryCardinality,
     QueryPriorityPolicy,
+    QueryResult,
     QueryRuPolicy,
     ServerQuery,
     UnsafeServerQueryError,
@@ -33,7 +34,7 @@ def server_query(
 ) -> ServerQuery:
     return ServerQuery(
         pack_id="tidb-8.5",
-        pack_revision="tidb-8.5/queries-v1",
+        pack_revision="tidb-8.5/queries-v2",
         query_id="test.query",
         query_revision="tidb-8.5/test.query-v1",
         sql=sql,
@@ -50,6 +51,35 @@ def server_query(
             priority_policy=QueryPriorityPolicy.DATABASE_DEFAULT,
         ),
     )
+
+
+def test_query_result_records_elapsed_budget_usage() -> None:
+    result = QueryResult(
+        columns=("value",),
+        rows=({"value": 1},),
+        truncated=False,
+        observed_bytes=8,
+        elapsed_ms=4,
+    )
+
+    assert result.elapsed_ms == 4
+
+
+@pytest.mark.parametrize("pack_id", ["tidb-8.5", "pingkaidb-7.1"])
+def test_slow_query_registry_collects_result_rows(pack_id: str) -> None:
+    queries = query_pack(pack_id)
+
+    assert queries["slow_query.current_user"].pack_revision == (
+        f"{pack_id}/queries-v2"
+    )
+    assert queries["slow_query.current_user"].query_revision == (
+        f"{pack_id}/slow_query.current_user-v2"
+    )
+    assert "result_rows" in queries["slow_query.current_user"].result_columns
+    assert queries["slow_query.cross_user"].query_revision == (
+        f"{pack_id}/slow_query.cross_user-v2"
+    )
+    assert "result_rows" in queries["slow_query.cross_user"].result_columns
 
 
 @pytest.mark.parametrize("pack_id", ["tidb-8.5", "pingkaidb-7.1"])

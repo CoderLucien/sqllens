@@ -1,5 +1,5 @@
 {
-  "fixtureRevision": "pingkaidb-7.1.8-5.4/connector-v1",
+  "fixtureRevision": "pingkaidb-7.1.8-5.4/connector-v2",
   "provenance": {
     "kind": "documentation-derived-normalized",
     "runtimeVerified": false,
@@ -21,7 +21,7 @@
       }]
     },
     "slow_query.current_user": {
-      "columns": ["observed_at", "schema_name", "digest", "plan_digest", "query_time", "parse_time", "compile_time", "cop_time", "process_time", "wait_time", "backoff_time", "total_keys", "process_keys", "mem_max", "disk_max"],
+      "columns": ["observed_at", "schema_name", "digest", "plan_digest", "query_time", "parse_time", "compile_time", "cop_time", "process_time", "wait_time", "backoff_time", "total_keys", "process_keys", "mem_max", "disk_max", "result_rows"],
       "rows": [{
         "observed_at": "2026-09-02T02:27:00Z",
         "schema_name": "app_redacted",
@@ -37,7 +37,8 @@
         "total_keys": 1800,
         "process_keys": 120,
         "mem_max": 16384,
-        "disk_max": 0
+        "disk_max": 0,
+        "result_rows": 8
       }]
     }
   }

@@ -139,6 +139,7 @@ _SLOW_QUERY_COLUMNS = (
     "process_keys",
     "mem_max",
     "disk_max",
+    "result_rows",
 )
 
 
@@ -193,7 +194,7 @@ def query_pack(pack_id: str) -> Mapping[str, ServerQuery]:
 
 def _validate_metadata(query: ServerQuery) -> None:
     capabilities = capability_matrix(query.pack_id)
-    if query.pack_revision != f"{query.pack_id}/queries-v1":
+    if query.pack_revision != f"{query.pack_id}/queries-v2":
         raise UnsafeServerQueryError("query pack revision is invalid")
     if not _IDENTIFIER.fullmatch(query.query_id):
         raise UnsafeServerQueryError("query identifier is invalid")
@@ -296,12 +297,13 @@ def _query(
     required_capability: str | None,
     cardinality: QueryCardinality,
     budget: QueryBudget,
+    revision: int = 1,
 ) -> ServerQuery:
     return ServerQuery(
         pack_id=pack_id,
-        pack_revision=f"{pack_id}/queries-v1",
+        pack_revision=f"{pack_id}/queries-v2",
         query_id=query_id,
-        query_revision=f"{pack_id}/{query_id}-v1",
+        query_revision=f"{pack_id}/{query_id}-v{revision}",
         sql=sql,
         parameters=parameters,
         result_columns=result_columns,
@@ -338,6 +340,7 @@ SELECT
             required_capability=None,
             cardinality=QueryCardinality.BOUNDED_ROWS,
             budget=_budget(timeout_ms=5_000, max_rows=200, max_bytes=524_288),
+            revision=2,
         ),
         _query(
             pack_id,
@@ -368,6 +371,7 @@ LIMIT 200
             required_capability="process",
             cardinality=QueryCardinality.BOUNDED_ROWS,
             budget=_budget(timeout_ms=8_000, max_rows=200, max_bytes=524_288),
+            revision=2,
         ),
     )
     for query in queries:
@@ -398,7 +402,8 @@ SELECT
     total_keys,
     process_keys,
     mem_max,
-    disk_max
+    disk_max,
+    result_rows
 FROM information_schema.{table}
 WHERE time >= :window_start
   AND time <= :window_end
