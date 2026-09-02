@@ -1,259 +1,216 @@
-# Implementation Plan: SQLLens P0
+# SQLLens vNext Delivery Plan
 
-## Overview
+## Goal
 
-Deliver a runnable, evidence-first TiDB diagnosis P0 as vertical slices. The
-external-model 2C4G path is the release baseline. Clinic URL access and local
-30B inference are qualification-gated capabilities, not assumptions.
+Deliver customer-visible diagnosis value before release engineering. The first
+vertical slice is:
 
-## Dependency Graph
+one Docker command -> localhost Owner setup -> one managed source -> one
+abnormal SQL -> evidence-bound Chinese decision report.
 
-```text
-Specification and contracts
-  -> repository/tooling baseline
-     -> secure setup + provider gateway
-        -> Layer 1 + DiagnosisCase
-           -> shared jobs/evidence UI
-              -> Layer 2 connectors
-              -> Layer 3 importer
-                 -> Docker/resource controls
-                    -> E2E/performance/security
-                       -> independent review and release decision
-```
+The governing specification is
+docs/superpowers/specs/2026-09-02-sqllens-vnext-product-spec.md.
 
-## Phase 0: Freeze And Scaffold (T+0 to T+2h)
+## Delivery Order
 
-### Task 1: Freeze versioned domain and API contracts
+~~~text
+#t17 product, ADR, UI and contracts
+  -> #t18 install/setup/source shell
+     -> #t20 versioned rules + AI synthesis + Chinese report
+  -> #t19 TiDB/PingKaiDB evidence connector
+     -> integrate #t19 evidence into #t20 report
+        -> Human product review
+           -> #t22 one frozen QA acceptance
+           -> #t23 high-risk review as needed
+              -> #t21 Plan Replayer/manual ingress
+                 -> release qualification
+~~~
 
-**Acceptance criteria:** DiagnosisCase, Evidence, Job, setup states, error
-envelope, provider pinning, and sensitivity policy have versioned schemas.
+## Current Code Decision
 
-**Verification:** schema fixtures validate; invalid state transitions fail.
+### Retain
 
-**Dependencies:** None.
-**Files likely touched:** `packages/domain/*`, `docs/adr/*`.
-**Estimated scope:** Medium.
+- Python 3.12, FastAPI, React, sqlglot classification, and typed API errors.
+- Credential vault and key rotation foundations.
+- Single-Owner session, CSRF, idempotency, persistent admission lease, restart
+  recovery, and provider timeout/byte budgets.
+- Evidence identifiers, integrity digests, revision pinning, and rules fallback.
 
-### Task 2: Establish build and test baseline
+### Refactor Incrementally
 
-**Acceptance criteria:** backend/frontend install from lockfiles; `make lint`,
-`make typecheck`, `make test`, and `make build` work in a clean checkout.
+- apps/api/src/sqllens_api/setup.py: preserve atomic state and credential
+  semantics, replace terminal bootstrap happy path with localhost-only Owner
+  creation, then move source/model steps behind explicit services.
+- apps/api/src/sqllens_api/app.py: extract route groups and dependency
+  boundaries while touching each vertical slice; do not perform a broad rewrite.
+- apps/api/src/sqllens_api/diagnosis.py: replace SQL-structure-only fixed output
+  with Evidence, Rule, Synthesis, and Report interfaces.
+- apps/api/src/sqllens_api/provider.py: keep transport/egress/budget controls,
+  replace ranking-only schemas with ADR 0010 synthesis schemas.
+- apps/web/src/App.tsx: split first-run setup from authenticated daily shell.
+- apps/web/src/DiagnosisWorkspace.tsx: replace internal-ID-first rendering with
+  the approved Chinese report and trace drawer.
 
-**Verification:** CI-equivalent commands run locally and in the builder image.
+### Remove From The Customer Path
 
-**Dependencies:** Task 1.
-**Files likely touched:** root configs, `apps/api`, `apps/web`.
-**Estimated scope:** Medium.
+- terminal bootstrap-ingest and one-time code entry;
+- fixed 20 percent evidence completeness and English cannot-determine
+  hypotheses;
+- model-only hypothesis-ID ranking as the claimed AI diagnosis capability;
+- release archive/launcher, cross-platform clean-room, and full release gates
+  before Human product acceptance.
 
-### Checkpoint A
+## Task #t17: Product And Contract Freeze
 
-- Contracts and threat boundaries reviewed.
-- Clean build/test commands are reproducible.
-- No secrets or generated vendor content committed.
+Owner: swat-mgr
+Status: in progress
 
-## Phase 1: First Runnable Slice (T+2 to T+6h)
+Deliver:
 
-### Task 3: Secure first-run setup state machine
+- vNext specification and ADR 0009-0011;
+- clickable customer-journey HTML;
+- Source/v1, DiagnosisCase/v2, and DiagnosisReport/v1 contract drafts;
+- three approved Chinese report fixtures: index access, statistics/estimation,
+  and runtime/resource correlation;
+- code retain/refactor/remove map and task ledger.
 
-**Acceptance criteria:** setup API is the only available API before finalize;
-bootstrap is single-use/short-lived; policy is saved before outbound probes.
+Verification:
 
-**Verification:** unit and API abuse tests plus browser setup happy/failure paths.
+~~~bash
+python docs/contracts/validate_examples.py
+python docs/contracts/validate_vnext_examples.py
+git diff --check
+~~~
 
-**Dependencies:** Task 2.
-**Files likely touched:** setup routes/service/store and setup UI.
-**Estimated scope:** Medium.
+Exit: Reviewer gives a baseline finding set; unresolved contract blockers remain
+visible before runtime work.
 
-### Task 4: External provider gateway and rule fallback
+## Task #t18: Install, First Run, And Sources
 
-**Acceptance criteria:** OpenAI-compatible structured response adapter is
-timeout/cancellation/schema/policy bounded; tainted fields cannot leave; rule
-results remain available on provider failure.
+Owner: swat-rd
+Dependency: #t17 contracts
+Maximum first iteration: one focused implementation cycle before checkpoint.
 
-**Verification:** fake provider contract tests and outbound canary tests.
+Slice A:
 
-**Dependencies:** Tasks 1-3.
-**Files likely touched:** provider interface/adapter/policy/tests.
-**Estimated scope:** Medium.
+- replace bootstrap-code happy path with atomic localhost Owner creation;
+- tests for proxy spoofing, concurrency, replay, and restart.
 
-### Task 5: Layer 1 end-to-end case
+Slice B:
 
-**Acceptance criteria:** SQL input creates an async job and auditable case;
-invalid/oversized/unsupported inputs and missing evidence are explicit.
+- separate setup shell and daily shell;
+- Source/v1 CRUD with encrypted credential reference and immutable revision.
 
-**Verification:** unit, API contract, and Playwright happy/abstention tests.
+Slice C:
 
-**Dependencies:** Tasks 3-4.
-**Files likely touched:** SQL service/routes and case UI.
-**Estimated scope:** Medium.
+- database, Prometheus, and TEM/Alertmanager acquisition guides and capability
+  tests matching the approved HTML.
 
-### Checkpoint B
+Verification:
 
-- Docker -> Web setup -> provider -> SQL case is runnable.
-- Model outage demonstrates deterministic degradation.
-- No cluster access is needed for the slice.
+~~~bash
+make lint
+make typecheck
+make test
+make test-e2e
+make build
+~~~
 
-## Phase 2: Evidence Expansion (T+6 to T+12h)
+Exit: a frozen commit demonstrates first run and source lifecycle without a
+published release claim.
 
-### Task 6: Bounded job runtime and audit lifecycle
+## Task #t19: Versioned TiDB Evidence
 
-**Acceptance criteria:** idempotency, queue/concurrency/disk limits,
-cancellation, retries, timeouts, cleanup, and immutable audit events work.
+Owner: swat-rd2
+Dependency: #t17 Source/Evidence contracts
+Integration boundary: no shared UI/setup files with #t18.
 
-**Verification:** concurrency/failure injection and restart recovery tests.
+Slices:
 
-**Dependencies:** Task 5.
-**Files likely touched:** worker/job store/audit/tests.
-**Estimated scope:** Medium.
+1. version/capability preflight for TiDB v8.5.x and PingKaiDB v7.1.x;
+2. Statement Summary and Slow Query collectors;
+3. schema/index/statistics and ordinary-plan collectors;
+4. bounded correlation record for Prometheus/TEM evidence.
 
-### Task 7: TiDB and Prometheus connector preflight
+Every query is server-owned, parser-validated, versioned, budgeted, and covered
+by positive, denied-permission, unknown-version, timeout, and truncation tests.
 
-**Acceptance criteria:** supported version/deployment and privilege matrix is
-checked before collection; secrets never appear in responses or logs.
+Exit: recorded fixtures produce Evidence/v2 objects without a Web dependency.
 
-**Verification:** recorded fixtures plus disposable integration environment.
+## Task #t20: Rules, AI, And Chinese Report
 
-**Dependencies:** Tasks 1, 6.
-**Files likely touched:** connector clients/preflight/tests.
-**Estimated scope:** Medium.
+Owner: swat-rd
+Dependency: #t18 interface stable; integrates #t19 evidence when available
 
-### Task 8: Layer 2 evidence and abstention
+Slices:
 
-**Acceptance criteria:** bounded collection produces timestamped coverage and
-freshness; missing/evicted/skewed evidence lowers completeness or abstains.
+1. freeze three Chinese report fixtures before changing the runtime;
+2. add versioned rule-card schema and first official-document-backed rules;
+3. replace ranking-only output with evidence-bound AI synthesis;
+4. validate claim/rule/evidence/action references and degrade to rules;
+5. implement DBA/SRE, developer, and incident-owner report projections.
 
-**Verification:** representative workload fixtures, budget/fuse tests, API/E2E.
+No rule is complete without positive, negative, missing-evidence, and
+version-boundary fixtures.
 
-**Dependencies:** Task 7.
-**Files likely touched:** workload service/queries/correlation/UI/tests.
-**Estimated scope:** Medium per connector increment.
+Exit: Human can inspect one representative abnormal SQL and identify impact,
+cause, action, validation, rollback, evidence, rule source, and AI contribution.
 
-### Task 9: Safe Clinic archive importer
+## Task #t21: Alternative Evidence Entry
 
-**Acceptance criteria:** streaming archive/report import enforces all entry,
-ratio, byte, time, disk, path, link, type, cancellation, and cleanup budgets.
+Owner: swat-rd2
+Dependency: #t19/#t20 main path plus Human product acceptance
 
-**Verification:** malicious archive corpus and valid Clinic fixture E2E.
+Implement Plan Replayer upload and manual SQL/schema/plan/stats/runtime input.
+Both paths must emit the same Case/Report contracts. Archive protections cover
+paths, links, file count, compression ratio, bytes, time, disk, cancellation,
+and cleanup.
 
-**Dependencies:** Task 6.
-**Files likely touched:** importer/parser/policy/tests.
-**Estimated scope:** Medium.
+This task remains todo until the main abnormal-SQL path is accepted.
 
-### Checkpoint C
+## Task #t22: QA Acceptance
 
-- All three supported P0 paths create the same case contract.
-- Unsupported Clinic URL access is visibly disabled with rationale.
-- Connector impact limits have machine-verifiable evidence.
+Owner: swat-qa
 
-## Phase 3: Deployment And Qualification (T+12 to T+18h)
+QA authors traceability after #t17, but executes only when mgr freezes one
+commit/image. The matrix checks customer actions and report usefulness, not only
+HTTP status, job completion, or persistence.
 
-### Task 10: One-package deployment topology
+Results are PASS, FAIL, BLOCKED, or UNVERIFIED with raw evidence. One bounded
+retest may close a defect. New non-blocking scope goes to a later iteration.
 
-**Acceptance criteria:** base and GPU override share one release manifest;
-2C4G mode pulls no weights; app has no Docker Socket; internal services are not
-published; local mode refuses unavailable devices. Release images cover
-`linux/amd64` and `linux/arm64`, and launchers preserve the three-step deployment
-journey without manual configuration or migration commands.
+## Task #t23: High-Risk Review
 
-**Verification:** Mac/Linux/Windows clean low-resource install, network
-inspection, restart/upgrade/uninstall/data retention, failure remediation, and
-mode-switch state tests.
+Owner: swat-reviwer
 
-**Dependencies:** Tasks 3-9.
-**Files likely touched:** `deploy/*`, operations docs, smoke tests.
-**Estimated scope:** Medium.
+Review #t17 now, then only high-risk diffs:
 
-### Task 11: Security and dependency gate
+- first-run/Owner concurrency and recovery;
+- credential lifecycle and privilege boundaries;
+- collector allowlists and budgets;
+- model egress, schema, references, and degradation;
+- archive parsing and immutable history.
 
-**Acceptance criteria:** bootstrap, session, archive, connector, egress, prompt
-injection, secrets, dependency, image, and SBOM checks have evidence.
+Reviewer does not rerun QA's full product matrix.
 
-**Verification:** security suite and native package/container audits.
+## Product Gate Before Release Gate
 
-**Dependencies:** Tasks 3-10.
-**Files likely touched:** security tests/config/report.
-**Estimated scope:** Medium.
+Release engineering may start only after all are true:
 
-### Task 12: 2C4G performance qualification
+- Human accepts the actual first-run and abnormal-SQL customer journey;
+- a Chinese report is useful to DBA/SRE and consistent for developer/manager;
+- evidence/rule/AI provenance is visible;
+- #t22 signs the frozen slice;
+- #t23 has no unresolved critical/high finding.
 
-**Acceptance criteria:** three paths record RSS/CPU/temp disk/P95/queue and
-fuse/OOM behavior under enforced limits; results meet stated budgets or fail.
+Only then schedule multi-architecture publication, clean-machine validation,
+SBOM, signing/provenance, 2C4G benchmark, upgrade, rollback, and RC review.
 
-**Verification:** `make benchmark-2c4g` plus raw machine-readable report.
+## Working Limits
 
-**Dependencies:** Tasks 8-10.
-**Files likely touched:** load harness, fixtures, report.
-**Estimated scope:** Medium.
-
-### Checkpoint D
-
-- Release candidate installs from a clean environment.
-- Security and 2C4G reports contain raw evidence.
-- Local-model support is not claimed without hardware qualification.
-
-## Phase 4: Independent Acceptance (T+18 to T+24h)
-
-### Task 13: QA regression and exploratory pass
-
-**Acceptance criteria:** requirements-to-test traceability is complete; failed,
-skipped, and environment-blocked tests are reported separately.
-
-**Verification:** QA signs `PASS`, `CONDITIONAL`, or `FAIL` with reproductions.
-
-**Dependencies:** Tasks 1-12.
-**Files likely touched:** validation report only.
-**Estimated scope:** Small to Medium.
-
-### Task 14: Independent reviewer gate
-
-**Acceptance criteria:** architecture, code, evidence claims, deployment, and
-residual risk are independently reviewed; critical/high findings are resolved
-or block release.
-
-**Verification:** review report maps findings to commits/tests/tasks.
-
-**Dependencies:** Task 13.
-**Files likely touched:** review report only.
-**Estimated scope:** Small to Medium.
-
-### Task 15: Release decision and validation guide
-
-**Acceptance criteria:** a clean-room operator can repeat install, test, and
-benchmark commands; a new-machine user reaches the Web App in exactly three
-visible steps; known blockers and unsupported claims are visible.
-
-**Verification:** reviewer repeats the guide from a clean checkout.
-
-**Dependencies:** Tasks 13-14.
-**Files likely touched:** README, operations and validation docs.
-**Estimated scope:** Medium.
-
-## Parallel Work
-
-- After Task 2, QA can author fixtures and test contracts while RD builds setup.
-- After Task 6, Layer 2 and Layer 3 can proceed independently if ownership
-  capacity exists; they converge only on the case and job contracts.
-- Reviewer can examine ADRs, security boundaries, and contract tests before the
-  release candidate, then perform the final evidence gate after QA.
-
-## Timing And Reporting
-
-The estimate is `22-28` engineering hours. With RD, QA, Reviewer, and manager
-working in parallel, expected elapsed time is `16-24` hours for a P0 candidate.
-Real-environment compatibility and local-model GPU qualification require
-`2-3` working days when infrastructure is available.
-
-Each hourly checkpoint reports completed tasks, exact verification evidence,
-blockers, the next one-hour target, and revised remaining ETA.
-
-## Risks And Mitigations
-
-| Risk | Impact | Mitigation |
-|---|---|---|
-| No official Clinic read API | Blocks URL mode | P0 archive/report import; connector stays disabled |
-| GPU not exposed at start | Local mode unavailable | Preflight plus same-package GPU override; no Docker Socket |
-| 2C4G exceeded by archives/jobs | Low-mode failure | streaming, concurrency 1, disk/queue/fuse budgets |
-| False confidence from LLM | Unsafe recommendations | evidence binding, competing hypotheses, abstention, no execution API |
-| TiDB version/privilege drift | Connector breakage/impact | versioned query matrix and fail-closed preflight |
-| SQLLens name collision | Public launch risk | working code name only; rename/brand gate before GitHub release |
-| Cross-platform environment unavailable | Cannot claim Mac/Windows/Linux support | require real clean-install evidence; mark missing hosts unverified |
+- Each checkpoint identifies exact commit/files, commands, results, failures,
+  known limits, and next dependency.
+- RD and RD2 modify shared contracts only through mgr-coordinated order.
+- QA is the only acceptance signer. Reviewer is risk-based and on demand.
+- Each iteration has at most one evidence follow-up round; contract drift
+  returns to #t17 instead of adding tests indefinitely.

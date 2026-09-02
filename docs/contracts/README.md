@@ -1,5 +1,33 @@
 # Contract Fixtures
 
+## vNext contracts
+
+The vNext product baseline adds:
+
+- `source-v1.schema.json`: revisioned database/Prometheus/TEM/Alertmanager
+  metadata and capability state; credentials are references, never values.
+- `diagnosis-case-v2.schema.json`: separates evidence, facts, rule findings,
+  validated AI claims, actions, uncertainty, and pinned revisions.
+- `diagnosis-report-v1.schema.json`: Chinese audience projection backed by one
+  immutable Case revision.
+
+Review fixtures:
+
+- `examples/diagnosis-report-v1.index-access.review.json`
+- `examples/diagnosis-report-v1.statistics.review.json`
+- `examples/diagnosis-report-v1.runtime-correlation.review.json`
+
+Validate the vNext drafts and their reference integrity with:
+
+```bash
+python3 docs/contracts/validate_vnext_examples.py
+```
+
+These fixtures are product-review baselines, not claims that the current
+runtime can generate them.
+
+## Historical v1 contract
+
 `diagnosis-case-v1.schema.json` defines the serializable P0 case envelope.
 
 New SQL-layer cases include the optional `pinnedRevisions.parser` field. It

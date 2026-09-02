@@ -1,35 +1,39 @@
-# SQLLens P0 Task List
+# SQLLens vNext Task Ledger
 
-## Manager
+## Active
 
-- [x] Claim parent task `#t7`.
-- [x] Create and assign child tasks `#t8` through `#t15`.
-- [ ] Complete `#t8`: freeze contracts, ADRs, threat model, and P0/P1 boundary.
-- [ ] Complete `#t9`: maintain integration, hourly evidence, and release gate.
+- [ ] #t17 vNext product baseline, contracts, code disposition, and task freeze
+      (swat-mgr).
+- [ ] #t18 single Docker command, local first run, setup/daily shells, and
+      Source/v1 lifecycle (swat-rd; starts after #t17 review).
+- [ ] #t19 TiDB v8.5.x/PingKaiDB v7.1.x read-only evidence connector
+      (swat-rd2; starts after #t17 shared contracts).
+- [ ] #t23 baseline and high-risk contract/diff review (swat-reviwer).
 
-## RD
+## Queued
 
-- [ ] `#t10`: scaffold, secure Web setup, provider gateway, deployment baseline.
-- [ ] `#t11`: Layer 1 SQL diagnosis and unified DiagnosisCase.
-- [ ] `#t12`: Layer 2 Prometheus/TiDB bounded evidence path.
-- [ ] `#t13`: Layer 3 Clinic archive/report import and hostile-input controls.
-- [ ] `#t16`: Cross-platform three-step deployment and multi-architecture release.
+- [ ] #t20 versioned SQL rules, evidence-bound AI synthesis, and Chinese
+      decision report (swat-rd; after #t18 interface checkpoint).
+- [ ] #t22 frozen customer-journey and diagnosis-value acceptance (swat-qa;
+      author matrix after #t17, execute only on frozen object).
+- [ ] #t21 Plan Replayer and manual-material ingress (swat-rd2; after main path
+      Human acceptance).
 
-## QA
+## M1 Exit
 
-- [ ] `#t14`: test matrix, fixtures, security tests, E2E, 2C4G benchmark.
+- [ ] One copied docker run command reaches localhost Owner creation.
+- [ ] Setup and daily navigation are separate.
+- [ ] Source CRUD, capability test, credential rotation, disable, and delete
+      preserve historical Case provenance.
+- [ ] One abnormal SQL produces the approved Chinese report in rules and
+      rules+AI modes.
+- [ ] Human accepts customer value before release qualification starts.
+- [ ] QA signs the frozen object and Reviewer clears high-risk findings.
 
-## Reviewer
+## Explicitly Deferred
 
-- [ ] `#t15`: independent architecture/code/evidence/release review.
-
-## Release Gates
-
-- [ ] Clean bootstrap, lint, typecheck, unit, integration, E2E, and build pass.
-- [ ] All three supported paths produce versioned auditable cases.
-- [ ] 2C4G report includes RSS/CPU/temp disk/P95/degradation/fuse evidence.
-- [ ] No critical/high security or correctness findings remain.
-- [ ] Unsupported Clinic URL and unqualified local model are not marketed.
-- [ ] Public repository name has passed the naming/brand decision.
-- [ ] Mac/Linux/Windows external-model paths pass real three-step clean install;
-      multi-architecture images, upgrade, uninstall, and data retention pass.
+- [ ] Cross-platform clean-room and formal RC.
+- [ ] Release archives/launchers, offline package, Kubernetes, remote/LAN mode.
+- [ ] SBOM/signing/provenance and full 2C4G qualification.
+- [ ] Local GPU/model packaging.
+- [ ] Clinic login/URL integration.

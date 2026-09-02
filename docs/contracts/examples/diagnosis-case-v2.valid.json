@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "diagnosis-case/v2",
+  "caseId": "case_0000000000000002",
+  "revision": 1,
+  "inputMode": "managed_source",
+  "workflowState": "ready",
+  "outcome": "pending",
+  "effectiveMode": "rules_ai",
+  "evidenceLevel": "E3",
+  "sourceSnapshots": [
+    {
+      "sourceId": "src_0000000000000001",
+      "revision": 3,
+      "type": "tidb",
+      "product": "pingkaidb",
+      "versionFamily": "pingkaidb-7.1"
+    }
+  ],
+  "evidence": [
+    {
+      "evidenceId": "ev_0000000000000001",
+      "kind": "slow_query",
+      "sourceId": "src_0000000000000001",
+      "observedAt": "2026-09-02T08:00:00Z",
+      "collectedAt": "2026-09-02T08:05:00Z",
+      "freshness": "fresh",
+      "coverage": 0.96,
+      "sensitivity": "confidential",
+      "integrityDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "summaryZh": "该 SQL 在 10 分钟窗口内执行 842 次，P95 2.8 秒，平均扫描 126 万行。"
+    },
+    {
+      "evidenceId": "ev_0000000000000002",
+      "kind": "ordinary_plan",
+      "sourceId": "src_0000000000000001",
+      "observedAt": "2026-09-02T08:04:00Z",
+      "collectedAt": "2026-09-02T08:05:00Z",
+      "freshness": "fresh",
+      "coverage": 1,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "summaryZh": "普通执行计划显示 orders 表发生 TableFullScan，过滤条件未形成可用访问路径。"
+    },
+    {
+      "evidenceId": "ev_0000000000000003",
+      "kind": "index",
+      "sourceId": "src_0000000000000001",
+      "observedAt": "2026-09-02T08:04:00Z",
+      "collectedAt": "2026-09-02T08:05:00Z",
+      "freshness": "fresh",
+      "coverage": 1,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "summaryZh": "现有索引没有同时覆盖 tenant_id、status 与 created_at 的过滤顺序。"
+    }
+  ],
+  "facts": [
+    {
+      "factId": "fact_0000000000000001",
+      "kind": "scan_amplification",
+      "statementZh": "扫描行数与返回行数比值为 3150:1，访问路径放大明显。",
+      "valueText": "3150:1",
+      "evidenceIds": ["ev_0000000000000001", "ev_0000000000000002"]
+    }
+  ],
+  "ruleFindings": [
+    {
+      "ruleId": "IDX_ACCESS_001",
+      "status": "hit",
+      "severity": "high",
+      "minimumEvidenceLevel": "E2",
+      "conclusionZh": "高频慢 SQL 使用全表扫描，且过滤列缺少匹配访问路径。",
+      "evidenceIds": [
+        "ev_0000000000000001",
+        "ev_0000000000000002",
+        "ev_0000000000000003"
+      ],
+      "documentRefs": [
+        "pingkaidb-sql-tuning-overview@2026-09-02",
+        "pingkaidb-explain-walkthrough@2026-09-02"
+      ]
+    }
+  ],
+  "aiSynthesis": {
+    "status": "applied",
+    "code": null,
+    "claims": [
+      {
+        "claimId": "claim_0000000000000001",
+        "audience": "all",
+        "textZh": "该 SQL 是当前窗口的主要可行动瓶颈；应先在隔离环境验证复合索引候选，而不是调整集群资源。",
+        "evidenceIds": [
+          "ev_0000000000000001",
+          "ev_0000000000000002",
+          "ev_0000000000000003"
+        ],
+        "ruleIds": ["IDX_ACCESS_001"]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "actionId": "act_0000000000000001",
+      "family": "index_candidate",
+      "titleZh": "在隔离环境验证复合索引候选",
+      "rationaleZh": "现有计划为全表扫描，过滤列组合没有匹配的访问路径。",
+      "risk": "medium",
+      "ownerRole": "dba",
+      "prerequisitesZh": [
+        "使用 Plan Replayer 或等价隔离环境",
+        "确认索引空间与写放大预算"
+      ],
+      "stepsZh": [
+        "生成候选索引并只在隔离环境创建",
+        "对相同参数分布运行普通 EXPLAIN 和压测"
+      ],
+      "validation": {
+        "metricZh": "扫描行数、P95 延迟和写入开销",
+        "targetZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归在审批阈值内"
+      },
+      "rollbackZh": [
+        "若收益或写入开销不达标，删除隔离环境候选索引并停止灰度",
+        "生产环境不执行任何自动变更"
+      ],
+      "evidenceIds": [
+        "ev_0000000000000001",
+        "ev_0000000000000002",
+        "ev_0000000000000003"
+      ],
+      "ruleIds": ["IDX_ACCESS_001"],
+      "requiresHumanApproval": true
+    }
+  ],
+  "uncertainty": [
+    {
+      "code": "PARAMETER_DISTRIBUTION_UNKNOWN",
+      "descriptionZh": "当前证据未覆盖所有参数分布，索引收益必须在代表性数据上验证。",
+      "requiredEvidenceKinds": ["statistics", "validation_result"]
+    }
+  ],
+  "pinnedRevisions": {
+    "rulePack": "pingkaidb-7.1-rules/v1",
+    "documentPack": "pingkaidb-sql-tuning@2026-09-02",
+    "parser": "sqlglot/mysql@30.17.0",
+    "policy": "diagnosis-policy/v2",
+    "redaction": "evidence-redaction/v2",
+    "provider": "openai-compatible",
+    "model": "gpt-5.6-sol",
+    "prompt": "evidence-bound-synthesis/v1"
+  },
+  "createdAt": "2026-09-02T08:05:00Z",
+  "updatedAt": "2026-09-02T08:05:02Z"
+}

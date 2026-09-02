@@ -1,10 +1,11 @@
-# SQLLens P0 Agent Guide
+# SQLLens vNext Agent Guide
 
 ## Project State
 
-This repository starts from an approved product direction and a design baseline;
-it does not yet contain a validated product implementation. Never report a
-documented or simulated capability as implemented, tested, or production-ready.
+This repository contains an earlier security/runtime skeleton and an approved
+vNext product baseline. The existing runtime has not passed vNext product
+acceptance. Never report a documented, simulated, or legacy capability as
+implemented, tested, or production-ready for vNext.
 
 Public use of the `SQLLens` name is blocked pending a naming and brand decision.
 Use it only as a working code name.
@@ -13,14 +14,25 @@ Use it only as a working code name.
 
 Read only the sections relevant to your task:
 
-- Product/design baseline:
+- vNext product/design baseline:
+  `docs/superpowers/specs/2026-09-02-sqllens-vnext-product-spec.md`
+- Historical P0 baseline:
   `docs/superpowers/specs/2026-08-31-sqllens-p0-design.md`
 - Delivery order and verification: `tasks/plan.md`
 - Deployment/model boundary: `docs/adr/0001-one-package-two-model-modes.md`
 - Collection boundary: `docs/adr/0002-evidence-acquisition-boundaries.md`
 - LLM trust boundary: `docs/adr/0003-llm-is-an-untrusted-explainer.md`
+- Direct Docker/first-run decision:
+  `docs/adr/0009-direct-docker-and-local-first-run.md`
+- Evidence-bound AI contract:
+  `docs/adr/0010-evidence-bound-ai-synthesis.md`
+- Source lifecycle:
+  `docs/adr/0011-versioned-read-only-source-lifecycle.md`
 - Security abuse cases: `docs/threat-model.md`
-- Domain contract: `docs/contracts/diagnosis-case-v1.schema.json`
+- vNext draft contracts: `docs/contracts/source-v1.schema.json`,
+  `docs/contracts/diagnosis-case-v2.schema.json`, and
+  `docs/contracts/diagnosis-report-v1.schema.json`
+- Historical domain contract: `docs/contracts/diagnosis-case-v1.schema.json`
 
 If code and a reviewed ADR conflict, stop and escalate instead of silently
 choosing one. Update the design/ADR first when an approved decision changes.
@@ -30,12 +42,14 @@ choosing one. Update the design/ADR first when an approved decision changes.
 - `swat-mgr`: architecture baseline, task ledger, integration and release gate.
 - `swat-rd`: product implementation on `/root/sqllens-rd`, branch
   `feature/p0-runtime`.
-- `swat-qa`: independent test assets and evidence on `/root/sqllens-qa`, branch
-  `test/p0-acceptance`. QA does not sign off its own product implementation.
+- `swat-qa`: independent vNext product matrix and evidence on
+  `/root/sqllens-qa`, branch `test/p0-acceptance`. QA does not sign off its own
+  product implementation and does not execute before a commit/image is frozen.
 - `swat-reviwer`: read-only independent review of the primary checkout and
   review context unless explicitly assigned a correction.
-- `swat-rd2`: owner of cross-platform release task `#t16` on
-  `/root/sqllens-rd2`, branch `feature/cross-platform-release`.
+- `swat-rd2`: owner of the versioned read-only evidence connector `#t19` on
+  `/root/sqllens-rd2`. Cross-platform release work remains deferred until the
+  Human product gate passes.
 
 Do not edit another owner's worktree or overwrite unrelated changes. Coordinate
 shared contracts and merge order through `swat-mgr` before editing the same
@@ -46,7 +60,7 @@ files in parallel.
 - Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2, SQLite.
 - React 19, TypeScript strict mode, Vite, Node.js 22.
 - Pytest, Vitest, Playwright, Ruff, mypy.
-- Docker Compose with a base definition and same-package GPU override.
+- One official multi-architecture Docker image for the P0 customer journey.
 
 Commit lockfiles and pin container image digests before release. Do not add a
 framework or infrastructure dependency without recording why it is needed and
@@ -69,22 +83,22 @@ make smoke
 make benchmark-2c4g
 ```
 
-## Three-Step Deployment Invariant
+## Direct Docker And First-Run Invariant
 
-From a new machine to a usable Web App, the supported customer journey is:
+The vNext P0 customer journey is:
 
-1. Install Docker Desktop (Mac/Windows) or Docker Engine plus Compose (Linux).
-2. Download one release archive and double-click/run one launcher command.
-3. Open the printed URL, enter the one-time code, and complete Web setup.
+1. Copy one fixed `docker run` command using the official image digest.
+2. Open `http://localhost:18080`.
+3. Create the local Owner and complete the in-product source/model guides.
 
-Do not add hidden `.env`/Compose edits, token-file discovery, migration commands,
-or additional product commands to the happy path. The launcher owns architecture,
-signature/checksum, port, disk, migration, and GPU-visibility preflight. A local
-GPU failure must offer external-model/rule fallback instead of blocking startup.
+Do not add source compilation, hidden `.env` edits, Compose selection,
+platform selection, terminal bootstrap codes, token-file discovery, migration
+commands, or a second product command to the happy path. The image manifest
+owns architecture selection. Port, volumes, user, and container security flags
+are fixed in the published command.
 
-External-model P0 targets Mac/Linux/Windows with `linux/amd64` and
-`linux/arm64` images. Local GPU claims remain platform/hardware specific and
-unverified until the exact combination passes the qualification suite.
+Installation/initialization and daily diagnosis are different application
+phases. The daily shell must not expose the completed first-run wizard.
 
 Run focused tests while iterating and all relevant gates before a checkpoint or
 handoff. Record the exact command and result; do not summarize an unrun command
@@ -125,6 +139,10 @@ Never:
 Always fail closed on an unknown TiDB version, privilege requirement, unsafe
 ordinary `EXPLAIN`, unavailable device, invalid model output, or exhausted
 resource budget. Evidence insufficiency must produce abstention.
+
+Do not start release archives, clean-machine platform matrices, SBOM/provenance,
+or formal RC work until the Human accepts the frozen vNext customer journey and
+Chinese diagnosis report.
 
 ## Handoff Contract
 

@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "diagnosis-report/v1",
+  "caseId": "case_0000000000000002",
+  "caseRevision": 1,
+  "audience": "dba_sre",
+  "titleZh": "订单查询存在高频全表扫描，优先验证复合索引候选",
+  "priority": "P1",
+  "configuredMode": "rules_ai",
+  "effectiveMode": "rules_ai",
+  "conclusionZh": "该 SQL 是当前 10 分钟窗口的主要可行动瓶颈：842 次调用平均扫描 126 万行，普通计划为全表扫描，建议先在隔离环境验证索引候选。",
+  "impact": {
+    "clusterZh": "生产订单集群",
+    "databaseZh": "order_center",
+    "sqlDigest": "digest:7f3a...91c2",
+    "timeWindowZh": "2026-09-02 16:00-16:10 CST",
+    "businessZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。"
+  },
+  "evidenceSummary": [
+    {
+      "labelZh": "运行表现",
+      "valueZh": "842 次调用，P95 2.8 秒，平均扫描 126 万行",
+      "evidenceIds": ["ev_0000000000000001"]
+    },
+    {
+      "labelZh": "执行计划",
+      "valueZh": "orders 表 TableFullScan，扫描/返回比 3150:1",
+      "evidenceIds": ["ev_0000000000000002"]
+    },
+    {
+      "labelZh": "索引覆盖",
+      "valueZh": "现有索引未匹配 tenant_id、status、created_at 的过滤顺序",
+      "evidenceIds": ["ev_0000000000000003"]
+    }
+  ],
+  "reasoning": {
+    "ruleFindingsZh": [
+      "规则 IDX_ACCESS_001 命中：E3 证据同时证明高扫描放大、全表扫描和缺少匹配访问路径。"
+    ],
+    "aiContributionZh": "AI 仅把已验证事实整理为优先级和中文行动说明，没有生成新证据、对象名或收益数字。",
+    "degradationZh": null
+  },
+  "actions": [
+    {
+      "actionId": "act_0000000000000001",
+      "order": 1,
+      "titleZh": "在隔离环境验证复合索引候选",
+      "ownerZh": "DBA，应用研发配合",
+      "riskZh": "中等：可能增加写放大和存储，必须先评估，不自动在生产创建。",
+      "stepsZh": [
+        "使用 Plan Replayer 或等价隔离环境复现当前 schema、统计和计划。",
+        "验证覆盖 tenant_id、status、created_at 的候选访问路径。",
+        "通过审批后小流量灰度，观察读写指标。"
+      ],
+      "validationZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归不超过客户审批阈值。",
+      "rollbackZh": "收益或写入开销不达标时停止灰度并删除候选索引；保留原 SQL 与原计划。"
+    }
+  ],
+  "uncertainty": [
+    "尚未覆盖所有参数分布，索引收益必须在代表性数据上验证。",
+    "报告未证明业务峰值期间的写入放大影响。"
+  ],
+  "trace": {
+    "evidenceLevel": "E3",
+    "evidenceIds": [
+      "ev_0000000000000001",
+      "ev_0000000000000002",
+      "ev_0000000000000003"
+    ],
+    "ruleIds": ["IDX_ACCESS_001"],
+    "claimIds": ["claim_0000000000000001"],
+    "sourceRevisions": ["src_0000000000000001@3"],
+    "pinnedRevisions": [
+      "pingkaidb-7.1-rules/v1",
+      "pingkaidb-sql-tuning@2026-09-02",
+      "evidence-bound-synthesis/v1"
+    ]
+  }
+}

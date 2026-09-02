@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "source/v1",
+  "sourceId": "src_0000000000000001",
+  "revision": 3,
+  "type": "tidb",
+  "name": "生产订单集群",
+  "state": "enabled",
+  "product": "pingkaidb",
+  "version": {
+    "detected": "7.1.5",
+    "family": "pingkaidb-7.1",
+    "supported": true
+  },
+  "endpoint": {
+    "scheme": "mysql",
+    "host": "tidb.prod.internal",
+    "port": 4000,
+    "path": null,
+    "tlsMode": "verify_identity"
+  },
+  "auth": {
+    "kind": "password",
+    "credentialRef": "cred_0000000000000001",
+    "username": "sqllens_ro",
+    "expiresAt": "2026-12-01T00:00:00Z"
+  },
+  "associatedSourceIds": ["src_0000000000000002"],
+  "allowedSchemas": ["order_center"],
+  "capabilities": [
+    {
+      "name": "version",
+      "status": "available",
+      "required": true,
+      "detail": "PingKaiDB 7.1 version family matched."
+    },
+    {
+      "name": "statement_summary",
+      "status": "available",
+      "required": true,
+      "detail": "Cluster statement summary is readable with approved PROCESS."
+    },
+    {
+      "name": "ordinary_explain",
+      "status": "available",
+      "required": true,
+      "detail": "Ordinary EXPLAIN passed; EXPLAIN ANALYZE remains prohibited."
+    }
+  ],
+  "budgets": {
+    "timeoutMs": 5000,
+    "maxRows": 5000,
+    "maxConcurrency": 2,
+    "ratePerMinute": 30
+  },
+  "owner": {
+    "displayName": "数据库运维团队",
+    "reference": "IAM-2026-0902"
+  },
+  "createdAt": "2026-09-02T09:00:00Z",
+  "updatedAt": "2026-09-02T09:20:00Z",
+  "lastVerifiedAt": "2026-09-02T09:20:00Z"
+}

@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "diagnosis-report/v1",
+  "caseId": "case_0000000000000003",
+  "caseRevision": 1,
+  "audience": "dba_sre",
+  "titleZh": "统计信息偏差导致 Join 顺序失真，先验证统计而不是直接加索引",
+  "priority": "P1",
+  "configuredMode": "rules_ai",
+  "effectiveMode": "rules",
+  "conclusionZh": "执行计划对核心表估算 120 行，实际运行证据为 18 万行；估算偏差足以改变 Join 顺序，应先在隔离环境刷新并验证统计。",
+  "impact": {
+    "clusterZh": "生产交易集群",
+    "databaseZh": "billing",
+    "sqlDigest": "digest:3ac8...e112",
+    "timeWindowZh": "2026-09-02 15:20-15:35 CST",
+    "businessZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。"
+  },
+  "evidenceSummary": [
+    {
+      "labelZh": "估算偏差",
+      "valueZh": "estRows 120，运行时 rows 180000，偏差约 1500 倍",
+      "evidenceIds": ["ev_0000000000000011", "ev_0000000000000012"]
+    },
+    {
+      "labelZh": "统计健康",
+      "valueZh": "目标表统计更新时间早于最近一次大批量导入",
+      "evidenceIds": ["ev_0000000000000013"]
+    }
+  ],
+  "reasoning": {
+    "ruleFindingsZh": [
+      "规则 STATS_ESTIMATION_001 命中：估算/实际行数偏差超过版本规则阈值，且统计早于数据变更。"
+    ],
+    "aiContributionZh": null,
+    "degradationZh": "外部模型超时，本报告使用确定性规则生成；事实、动作和证据不受影响。"
+  },
+  "actions": [
+    {
+      "actionId": "act_0000000000000011",
+      "order": 1,
+      "titleZh": "在隔离环境验证统计刷新后的计划",
+      "ownerZh": "DBA",
+      "riskZh": "中等：ANALYZE 会消耗资源，必须按客户窗口和采样策略执行。",
+      "stepsZh": [
+        "使用 Plan Replayer 或测试集群复现当前统计和计划。",
+        "按版本文档选择受控统计刷新策略。",
+        "对比刷新前后 Join 顺序、估算偏差与任务耗时。"
+      ],
+      "validationZh": "估算偏差下降到 10 倍以内，Join 顺序稳定，批处理耗时回到 6 分钟以内。",
+      "rollbackZh": "若计划退化，不在生产执行刷新；保留原统计与计划证据并重新评估绑定候选。"
+    }
+  ],
+  "uncertainty": [
+    "尚未取得生产峰值窗口的资源余量，不能直接安排生产 ANALYZE。",
+    "模型未参与本轮解释，effective mode 为 rules。"
+  ],
+  "trace": {
+    "evidenceLevel": "E3",
+    "evidenceIds": [
+      "ev_0000000000000011",
+      "ev_0000000000000012",
+      "ev_0000000000000013"
+    ],
+    "ruleIds": ["STATS_ESTIMATION_001"],
+    "claimIds": [],
+    "sourceRevisions": ["src_0000000000000011@2"],
+    "pinnedRevisions": [
+      "tidb-8.5-rules/v1",
+      "tidb-sql-tuning@2026-09-02",
+      "model-degraded:MODEL_TIMEOUT"
+    ]
+  }
+}
