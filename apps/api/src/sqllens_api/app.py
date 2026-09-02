@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Self
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from starlette.responses import Response
@@ -1348,6 +1348,18 @@ def create_app(
 
     web_dist = runtime_settings.web_dist_dir
     if isinstance(web_dist, Path) and (web_dist / "index.html").is_file():
+        index_path = web_dist / "index.html"
+
+        @app.get("/setup", include_in_schema=False)
+        @app.get("/app", include_in_schema=False)
+        @app.get("/app/{path:path}", include_in_schema=False)
+        async def web_shell() -> FileResponse:
+            return FileResponse(
+                index_path,
+                media_type="text/html",
+                headers={"Cache-Control": "no-cache"},
+            )
+
         app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
     else:
 

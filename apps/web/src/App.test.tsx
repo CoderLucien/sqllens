@@ -29,6 +29,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe("setup application", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.history.replaceState(null, "", "/");
   });
 
   it("does not expose either phase navigation before runtime state is known", () => {
@@ -54,6 +55,7 @@ describe("setup application", () => {
     expect(
       await screen.findByRole("navigation", { name: "安装与初始化导航" })
     ).toBeTruthy();
+    expect(window.location.pathname).toBe("/setup");
     expect(screen.queryByRole("navigation", { name: "日常诊断导航" })).toBeNull();
     const codeInput = await screen.findByLabelText("一次性初始化码");
     fireEvent.change(codeInput, { target: { value: "ABCD-EFGH-JKLM-NPQR" } });
@@ -121,6 +123,7 @@ describe("setup application", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "更新外部模型凭据" });
+    expect(window.location.pathname).toBe("/app/settings/model");
     expect(screen.getByText(/规则诊断仍可使用/)).toBeTruthy();
     expect(screen.queryByText(/诊断保持关闭/)).toBeNull();
   });
@@ -226,13 +229,16 @@ describe("setup application", () => {
     expect(screen.getByRole("navigation", { name: "日常诊断导航" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "安装与初始化导航" })).toBeNull();
     expect(screen.queryByLabelText("一次性初始化码")).toBeNull();
+    expect(window.location.pathname).toBe("/app/login");
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
     await screen.findByRole("heading", { name: "诊断工作台已就绪" });
     expect(screen.getByRole("navigation", { name: "日常诊断导航" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "安装与初始化导航" })).toBeNull();
+    expect(window.location.pathname).toBe("/app/workbench");
 
     fireEvent.click(screen.getByRole("button", { name: "退出 Owner 会话" }));
     await screen.findByRole("heading", { name: "登录诊断工作台" });
+    expect(window.location.pathname).toBe("/app/login");
     const [, logoutOptions] = fetchMock.mock.calls[3];
     expect(new Headers(logoutOptions?.headers).get("X-CSRF-Token")).toBe("owner-csrf");
   });

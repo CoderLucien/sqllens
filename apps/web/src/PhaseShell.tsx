@@ -1,7 +1,7 @@
 import { Check, FileSearch, LockKeyhole } from "lucide-react";
 import { ReactNode } from "react";
 
-import { SetupStage } from "./api";
+import { SetupStage, SetupStatus } from "./api";
 
 const SETUP_STEPS: Array<{ stage: SetupStage; label: string }> = [
   { stage: "bootstrap_required", label: "验证身份" },
@@ -38,6 +38,19 @@ export function PhaseShell({
     return <DailyShell workbench={workbench}>{children}</DailyShell>;
   }
   return <SetupShell activeStage={activeStage}>{children}</SetupShell>;
+}
+
+export function pathForPhase(status: SetupStatus, authenticated: boolean): string {
+  if (!status.initialized) {
+    return "/setup";
+  }
+  if (!authenticated) {
+    return "/app/login";
+  }
+  if (status.state === "model_recovery_required") {
+    return "/app/settings/model";
+  }
+  return "/app/workbench";
 }
 
 function SetupShell({

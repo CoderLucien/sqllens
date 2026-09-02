@@ -19,7 +19,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { ApiClientError, apiRequest, OwnerSession, SetupStage, SetupStatus } from "./api";
 import { DiagnosisWorkspace } from "./DiagnosisWorkspace";
-import { PhaseShell } from "./PhaseShell";
+import { pathForPhase, PhaseShell } from "./PhaseShell";
 import "./styles.css";
 
 const EMPTY_STATUS: SetupStatus = {
@@ -112,6 +112,16 @@ export function App() {
   useEffect(() => {
     void loadStatus();
   }, []);
+
+  useEffect(() => {
+    if (!statusKnown) {
+      return;
+    }
+    const nextPath = pathForPhase(status, ownerSession.authenticated);
+    if (window.location.pathname !== nextPath) {
+      window.history.replaceState(null, "", nextPath);
+    }
+  }, [ownerSession.authenticated, status, statusKnown]);
 
   async function runAction(action: () => Promise<void>) {
     setBusy(true);
