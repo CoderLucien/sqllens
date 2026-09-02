@@ -1,7 +1,8 @@
 # ADR 0004: Three-Step Cross-Platform Web App Deployment
 
-Status: Accepted for P0 baseline
+Status: Superseded for vNext P0; retained as historical baseline
 Date: 2026-08-31
+Superseded by: ADR 0009 customer deployment and first-run path
 
 ## Context
 

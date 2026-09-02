@@ -13,7 +13,8 @@
     "databaseZh": "order_center",
     "sqlDigest": "digest:7f3a...91c2",
     "timeWindowZh": "2026-09-02 16:00-16:10 CST",
-    "businessZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。"
+    "businessZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。",
+    "businessEvidenceIds": ["ev_0000000000000004"]
   },
   "evidenceSummary": [
     {
@@ -34,9 +35,10 @@
   ],
   "reasoning": {
     "ruleFindingsZh": [
-      "规则 IDX_ACCESS_001 命中：E3 证据同时证明高扫描放大、全表扫描和缺少匹配访问路径。"
+      "高频慢 SQL 使用全表扫描，且过滤列缺少匹配访问路径。"
     ],
-    "aiContributionZh": "AI 仅把已验证事实整理为优先级和中文行动说明，没有生成新证据、对象名或收益数字。",
+    "aiContributionZh": "该 SQL 是当前窗口的主要可行动瓶颈；应先在隔离环境验证复合索引候选，而不是调整集群资源。",
+    "degradationCode": null,
     "degradationZh": null
   },
   "actions": [
@@ -44,27 +46,37 @@
       "actionId": "act_0000000000000001",
       "order": 1,
       "titleZh": "在隔离环境验证复合索引候选",
-      "ownerZh": "DBA，应用研发配合",
-      "riskZh": "中等：可能增加写放大和存储，必须先评估，不自动在生产创建。",
-      "stepsZh": [
-        "使用 Plan Replayer 或等价隔离环境复现当前 schema、统计和计划。",
-        "验证覆盖 tenant_id、status、created_at 的候选访问路径。",
-        "通过审批后小流量灰度，观察读写指标。"
+      "rationaleZh": "现有计划为全表扫描，过滤列组合没有匹配的访问路径。",
+      "ownerRole": "dba",
+      "risk": "medium",
+      "prerequisitesZh": [
+        "使用 Plan Replayer 或等价隔离环境",
+        "确认索引空间与写放大预算"
       ],
-      "validationZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归不超过客户审批阈值。",
-      "rollbackZh": "收益或写入开销不达标时停止灰度并删除候选索引；保留原 SQL 与原计划。"
+      "stepsZh": [
+        "生成候选索引并只在隔离环境创建",
+        "对相同参数分布运行普通 EXPLAIN 和压测"
+      ],
+      "validation": {
+        "metricZh": "扫描行数、P95 延迟和写入开销",
+        "targetZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归在审批阈值内"
+      },
+      "rollbackZh": [
+        "若收益或写入开销不达标，删除隔离环境候选索引并停止灰度",
+        "生产环境不执行任何自动变更"
+      ]
     }
   ],
   "uncertainty": [
-    "尚未覆盖所有参数分布，索引收益必须在代表性数据上验证。",
-    "报告未证明业务峰值期间的写入放大影响。"
+    "当前证据未覆盖所有参数分布，索引收益必须在代表性数据上验证。"
   ],
   "trace": {
     "evidenceLevel": "E3",
     "evidenceIds": [
       "ev_0000000000000001",
       "ev_0000000000000002",
-      "ev_0000000000000003"
+      "ev_0000000000000003",
+      "ev_0000000000000004"
     ],
     "ruleIds": ["IDX_ACCESS_001"],
     "claimIds": ["claim_0000000000000001"],
@@ -72,6 +84,11 @@
     "pinnedRevisions": [
       "pingkaidb-7.1-rules/v1",
       "pingkaidb-sql-tuning@2026-09-02",
+      "sqlglot/mysql@30.17.0",
+      "diagnosis-policy/v2",
+      "evidence-redaction/v2",
+      "openai-compatible",
+      "gpt-5.6-sol",
       "evidence-bound-synthesis/v1"
     ]
   }

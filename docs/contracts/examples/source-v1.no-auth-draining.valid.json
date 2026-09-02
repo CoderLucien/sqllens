@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "source/v1",
+  "sourceId": "src_0000000000000098",
+  "revision": 5,
+  "type": "prometheus",
+  "name": "准备删除的内网监控",
+  "state": "draining",
+  "product": "prometheus",
+  "version": {
+    "detected": "2.54.1",
+    "family": "prometheus",
+    "supported": true
+  },
+  "endpoint": {
+    "scheme": "http",
+    "host": "prometheus.internal",
+    "port": 9090,
+    "path": null,
+    "tlsMode": "disabled"
+  },
+  "auth": {
+    "kind": "none",
+    "credentialRef": null,
+    "credentialRevision": null,
+    "username": null,
+    "expiresAt": null
+  },
+  "credentialLifecycle": {
+    "state": "retiring",
+    "activeLeaseCount": 1,
+    "pendingOperation": "delete",
+    "retireAfter": "2026-09-02T10:10:00Z"
+  },
+  "associatedSourceIds": [],
+  "allowedSchemas": [],
+  "capabilities": [
+    {
+      "name": "prom_query",
+      "status": "available",
+      "required": true,
+      "detail": "Bounded Query and Query Range access was verified before drain."
+    }
+  ],
+  "budgets": {
+    "timeoutMs": 5000,
+    "maxRows": 5000,
+    "maxConcurrency": 2,
+    "ratePerMinute": 30
+  },
+  "owner": {
+    "displayName": "监控平台团队",
+    "reference": "MON-2026-0902"
+  },
+  "verification": {
+    "status": "passed",
+    "testedAt": "2026-09-02T09:20:00Z",
+    "identityDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    "errorCode": null
+  },
+  "createdAt": "2026-09-02T09:00:00Z",
+  "updatedAt": "2026-09-02T10:00:00Z"
+}

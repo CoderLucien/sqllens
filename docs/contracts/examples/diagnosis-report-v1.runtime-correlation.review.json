@@ -13,18 +13,19 @@
     "databaseZh": "payment",
     "sqlDigest": "digest:9bd1...42f0",
     "timeWindowZh": "2026-09-02 14:03-14:16 CST",
-    "businessZh": "支付确认接口错误率升至 2.1%，P99 达 6.4 秒，影响线上交易。"
+    "businessZh": "支付确认接口错误率升至 2.1%，P99 达 6.4 秒，影响线上交易。",
+    "businessEvidenceIds": ["ev_0000000000000026"]
   },
   "evidenceSummary": [
     {
       "labelZh": "SQL 稳定性",
       "valueZh": "计划摘要、扫描行数和调用量与前一基线窗口接近",
-      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000022"]
+      "evidenceIds": ["ev_0000000000000021"]
     },
     {
       "labelZh": "资源相关性",
       "valueZh": "同一时间窗 TiKV 请求延迟和 Region 热点指标显著升高",
-      "evidenceIds": ["ev_0000000000000023", "ev_0000000000000024"]
+      "evidenceIds": ["ev_0000000000000023"]
     },
     {
       "labelZh": "告警关联",
@@ -34,10 +35,11 @@
   ],
   "reasoning": {
     "ruleFindingsZh": [
-      "规则 RUNTIME_HOTSPOT_001 命中：SQL 基线稳定，TiKV 热点和延迟在同一窗口共同异常。",
-      "规则 SQL_REGRESSION_001 被冲突证据抑制：没有检测到计划或扫描量退化。"
+      "SQL 基线稳定，TiKV 热点和延迟在同一窗口共同异常。",
+      "没有检测到计划或扫描量退化，SQL 结构退化假设被冲突证据抑制。"
     ],
-    "aiContributionZh": "AI 将 SQL、Prometheus 和 TEM 的已验证时间窗关系整理为事件优先级，没有把相关性描述为已证明的物理因果。",
+    "aiContributionZh": "SQL、Prometheus 和 TEM 的时间窗关系支持优先调查 TiKV 热点，但相关性不等于已证明物理因果。",
+    "degradationCode": null,
     "degradationZh": null
   },
   "actions": [
@@ -45,15 +47,25 @@
       "actionId": "act_0000000000000021",
       "order": 1,
       "titleZh": "由 SRE/DBA 先验证并缓解 TiKV 热点",
-      "ownerZh": "SRE 与 DBA",
-      "riskZh": "高：涉及生产资源与调度，只提供检查和审批建议，不自动执行。",
-      "stepsZh": [
-        "核对热点 Region、Store 和业务 Key 范围。",
-        "按既有应急手册选择低风险缓解动作并人工审批。",
-        "保持 SQL 与计划不变，避免同时引入第二变量。"
+      "rationaleZh": "SQL 计划稳定，资源指标和告警在相同时间窗异常，应先验证热点。",
+      "ownerRole": "sre",
+      "risk": "high",
+      "prerequisitesZh": [
+        "核对热点 Region、Store 与业务 Key 范围",
+        "取得生产资源处置审批"
       ],
-      "validationZh": "TiKV P99、热点指标和支付接口错误率在 15 分钟内共同回落到基线阈值。",
-      "rollbackZh": "若缓解动作无效或副作用超阈值，立即按客户应急手册回滚，并保留时间窗证据。"
+      "stepsZh": [
+        "按既有应急手册选择低风险缓解动作",
+        "保持 SQL 与计划不变以避免同时引入第二变量"
+      ],
+      "validation": {
+        "metricZh": "TiKV P99、热点指标和支付接口错误率",
+        "targetZh": "三项指标在 15 分钟内共同回落到客户基线阈值"
+      },
+      "rollbackZh": [
+        "若缓解动作无效或副作用超阈值，立即按客户应急手册回滚",
+        "保留 Region、Store 与时间窗证据"
+      ]
     }
   ],
   "uncertainty": [
@@ -64,10 +76,9 @@
     "evidenceLevel": "E4",
     "evidenceIds": [
       "ev_0000000000000021",
-      "ev_0000000000000022",
       "ev_0000000000000023",
-      "ev_0000000000000024",
-      "ev_0000000000000025"
+      "ev_0000000000000025",
+      "ev_0000000000000026"
     ],
     "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"],
     "claimIds": ["claim_0000000000000021"],
@@ -79,6 +90,11 @@
     "pinnedRevisions": [
       "tidb-8.5-rules/v1",
       "tidb-sql-tuning@2026-09-02",
+      "sqlglot/mysql@30.17.0",
+      "diagnosis-policy/v2",
+      "evidence-redaction/v2",
+      "openai-compatible",
+      "gpt-5.6-sol",
       "evidence-bound-synthesis/v1"
     ]
   }

@@ -1,7 +1,8 @@
 # ADR 0001: One Package With Two Model Modes
 
-Status: Accepted for P0 baseline
+Status: Superseded for vNext P0; retained as historical baseline
 Date: 2026-08-31
+Superseded by: ADR 0009 customer deployment path and ADR 0010 model path
 
 ## Context
 

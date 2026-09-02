@@ -5,87 +5,392 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion",
-    "caseId",
-    "revision",
-    "inputMode",
-    "workflowState",
-    "outcome",
-    "effectiveMode",
-    "evidenceLevel",
-    "sourceSnapshots",
-    "evidence",
-    "facts",
-    "ruleFindings",
-    "aiSynthesis",
-    "actions",
-    "uncertainty",
-    "pinnedRevisions",
-    "createdAt",
-    "updatedAt"
+    "schemaVersion", "caseId", "revision", "inputMode", "workflowState",
+    "outcome", "configuredMode", "effectiveMode", "evidenceLevel", "subject",
+    "decision", "sourceSnapshots", "evidence", "facts", "ruleFindings",
+    "aiSynthesis", "actions", "uncertainty", "reviews", "feedback",
+    "transitionEvents", "pinnedRevisions", "createdAt", "updatedAt"
   ],
   "properties": {
     "schemaVersion": { "const": "diagnosis-case/v2" },
     "caseId": { "type": "string", "pattern": "^case_[a-z0-9]{16,64}$" },
     "revision": { "type": "integer", "minimum": 1 },
     "inputMode": { "enum": ["managed_source", "plan_replayer", "manual"] },
-    "workflowState": {
-      "enum": ["queued", "collecting", "analyzing", "ready", "failed", "cancelled"]
-    },
-    "outcome": {
-      "enum": ["pending", "validated_effective", "rolled_back", "evidence_insufficient", "risk_accepted"]
-    },
+    "workflowState": { "enum": ["queued", "collecting", "analyzing", "ready", "failed", "cancelled"] },
+    "outcome": { "enum": ["pending", "validated_effective", "rolled_back", "evidence_insufficient", "risk_accepted"] },
+    "configuredMode": { "enum": ["rules", "rules_ai"] },
     "effectiveMode": { "enum": ["rules", "rules_ai"] },
     "evidenceLevel": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
+    "subject": { "$ref": "#/$defs/subject" },
+    "decision": { "$ref": "#/$defs/decision" },
     "sourceSnapshots": {
-      "type": "array",
-      "maxItems": 32,
+      "type": "array", "maxItems": 32,
       "items": { "$ref": "#/$defs/sourceSnapshot" }
     },
     "evidence": {
-      "type": "array",
-      "maxItems": 512,
-      "items": { "$ref": "#/$defs/evidence" }
+      "type": "array", "maxItems": 512,
+      "items": { "$ref": "https://example.invalid/sqllens/contracts/evidence-v2.schema.json" }
     },
     "facts": {
-      "type": "array",
-      "maxItems": 256,
+      "type": "array", "maxItems": 256,
       "items": { "$ref": "#/$defs/fact" }
     },
     "ruleFindings": {
-      "type": "array",
-      "maxItems": 128,
+      "type": "array", "maxItems": 128,
       "items": { "$ref": "#/$defs/ruleFinding" }
     },
     "aiSynthesis": {
-      "oneOf": [
-        { "type": "null" },
-        { "$ref": "#/$defs/aiSynthesis" }
-      ]
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/aiSynthesis" }]
     },
     "actions": {
-      "type": "array",
-      "maxItems": 32,
+      "type": "array", "maxItems": 32,
       "items": { "$ref": "#/$defs/action" }
     },
     "uncertainty": {
-      "type": "array",
-      "maxItems": 64,
+      "type": "array", "maxItems": 64,
       "items": { "$ref": "#/$defs/uncertainty" }
     },
+    "reviews": {
+      "type": "array", "maxItems": 128,
+      "items": { "$ref": "#/$defs/review" }
+    },
+    "feedback": {
+      "type": "array", "maxItems": 256,
+      "items": { "$ref": "#/$defs/feedback" }
+    },
+    "transitionEvents": {
+      "type": "array", "minItems": 1, "maxItems": 512,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/workflowTransitionEvent" },
+          { "$ref": "#/$defs/outcomeTransitionEvent" }
+        ]
+      }
+    },
+    "pinnedRevisions": { "$ref": "#/$defs/pinnedRevisions" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "configuredMode": { "const": "rules" } }, "required": ["configuredMode"] },
+      "then": { "properties": { "effectiveMode": { "const": "rules" } } }
+    },
+    {
+      "if": { "properties": { "effectiveMode": { "const": "rules_ai" } }, "required": ["effectiveMode"] },
+      "then": {
+        "properties": {
+          "aiSynthesis": {
+            "allOf": [
+              { "$ref": "#/$defs/aiSynthesis" },
+              { "properties": { "status": { "const": "applied" }, "claims": { "minItems": 1 } } }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "not": { "properties": { "outcome": { "const": "pending" } }, "required": ["outcome"] } },
+      "then": { "properties": { "workflowState": { "const": "ready" } } }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "validated_effective" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "reviews": { "contains": { "properties": { "decision": { "const": "approved" } }, "required": ["decision"] } },
+          "feedback": {
+            "allOf": [
+              { "contains": { "properties": { "kind": { "const": "implemented" } }, "required": ["kind"] } },
+              { "contains": { "properties": { "kind": { "const": "validated" } }, "required": ["kind"] } }
+            ]
+          },
+          "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "validated_effective" } }, "required": ["type", "toOutcome"] } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "rolled_back" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "reviews": { "contains": { "properties": { "decision": { "const": "approved" } }, "required": ["decision"] } },
+          "feedback": {
+            "allOf": [
+              { "contains": { "properties": { "kind": { "const": "implemented" } }, "required": ["kind"] } },
+              { "contains": { "properties": { "kind": { "const": "rolled_back" } }, "required": ["kind"] } }
+            ]
+          },
+          "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "rolled_back" } }, "required": ["type", "toOutcome"] } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "evidence_insufficient" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "actions": { "maxItems": 0 },
+          "uncertainty": { "minItems": 1 },
+          "feedback": { "contains": { "properties": { "kind": { "const": "evidence_insufficient" } }, "required": ["kind"] } },
+          "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "evidence_insufficient" } }, "required": ["type", "toOutcome"] } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "risk_accepted" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "actions": { "minItems": 1 },
+          "reviews": { "contains": { "properties": { "decision": { "const": "risk_accepted" } }, "required": ["decision"] } },
+          "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "risk_accepted" } }, "required": ["type", "toOutcome"] } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["clusterZh", "databaseZh", "sqlDigest", "timeWindowZh", "businessZh", "businessEvidenceIds"],
+      "properties": {
+        "clusterZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "databaseZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sqlDigest": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "timeWindowZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "businessZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "businessEvidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" }
+      }
+    },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["titleZh", "priority", "conclusionZh", "evidenceSummary", "evidenceIds", "ruleIds", "claimIds", "actionIds"],
+      "properties": {
+        "titleZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "priority": { "enum": ["P0", "P1", "P2", "P3", "observe"] },
+        "conclusionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "evidenceSummary": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": { "$ref": "#/$defs/evidenceSummary" }
+        },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" },
+        "ruleIds": { "$ref": "#/$defs/ruleIdsNonEmpty" },
+        "claimIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 32,
+          "items": { "type": "string", "pattern": "^claim_[a-z0-9]{16,64}$" }
+        },
+        "actionIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 3,
+          "items": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" }
+        }
+      }
+    },
+    "evidenceSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["labelZh", "valueZh", "evidenceIds"],
+      "properties": {
+        "labelZh": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "valueZh": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" }
+      }
+    },
+    "sourceSnapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sourceId", "revision", "type", "product", "versionFamily"],
+      "properties": {
+        "sourceId": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "type": { "enum": ["tidb", "prometheus", "tem", "alertmanager"] },
+        "product": { "enum": ["tidb", "pingkaidb", "prometheus", "tem", "alertmanager"] },
+        "versionFamily": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "fact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["factId", "kind", "statementZh", "valueText", "evidenceIds"],
+      "properties": {
+        "factId": { "type": "string", "pattern": "^fact_[a-z0-9]{16,64}$" },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "statementZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "valueText": { "type": ["string", "null"], "maxLength": 512 },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" }
+      }
+    },
+    "ruleFinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ruleId", "status", "severity", "minimumEvidenceLevel", "conclusionZh", "evidenceIds", "documentRefs"],
+      "properties": {
+        "ruleId": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" },
+        "status": { "enum": ["hit", "conflicted", "not_applicable"] },
+        "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+        "minimumEvidenceLevel": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
+        "conclusionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "evidenceIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 64,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "documentRefs": {
+          "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 16,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        }
+      }
+    },
+    "aiClaim": {
+      "type": "object", "additionalProperties": false,
+      "required": ["claimId", "audience", "textZh", "evidenceIds", "ruleIds"],
+      "properties": {
+        "claimId": { "type": "string", "pattern": "^claim_[a-z0-9]{16,64}$" },
+        "audience": { "enum": ["all", "dba_sre", "developer", "incident_owner"] },
+        "textZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" },
+        "ruleIds": { "$ref": "#/$defs/ruleIdsNonEmpty" }
+      }
+    },
+    "aiSynthesis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "code", "messageZh", "claims"],
+      "properties": {
+        "status": { "enum": ["applied", "degraded", "not_requested"] },
+        "code": { "type": ["string", "null"], "maxLength": 128 },
+        "messageZh": { "type": ["string", "null"], "maxLength": 2048 },
+        "claims": {
+          "type": "array", "maxItems": 32,
+          "items": { "$ref": "#/$defs/aiClaim" }
+        }
+      }
+    },
+    "action": {
+      "type": "object", "additionalProperties": false,
+      "required": ["actionId", "family", "titleZh", "rationaleZh", "risk", "ownerRole", "prerequisitesZh", "stepsZh", "validation", "rollbackZh", "evidenceIds", "ruleIds", "requiresHumanApproval"],
+      "properties": {
+        "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
+        "family": { "enum": ["sql_rewrite", "index_candidate", "statistics_refresh", "plan_binding_candidate", "evidence_collection", "resource_investigation"] },
+        "titleZh": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "rationaleZh": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "risk": { "enum": ["low", "medium", "high", "critical"] },
+        "ownerRole": { "enum": ["dba", "sre", "developer", "incident_owner"] },
+        "prerequisitesZh": {
+          "type": "array", "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
+        "stepsZh": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "validation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["metricZh", "targetZh"],
+          "properties": {
+            "metricZh": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "targetZh": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        },
+        "rollbackZh": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" },
+        "ruleIds": { "$ref": "#/$defs/ruleIdsNonEmpty" },
+        "requiresHumanApproval": { "const": true }
+      }
+    },
+    "uncertainty": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "descriptionZh", "requiredEvidenceKinds"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,127}$" },
+        "descriptionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "requiredEvidenceKinds": {
+          "type": "array", "uniqueItems": true, "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+        }
+      }
+    },
+    "actor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "displayName"],
+      "properties": {
+        "kind": { "enum": ["system", "user", "team", "role"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reviewId", "caseRevision", "reviewer", "decision", "actionIds", "createdAt", "comment"],
+      "properties": {
+        "reviewId": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" },
+        "caseRevision": { "type": "integer", "minimum": 1 },
+        "reviewer": { "$ref": "#/$defs/actor" },
+        "decision": { "enum": ["approved", "rejected", "needs_changes", "risk_accepted"] },
+        "actionIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 32,
+          "items": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "comment": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "feedback": {
+      "type": "object", "additionalProperties": false,
+      "required": ["feedbackId", "caseRevision", "actor", "kind", "actionId", "evidenceIds", "createdAt", "comment"],
+      "properties": {
+        "feedbackId": { "type": "string", "pattern": "^fb_[a-z0-9]{16,64}$" },
+        "caseRevision": { "type": "integer", "minimum": 1 },
+        "actor": { "$ref": "#/$defs/actor" },
+        "kind": { "enum": ["useful", "not_useful", "incorrect", "implemented", "validated", "rolled_back", "evidence_insufficient"] },
+        "actionId": { "type": ["string", "null"], "pattern": "^act_[a-z0-9]{16,64}$" },
+        "evidenceIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "comment": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "workflowTransitionEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventId", "caseRevision", "type", "fromWorkflowState", "toWorkflowState", "actor", "createdAt", "reason"],
+      "properties": {
+        "eventId": { "type": "string", "pattern": "^evt_[a-z0-9]{16,64}$" },
+        "caseRevision": { "type": "integer", "minimum": 1 },
+        "type": { "const": "workflow_state" },
+        "fromWorkflowState": { "enum": [null, "queued", "collecting", "analyzing", "ready", "failed", "cancelled"] },
+        "toWorkflowState": { "enum": ["queued", "collecting", "analyzing", "ready", "failed", "cancelled"] },
+        "actor": { "$ref": "#/$defs/actor" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "outcomeTransitionEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventId", "caseRevision", "type", "fromOutcome", "toOutcome", "actor", "createdAt", "reason", "reviewIds", "feedbackIds", "actionIds", "evidenceIds"],
+      "properties": {
+        "eventId": { "type": "string", "pattern": "^evt_[a-z0-9]{16,64}$" },
+        "caseRevision": { "type": "integer", "minimum": 1 },
+        "type": { "const": "outcome" },
+        "fromOutcome": { "enum": ["pending", "validated_effective", "rolled_back", "evidence_insufficient", "risk_accepted"] },
+        "toOutcome": { "enum": ["pending", "validated_effective", "rolled_back", "evidence_insufficient", "risk_accepted"] },
+        "actor": { "$ref": "#/$defs/actor" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "reviewIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 128,
+          "items": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" }
+        },
+        "feedbackIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 256,
+          "items": { "type": "string", "pattern": "^fb_[a-z0-9]{16,64}$" }
+        },
+        "actionIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 32,
+          "items": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" }
+        },
+        "evidenceIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        }
+      }
+    },
     "pinnedRevisions": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "rulePack",
-        "documentPack",
-        "parser",
-        "policy",
-        "redaction",
-        "provider",
-        "model",
-        "prompt"
-      ],
+      "type": "object", "additionalProperties": false,
+      "required": ["rulePack", "documentPack", "parser", "policy", "redaction", "provider", "model", "prompt"],
       "properties": {
         "rulePack": { "type": "string", "minLength": 1, "maxLength": 128 },
         "documentPack": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -97,246 +402,13 @@
         "prompt": { "type": ["string", "null"], "maxLength": 128 }
       }
     },
-    "createdAt": { "type": "string", "format": "date-time" },
-    "updatedAt": { "type": "string", "format": "date-time" }
-  },
-  "$defs": {
-    "sourceSnapshot": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["sourceId", "revision", "type", "product", "versionFamily"],
-      "properties": {
-        "sourceId": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" },
-        "revision": { "type": "integer", "minimum": 1 },
-        "type": { "enum": ["tidb", "prometheus", "tem", "alertmanager", "upload", "manual"] },
-        "product": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "versionFamily": { "type": "string", "minLength": 1, "maxLength": 64 }
-      }
+    "evidenceIdsNonEmpty": {
+      "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 512,
+      "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
     },
-    "evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "evidenceId",
-        "kind",
-        "sourceId",
-        "observedAt",
-        "collectedAt",
-        "freshness",
-        "coverage",
-        "sensitivity",
-        "integrityDigest",
-        "summaryZh"
-      ],
-      "properties": {
-        "evidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" },
-        "kind": {
-          "enum": [
-            "sql_structure",
-            "statement_summary",
-            "slow_query",
-            "schema",
-            "index",
-            "statistics",
-            "ordinary_plan",
-            "runtime_metric",
-            "alert",
-            "validation_result"
-          ]
-        },
-        "sourceId": {
-          "type": ["string", "null"],
-          "pattern": "^src_[a-z0-9]{16,64}$"
-        },
-        "observedAt": { "type": "string", "format": "date-time" },
-        "collectedAt": { "type": "string", "format": "date-time" },
-        "freshness": { "enum": ["fresh", "stale", "unknown"] },
-        "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
-        "sensitivity": { "enum": ["public", "metadata", "confidential"] },
-        "integrityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-        "summaryZh": { "type": "string", "minLength": 1, "maxLength": 4096 }
-      }
-    },
-    "fact": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["factId", "kind", "statementZh", "valueText", "evidenceIds"],
-      "properties": {
-        "factId": { "type": "string", "pattern": "^fact_[a-z0-9]{16,64}$" },
-        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "statementZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "valueText": { "type": ["string", "null"], "maxLength": 512 },
-        "evidenceIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 64,
-          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
-        }
-      }
-    },
-    "ruleFinding": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "ruleId",
-        "status",
-        "severity",
-        "minimumEvidenceLevel",
-        "conclusionZh",
-        "evidenceIds",
-        "documentRefs"
-      ],
-      "properties": {
-        "ruleId": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" },
-        "status": { "enum": ["hit", "conflicted", "not_applicable"] },
-        "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
-        "minimumEvidenceLevel": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
-        "conclusionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "evidenceIds": {
-          "type": "array",
-          "uniqueItems": true,
-          "maxItems": 64,
-          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
-        },
-        "documentRefs": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 16,
-          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
-        }
-      }
-    },
-    "aiClaim": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["claimId", "audience", "textZh", "evidenceIds", "ruleIds"],
-      "properties": {
-        "claimId": { "type": "string", "pattern": "^claim_[a-z0-9]{16,64}$" },
-        "audience": { "enum": ["all", "dba_sre", "developer", "incident_owner"] },
-        "textZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "evidenceIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 64,
-          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
-        },
-        "ruleIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 32,
-          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" }
-        }
-      }
-    },
-    "aiSynthesis": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["status", "code", "claims"],
-      "properties": {
-        "status": { "enum": ["applied", "degraded", "not_requested"] },
-        "code": { "type": ["string", "null"], "maxLength": 128 },
-        "claims": {
-          "type": "array",
-          "maxItems": 32,
-          "items": { "$ref": "#/$defs/aiClaim" }
-        }
-      }
-    },
-    "action": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "actionId",
-        "family",
-        "titleZh",
-        "rationaleZh",
-        "risk",
-        "ownerRole",
-        "prerequisitesZh",
-        "stepsZh",
-        "validation",
-        "rollbackZh",
-        "evidenceIds",
-        "ruleIds",
-        "requiresHumanApproval"
-      ],
-      "properties": {
-        "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
-        "family": {
-          "enum": [
-            "sql_rewrite",
-            "index_candidate",
-            "statistics_refresh",
-            "plan_binding_candidate",
-            "evidence_collection",
-            "resource_investigation"
-          ]
-        },
-        "titleZh": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "rationaleZh": { "type": "string", "minLength": 1, "maxLength": 4096 },
-        "risk": { "enum": ["low", "medium", "high", "critical"] },
-        "ownerRole": { "enum": ["dba", "sre", "developer", "incident_owner"] },
-        "prerequisitesZh": {
-          "type": "array",
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
-        },
-        "stepsZh": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
-        },
-        "validation": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["metricZh", "targetZh"],
-          "properties": {
-            "metricZh": { "type": "string", "minLength": 1, "maxLength": 512 },
-            "targetZh": { "type": "string", "minLength": 1, "maxLength": 512 }
-          }
-        },
-        "rollbackZh": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
-        },
-        "evidenceIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 64,
-          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
-        },
-        "ruleIds": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "maxItems": 32,
-          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" }
-        },
-        "requiresHumanApproval": { "const": true }
-      }
-    },
-    "uncertainty": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["code", "descriptionZh", "requiredEvidenceKinds"],
-      "properties": {
-        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$" },
-        "descriptionZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "requiredEvidenceKinds": {
-          "type": "array",
-          "uniqueItems": true,
-          "maxItems": 32,
-          "items": { "type": "string", "minLength": 1, "maxLength": 64 }
-        }
-      }
+    "ruleIdsNonEmpty": {
+      "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 128,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" }
     }
   }
 }

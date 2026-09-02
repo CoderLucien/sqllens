@@ -69,11 +69,15 @@ packages, and source builds are outside the P0 customer journey.
 
 #### A2. Create the local Owner
 
-On an empty instance, the first localhost visit creates the Owner password. No
-default password or terminal bootstrap code is shown. The endpoint is available
-only while the instance is uninitialized, the request is loopback-originated,
-and no Owner record exists. Creation atomically closes the first-run endpoint.
-Recovery is a separate local, audited flow.
+On an empty instance, the first canonical `http://localhost:18080` visit creates
+the Owner password. No default password or terminal bootstrap code is shown.
+Owner creation requires the exact Host and Origin plus a short-lived,
+single-use setup nonce bound to an HttpOnly SameSite=Strict cookie. Docker
+loopback publication is exposure control; container peer IP and proxy headers
+are not caller identity. Creation atomically closes the first-run endpoint.
+The no-code P0 journey explicitly trusts the local operating-system/Docker
+administrator during empty-instance setup. Recovery is a separate local,
+audited flow.
 
 #### A3. Configure initial sources
 
@@ -181,6 +185,13 @@ rotate credential, and delete. A source revision includes:
 A diagnosis snapshots the source revision and evidence. Later source edits or
 deletion affect only new jobs and do not rewrite historical reports.
 
+Admission also pins the credential revision and acquires a lease. Rotation,
+disable, and delete stop new admission and drain existing leases. Rotation
+activates a new revision for new jobs; deletion destroys the usable secret only
+after leases reach zero and retains a metadata-only tombstone. A forced cancel
+requires Owner confirmation and an audit record. Hard deletion with active
+leases is forbidden.
+
 ### Database read-only account
 
 The guided scripts cover TiDB v8.5.x and PingKaiDB v7.1.x. Required privileges
@@ -267,12 +278,21 @@ Source metadata is separate from an encrypted credential reference. Mutating
 operations require CSRF protection, optimistic revision checks, and an audit
 reason. Tests return capability details, not just a Boolean.
 
+### Evidence/v2
+
+Evidence is a standalone immutable envelope bound to one Case and, when
+collected from a managed Source, one exact Source revision. It records payload
+integrity, observation/collection time, freshness, coverage, sensitivity,
+collector/query/redaction revisions, and timeout/row/byte budget consumption.
+Large or sensitive payloads remain behind a storage reference.
+
 ### DiagnosisCase/v2
 
-Raw evidence, derived facts, rule findings, AI contribution, actions, and
-validation results are separate typed collections. Every reference resolves
-within the Case. Provider, model, prompt, rule pack, parser, redaction, source,
-and document revisions are pinned.
+Raw evidence, derived facts, rule findings, AI contribution, actions,
+review/feedback, workflow/outcome transition events, and validation results are
+separate typed collections. Every reference resolves within the Case. Provider,
+model, prompt, rule pack, parser, redaction, source, and document revisions are
+pinned.
 
 ### DiagnosisReport/v1
 

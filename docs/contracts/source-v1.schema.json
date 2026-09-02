@@ -5,52 +5,30 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion",
-    "sourceId",
-    "revision",
-    "type",
-    "name",
-    "state",
-    "product",
-    "version",
-    "endpoint",
-    "auth",
-    "capabilities",
-    "budgets",
-    "owner",
-    "createdAt",
-    "updatedAt",
-    "lastVerifiedAt"
+    "schemaVersion", "sourceId", "revision", "type", "name", "state",
+    "product", "version", "endpoint", "auth", "credentialLifecycle",
+    "associatedSourceIds", "allowedSchemas", "capabilities", "budgets",
+    "owner", "verification", "createdAt", "updatedAt"
   ],
   "properties": {
     "schemaVersion": { "const": "source/v1" },
     "sourceId": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" },
     "revision": { "type": "integer", "minimum": 1 },
-    "type": {
-      "enum": ["tidb", "prometheus", "tem", "alertmanager"]
-    },
+    "type": { "enum": ["tidb", "prometheus", "tem", "alertmanager"] },
     "name": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "state": {
-      "enum": ["draft", "enabled", "disabled", "verification_failed"]
-    },
-    "product": {
-      "enum": ["tidb", "pingkaidb", "prometheus", "tem", "alertmanager"]
-    },
+    "state": { "enum": ["draft", "enabled", "disabled", "draining", "verification_failed", "tombstoned"] },
+    "product": { "enum": ["tidb", "pingkaidb", "prometheus", "tem", "alertmanager"] },
     "version": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["detected", "family", "supported"],
       "properties": {
         "detected": { "type": ["string", "null"], "maxLength": 128 },
-        "family": {
-          "enum": ["tidb-8.5", "pingkaidb-7.1", "prometheus", "tem", "alertmanager", "unknown"]
-        },
+        "family": { "enum": ["tidb-8.5", "pingkaidb-7.1", "prometheus", "tem", "alertmanager", "unknown"] },
         "supported": { "type": "boolean" }
       }
     },
     "endpoint": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["scheme", "host", "port", "path", "tlsMode"],
       "properties": {
         "scheme": { "enum": ["mysql", "http", "https"] },
@@ -61,41 +39,40 @@
       }
     },
     "auth": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "credentialRef", "username", "expiresAt"],
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "credentialRef", "credentialRevision", "username", "expiresAt"],
       "properties": {
-        "kind": {
-          "enum": ["password", "none", "basic", "bearer", "api_key", "mtls"]
-        },
-        "credentialRef": {
-          "type": ["string", "null"],
-          "pattern": "^cred_[a-z0-9]{16,64}$"
-        },
+        "kind": { "enum": ["password", "none", "basic", "bearer", "api_key", "mtls"] },
+        "credentialRef": { "type": ["string", "null"], "pattern": "^cred_[a-z0-9]{16,64}$" },
+        "credentialRevision": { "type": ["integer", "null"], "minimum": 1 },
         "username": { "type": ["string", "null"], "maxLength": 256 },
         "expiresAt": { "type": ["string", "null"], "format": "date-time" }
       }
     },
+    "credentialLifecycle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "activeLeaseCount", "pendingOperation", "retireAfter"],
+      "properties": {
+        "state": { "enum": ["none", "active", "rotating", "retiring", "tombstoned"] },
+        "activeLeaseCount": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "pendingOperation": { "type": ["string", "null"], "enum": [null, "rotate", "disable", "delete"] },
+        "retireAfter": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
     "associatedSourceIds": {
-      "type": "array",
-      "uniqueItems": true,
-      "maxItems": 32,
+      "type": "array", "uniqueItems": true, "maxItems": 32,
       "items": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" }
     },
     "allowedSchemas": {
-      "type": "array",
-      "uniqueItems": true,
-      "maxItems": 128,
+      "type": "array", "uniqueItems": true, "maxItems": 128,
       "items": { "type": "string", "minLength": 1, "maxLength": 128 }
     },
     "capabilities": {
-      "type": "array",
-      "maxItems": 64,
+      "type": "array", "maxItems": 64,
       "items": { "$ref": "#/$defs/capability" }
     },
     "budgets": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["timeoutMs", "maxRows", "maxConcurrency", "ratePerMinute"],
       "properties": {
         "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
@@ -105,36 +82,164 @@
       }
     },
     "owner": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["displayName", "reference"],
       "properties": {
         "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
         "reference": { "type": "string", "minLength": 1, "maxLength": 512 }
       }
     },
+    "verification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "testedAt", "identityDigest", "errorCode"],
+      "properties": {
+        "status": { "enum": ["not_run", "passed", "failed"] },
+        "testedAt": { "type": ["string", "null"], "format": "date-time" },
+        "identityDigest": { "type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$" },
+        "errorCode": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
     "createdAt": { "type": "string", "format": "date-time" },
-    "updatedAt": { "type": "string", "format": "date-time" },
-    "lastVerifiedAt": { "type": ["string", "null"], "format": "date-time" }
+    "updatedAt": { "type": "string", "format": "date-time" }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "tidb" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "product": { "enum": ["tidb", "pingkaidb"] },
+          "version": { "properties": { "family": { "enum": ["tidb-8.5", "pingkaidb-7.1", "unknown"] } } },
+          "endpoint": { "properties": { "scheme": { "const": "mysql" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "prometheus" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "product": { "const": "prometheus" },
+          "version": { "properties": { "family": { "enum": ["prometheus", "unknown"] } } },
+          "endpoint": { "properties": { "scheme": { "enum": ["http", "https"] } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "tem" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "product": { "const": "tem" },
+          "version": { "properties": { "family": { "enum": ["tem", "unknown"] } } },
+          "endpoint": { "properties": { "scheme": { "const": "https" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "alertmanager" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "product": { "const": "alertmanager" },
+          "version": { "properties": { "family": { "enum": ["alertmanager", "unknown"] } } },
+          "endpoint": { "properties": { "scheme": { "enum": ["http", "https"] } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "auth": { "properties": { "kind": { "const": "none" } }, "required": ["kind"] } }, "required": ["auth"] },
+      "then": {
+        "properties": {
+          "auth": { "properties": { "credentialRef": { "type": "null" }, "credentialRevision": { "type": "null" }, "username": { "type": "null" } } },
+          "credentialLifecycle": { "properties": { "state": { "enum": ["none", "retiring", "tombstoned"] } } }
+        }
+      },
+      "else": {
+        "properties": {
+          "auth": { "properties": { "credentialRef": { "type": "string", "pattern": "^cred_[a-z0-9]{16,64}$" }, "credentialRevision": { "type": "integer", "minimum": 1 } } },
+          "credentialLifecycle": { "properties": { "state": { "enum": ["active", "rotating", "retiring"] } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "auth": { "properties": { "kind": { "enum": ["password", "basic"] } }, "required": ["kind"] } }, "required": ["auth"] },
+      "then": { "properties": { "auth": { "properties": { "username": { "type": "string", "minLength": 1, "maxLength": 256 } } } } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "enabled" } }, "required": ["state"] },
+      "then": {
+        "properties": {
+          "version": { "properties": { "supported": { "const": true }, "family": { "not": { "const": "unknown" } }, "detected": { "type": "string", "minLength": 1 } } },
+          "verification": { "properties": { "status": { "const": "passed" }, "testedAt": { "type": "string" }, "identityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }, "errorCode": { "type": "null" } } },
+          "credentialLifecycle": { "properties": { "state": { "enum": ["active", "none"] }, "pendingOperation": { "type": "null" } } },
+          "capabilities": { "not": { "contains": { "properties": { "required": { "const": true }, "status": { "not": { "const": "available" } } }, "required": ["required", "status"] } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "state": { "const": "draining" } }, "required": ["state"] },
+      "then": {
+        "properties": {
+          "credentialLifecycle": { "properties": { "state": { "enum": ["rotating", "retiring"] }, "pendingOperation": { "enum": ["rotate", "disable", "delete"] } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "state": { "const": "tombstoned" } }, "required": ["state"] },
+      "then": {
+        "properties": {
+          "auth": { "properties": { "kind": { "const": "none" }, "credentialRef": { "type": "null" }, "credentialRevision": { "type": "null" }, "username": { "type": "null" } } },
+          "credentialLifecycle": { "properties": { "state": { "const": "tombstoned" }, "activeLeaseCount": { "const": 0 }, "pendingOperation": { "type": "null" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "credentialLifecycle": { "properties": { "state": { "const": "tombstoned" } }, "required": ["state"] } }, "required": ["credentialLifecycle"] },
+      "then": { "properties": { "state": { "const": "tombstoned" } } }
+    },
+    {
+      "if": { "properties": { "credentialLifecycle": { "properties": { "state": { "enum": ["rotating", "retiring"] } }, "required": ["state"] } }, "required": ["credentialLifecycle"] },
+      "then": {
+        "properties": {
+          "state": { "const": "draining" },
+          "credentialLifecycle": { "properties": { "retireAfter": { "type": "string" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "credentialLifecycle": { "properties": { "pendingOperation": { "type": "string" } }, "required": ["pendingOperation"] } }, "required": ["credentialLifecycle"] },
+      "then": { "properties": { "state": { "const": "draining" } } }
+    },
+    {
+      "if": { "properties": { "credentialLifecycle": { "properties": { "pendingOperation": { "const": "rotate" } }, "required": ["pendingOperation"] } }, "required": ["credentialLifecycle"] },
+      "then": { "properties": { "credentialLifecycle": { "properties": { "state": { "const": "rotating" } } } } }
+    },
+    {
+      "if": { "properties": { "credentialLifecycle": { "properties": { "pendingOperation": { "enum": ["disable", "delete"] } }, "required": ["pendingOperation"] } }, "required": ["credentialLifecycle"] },
+      "then": { "properties": { "credentialLifecycle": { "properties": { "state": { "const": "retiring" } } } } }
+    },
+    {
+      "if": { "properties": { "credentialLifecycle": { "properties": { "state": { "enum": ["none", "active", "tombstoned"] } }, "required": ["state"] } }, "required": ["credentialLifecycle"] },
+      "then": {
+        "properties": {
+          "credentialLifecycle": {
+            "properties": {
+              "pendingOperation": { "type": "null" },
+              "retireAfter": { "type": "null" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "verification": { "properties": { "status": { "const": "passed" } }, "required": ["status"] } }, "required": ["verification"] },
+      "then": { "properties": { "verification": { "properties": { "testedAt": { "type": "string" }, "identityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }, "errorCode": { "type": "null" } } } } },
+      "else": { "properties": { "verification": { "properties": { "identityDigest": { "type": "null" } } } } }
+    }
+  ],
   "$defs": {
     "capability": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["name", "status", "required", "detail"],
       "properties": {
-        "name": {
-          "enum": [
-            "version",
-            "schema",
-            "statement_summary",
-            "slow_query",
-            "statistics",
-            "ordinary_explain",
-            "prom_query",
-            "alert_read"
-          ]
-        },
+        "name": { "enum": ["version", "schema", "statement_summary", "slow_query", "statistics", "ordinary_explain", "prom_query", "alert_read"] },
         "status": { "enum": ["available", "denied", "missing", "unknown"] },
         "required": { "type": "boolean" },
         "detail": { "type": "string", "maxLength": 1024 }

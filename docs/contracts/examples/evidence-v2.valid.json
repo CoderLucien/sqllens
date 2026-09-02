@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "evidence/v2",
+  "evidenceId": "ev_0000000000000001",
+  "revision": 1,
+  "caseId": "case_0000000000000002",
+  "origin": "managed_source",
+  "kind": "slow_query",
+  "sourceRef": {
+    "sourceId": "src_0000000000000001",
+    "revision": 3
+  },
+  "observedAt": "2026-09-02T08:00:00Z",
+  "collectedAt": "2026-09-02T08:05:00Z",
+  "freshness": "fresh",
+  "coverage": 0.96,
+  "sensitivity": "confidential",
+  "integrityDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "summaryZh": "该 SQL 在 10 分钟窗口内执行 842 次，P95 2.8 秒，平均扫描 126 万行。",
+  "payload": {
+    "schemaRevision": "slow-query/v1",
+    "storageRef": "payload_0000000000000001",
+    "recordCount": 1,
+    "truncated": false,
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "collection": {
+    "collectorId": "pingkaidb-readonly",
+    "collectorRevision": "v1",
+    "queryId": "slow-query-by-digest",
+    "queryRevision": "pingkaidb-7.1/v1",
+    "status": "complete",
+    "redactionRevision": "evidence-redaction/v2",
+    "budget": {
+      "timeoutMs": 5000,
+      "maxRows": 5000,
+      "maxBytes": 1048576,
+      "elapsedMs": 83,
+      "rowsRead": 1,
+      "bytesRead": 2048
+    }
+  }
+}

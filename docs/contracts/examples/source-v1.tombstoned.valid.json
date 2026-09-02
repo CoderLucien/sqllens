@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "source/v1",
+  "sourceId": "src_0000000000000099",
+  "revision": 8,
+  "type": "tidb",
+  "name": "已删除的历史订单集群",
+  "state": "tombstoned",
+  "product": "tidb",
+  "version": {
+    "detected": "8.5.2",
+    "family": "tidb-8.5",
+    "supported": true
+  },
+  "endpoint": {
+    "scheme": "mysql",
+    "host": "deleted.invalid",
+    "port": 4000,
+    "path": null,
+    "tlsMode": "verify_identity"
+  },
+  "auth": {
+    "kind": "none",
+    "credentialRef": null,
+    "credentialRevision": null,
+    "username": null,
+    "expiresAt": null
+  },
+  "credentialLifecycle": {
+    "state": "tombstoned",
+    "activeLeaseCount": 0,
+    "pendingOperation": null,
+    "retireAfter": null
+  },
+  "associatedSourceIds": [],
+  "allowedSchemas": [],
+  "capabilities": [],
+  "budgets": {
+    "timeoutMs": 5000,
+    "maxRows": 5000,
+    "maxConcurrency": 2,
+    "ratePerMinute": 30
+  },
+  "owner": {
+    "displayName": "数据库运维团队",
+    "reference": "IAM-2026-0902"
+  },
+  "verification": {
+    "status": "passed",
+    "testedAt": "2026-09-02T09:20:00Z",
+    "identityDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    "errorCode": null
+  },
+  "createdAt": "2026-09-02T09:00:00Z",
+  "updatedAt": "2026-09-02T10:00:00Z"
+}

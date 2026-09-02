@@ -27,6 +27,34 @@ Diagnosis admission snapshots the source revision. Later edits affect only new
 jobs; historical cases retain immutable source/evidence provenance without a
 usable credential.
 
+Job admission also pins the credential revision and acquires a lease before a
+connector query begins. Rotation creates a new credential revision, stops new
+admission against the old revision, and lets existing leased jobs drain. The
+old secret is destroyed only after its lease count reaches zero; new jobs never
+fall back to it.
+
+Disable and delete use the same admission barrier. A normal operation enters
+`draining`, records the pending operation and retirement deadline, rejects new
+jobs, and waits for leases to reach zero. An explicit force operation may cancel
+leased jobs but must name the jobs, require Owner confirmation, and emit audit
+events. Delete then destroys the credential and writes a metadata-only
+`tombstoned` Source revision. Tombstones cannot be enabled or queried and retain
+no usable endpoint credential. Hard deletion while a lease exists is forbidden.
+
+The lifecycle transitions are:
+
+- Source `enabled -> draining -> enabled` while its credential moves
+  `active -> rotating -> active` for rotation;
+- Source `enabled -> draining -> disabled` while its credential moves
+  `active -> retiring -> active` for disable (the disabled Source retains the
+  credential for a later explicit re-enable);
+- Source `enabled/disabled -> draining -> tombstoned` while its credential moves
+  `active -> retiring -> tombstoned` for delete.
+
+Each transition uses optimistic revision checks and is idempotent. Crash
+recovery resumes the recorded pending operation; it never guesses whether a
+secret was retired.
+
 Every connector supplies an in-product acquisition guide:
 
 1. identify the responsible customer role;
@@ -51,5 +79,6 @@ report granular capabilities and do not silently request broader access.
   lifecycle.
 - Connector and source contracts must precede implementation work.
 - Credential changes require optimistic concurrency and active-job protection.
+- Rotation, disable, and delete require lease/drain/cancel/tombstone tests.
 - Documentation and copyable scripts become versioned product assets and test
   fixtures, not prose maintained outside the application.

@@ -1,7 +1,8 @@
 # ADR 0002: Evidence Acquisition Boundaries
 
-Status: Accepted for P0 baseline
+Status: Accepted safety boundary; object/lifecycle details superseded for vNext P0
 Date: 2026-08-31
+Clarified by: ADR 0010, ADR 0011, and Evidence/v2
 
 ## Context
 

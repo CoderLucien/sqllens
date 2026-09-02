@@ -1,0 +1,258 @@
+{
+  "schemaVersion": "diagnosis-case/v2",
+  "caseId": "case_0000000000000003",
+  "revision": 1,
+  "inputMode": "managed_source",
+  "workflowState": "ready",
+  "outcome": "pending",
+  "configuredMode": "rules_ai",
+  "effectiveMode": "rules",
+  "evidenceLevel": "E3",
+  "subject": {
+    "clusterZh": "生产交易集群",
+    "databaseZh": "billing",
+    "sqlDigest": "digest:3ac8...e112",
+    "timeWindowZh": "2026-09-02 15:20-15:35 CST",
+    "businessZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。",
+    "businessEvidenceIds": ["ev_0000000000000014"]
+  },
+  "decision": {
+    "titleZh": "统计信息偏差导致 Join 顺序失真，先验证统计而不是直接加索引",
+    "priority": "P1",
+    "conclusionZh": "执行计划对核心表估算 120 行，实际运行证据为 18 万行；估算偏差足以改变 Join 顺序，应先在隔离环境刷新并验证统计。",
+    "evidenceSummary": [
+      {
+        "labelZh": "估算偏差",
+        "valueZh": "estRows 120，运行时 rows 180000，偏差约 1500 倍",
+        "evidenceIds": ["ev_0000000000000011"]
+      },
+      {
+        "labelZh": "统计健康",
+        "valueZh": "目标表统计更新时间早于最近一次大批量导入",
+        "evidenceIds": ["ev_0000000000000011"]
+      }
+    ],
+    "evidenceIds": [
+      "ev_0000000000000011",
+      "ev_0000000000000014"
+    ],
+    "ruleIds": ["STATS_ESTIMATION_001"],
+    "claimIds": [],
+    "actionIds": ["act_0000000000000011"]
+  },
+  "sourceSnapshots": [
+    {
+      "sourceId": "src_0000000000000011",
+      "revision": 2,
+      "type": "tidb",
+      "product": "tidb",
+      "versionFamily": "tidb-8.5"
+    }
+  ],
+  "evidence": [
+    {
+      "schemaVersion": "evidence/v2",
+      "evidenceId": "ev_0000000000000011",
+      "revision": 1,
+      "caseId": "case_0000000000000003",
+      "origin": "managed_source",
+      "kind": "statistics",
+      "sourceRef": {
+        "sourceId": "src_0000000000000011",
+        "revision": 2
+      },
+      "observedAt": "2026-09-02T07:20:00Z",
+      "collectedAt": "2026-09-02T07:35:00Z",
+      "freshness": "fresh",
+      "coverage": 0.93,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "summaryZh": "核心表 estRows 为 120、运行时 rows 为 180000，且统计更新时间早于最近一次大批量导入。",
+      "payload": {
+        "schemaRevision": "statistics-health/v1",
+        "storageRef": "payload_0000000000000011",
+        "recordCount": 1,
+        "truncated": false,
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "collection": {
+        "collectorId": "tidb-readonly",
+        "collectorRevision": "v1",
+        "queryId": "statistics-and-plan-estimation",
+        "queryRevision": "tidb-8.5/v1",
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 96,
+          "rowsRead": 12,
+          "bytesRead": 8192
+        }
+      }
+    },
+    {
+      "schemaVersion": "evidence/v2",
+      "evidenceId": "ev_0000000000000014",
+      "revision": 1,
+      "caseId": "case_0000000000000003",
+      "origin": "manual",
+      "kind": "business_observation",
+      "sourceRef": null,
+      "observedAt": "2026-09-02T07:20:00Z",
+      "collectedAt": "2026-09-02T07:35:00Z",
+      "freshness": "fresh",
+      "coverage": 1,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "summaryZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。",
+      "payload": {
+        "schemaRevision": "business-observation/v1",
+        "storageRef": "payload_0000000000000014",
+        "recordCount": 1,
+        "truncated": false,
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "collection": {
+        "collectorId": "manual-input",
+        "collectorRevision": "v1",
+        "queryId": null,
+        "queryRevision": null,
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {
+          "timeoutMs": 1000,
+          "maxRows": 1,
+          "maxBytes": 65536,
+          "elapsedMs": 0,
+          "rowsRead": 1,
+          "bytesRead": 256
+        }
+      }
+    }
+  ],
+  "facts": [
+    {
+      "factId": "fact_0000000000000011",
+      "kind": "estimation_error",
+      "statementZh": "核心表估算行数与实际行数相差约 1500 倍。",
+      "valueText": "1500x",
+      "evidenceIds": ["ev_0000000000000011"]
+    }
+  ],
+  "ruleFindings": [
+    {
+      "ruleId": "STATS_ESTIMATION_001",
+      "status": "hit",
+      "severity": "high",
+      "minimumEvidenceLevel": "E3",
+      "conclusionZh": "估算/实际行数偏差超过版本规则阈值，且统计早于数据变更。",
+      "evidenceIds": ["ev_0000000000000011"],
+      "documentRefs": ["tidb-sql-tuning-statistics@2026-09-02"]
+    }
+  ],
+  "aiSynthesis": {
+    "status": "degraded",
+    "code": "MODEL_TIMEOUT",
+    "messageZh": "外部模型超时，本报告使用确定性规则生成；事实、动作和证据不受影响。",
+    "claims": []
+  },
+  "actions": [
+    {
+      "actionId": "act_0000000000000011",
+      "family": "statistics_refresh",
+      "titleZh": "在隔离环境验证统计刷新后的计划",
+      "rationaleZh": "估算偏差和统计时效性共同支持先验证统计，而不是直接增加索引。",
+      "risk": "medium",
+      "ownerRole": "dba",
+      "prerequisitesZh": [
+        "准备 Plan Replayer 或测试集群",
+        "确认受控 ANALYZE 的资源窗口和采样策略"
+      ],
+      "stepsZh": [
+        "复现当前统计和执行计划",
+        "按版本文档刷新统计并对比 Join 顺序与任务耗时"
+      ],
+      "validation": {
+        "metricZh": "估算偏差、Join 顺序和批处理耗时",
+        "targetZh": "估算偏差低于 10 倍，Join 顺序稳定，批处理耗时回到 6 分钟以内"
+      },
+      "rollbackZh": [
+        "若计划退化，不在生产执行统计刷新",
+        "保留原统计与计划证据并重新评估绑定候选"
+      ],
+      "evidenceIds": ["ev_0000000000000011"],
+      "ruleIds": ["STATS_ESTIMATION_001"],
+      "requiresHumanApproval": true
+    }
+  ],
+  "uncertainty": [
+    {
+      "code": "PRODUCTION_CAPACITY_UNKNOWN",
+      "descriptionZh": "尚未取得生产峰值窗口的资源余量，不能直接安排生产 ANALYZE。",
+      "requiredEvidenceKinds": ["runtime_metric"]
+    },
+    {
+      "code": "AI_DEGRADED",
+      "descriptionZh": "模型未参与本轮解释，effective mode 为 rules。",
+      "requiredEvidenceKinds": []
+    }
+  ],
+  "reviews": [],
+  "feedback": [],
+  "transitionEvents": [
+    {
+      "eventId": "evt_0000000000000011",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": null,
+      "toWorkflowState": "queued",
+      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "createdAt": "2026-09-02T07:35:00Z",
+      "reason": "任务已创建"
+    },
+    {
+      "eventId": "evt_0000000000000012",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "queued",
+      "toWorkflowState": "collecting",
+      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "createdAt": "2026-09-02T07:35:00.200Z",
+      "reason": "开始采集证据"
+    },
+    {
+      "eventId": "evt_0000000000000013",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "collecting",
+      "toWorkflowState": "analyzing",
+      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "createdAt": "2026-09-02T07:35:00.700Z",
+      "reason": "证据采集完成"
+    },
+    {
+      "eventId": "evt_0000000000000014",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "analyzing",
+      "toWorkflowState": "ready",
+      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "createdAt": "2026-09-02T07:35:01Z",
+      "reason": "规则报告投影完成"
+    }
+  ],
+  "pinnedRevisions": {
+    "rulePack": "tidb-8.5-rules/v1",
+    "documentPack": "tidb-sql-tuning@2026-09-02",
+    "parser": "sqlglot/mysql@30.17.0",
+    "policy": "diagnosis-policy/v2",
+    "redaction": "evidence-redaction/v2",
+    "provider": null,
+    "model": null,
+    "prompt": null
+  },
+  "createdAt": "2026-09-02T07:35:00Z",
+  "updatedAt": "2026-09-02T07:35:01Z"
+}

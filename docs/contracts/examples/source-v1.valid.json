@@ -21,8 +21,15 @@
   "auth": {
     "kind": "password",
     "credentialRef": "cred_0000000000000001",
+    "credentialRevision": 2,
     "username": "sqllens_ro",
     "expiresAt": "2026-12-01T00:00:00Z"
+  },
+  "credentialLifecycle": {
+    "state": "active",
+    "activeLeaseCount": 0,
+    "pendingOperation": null,
+    "retireAfter": null
   },
   "associatedSourceIds": ["src_0000000000000002"],
   "allowedSchemas": ["order_center"],
@@ -32,6 +39,12 @@
       "status": "available",
       "required": true,
       "detail": "PingKaiDB 7.1 version family matched."
+    },
+    {
+      "name": "schema",
+      "status": "available",
+      "required": true,
+      "detail": "Allowed schema metadata is readable."
     },
     {
       "name": "statement_summary",
@@ -56,7 +69,12 @@
     "displayName": "数据库运维团队",
     "reference": "IAM-2026-0902"
   },
+  "verification": {
+    "status": "passed",
+    "testedAt": "2026-09-02T09:20:00Z",
+    "identityDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "errorCode": null
+  },
   "createdAt": "2026-09-02T09:00:00Z",
-  "updatedAt": "2026-09-02T09:20:00Z",
-  "lastVerifiedAt": "2026-09-02T09:20:00Z"
+  "updatedAt": "2026-09-02T09:20:00Z"
 }

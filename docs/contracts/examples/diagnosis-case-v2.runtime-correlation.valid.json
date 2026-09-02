@@ -1,0 +1,343 @@
+{
+  "schemaVersion": "diagnosis-case/v2",
+  "caseId": "case_0000000000000004",
+  "revision": 1,
+  "inputMode": "managed_source",
+  "workflowState": "ready",
+  "outcome": "pending",
+  "configuredMode": "rules_ai",
+  "effectiveMode": "rules_ai",
+  "evidenceLevel": "E4",
+  "subject": {
+    "clusterZh": "核心交易集群",
+    "databaseZh": "payment",
+    "sqlDigest": "digest:9bd1...42f0",
+    "timeWindowZh": "2026-09-02 14:03-14:16 CST",
+    "businessZh": "支付确认接口错误率升至 2.1%，P99 达 6.4 秒，影响线上交易。",
+    "businessEvidenceIds": ["ev_0000000000000026"]
+  },
+  "decision": {
+    "titleZh": "SQL 延迟与 TiKV 热点时间窗一致，优先处置热点而不是改写 SQL",
+    "priority": "P0",
+    "conclusionZh": "告警窗口内 SQL 计划和扫描量稳定，但目标 Region 的 TiKV 延迟与热点指标同步升高；当前更支持资源热点，而不是 SQL 结构退化。",
+    "evidenceSummary": [
+      {
+        "labelZh": "SQL 稳定性",
+        "valueZh": "计划摘要、扫描行数和调用量与前一基线窗口接近",
+        "evidenceIds": ["ev_0000000000000021"]
+      },
+      {
+        "labelZh": "资源相关性",
+        "valueZh": "同一时间窗 TiKV 请求延迟和 Region 热点指标显著升高",
+        "evidenceIds": ["ev_0000000000000023"]
+      },
+      {
+        "labelZh": "告警关联",
+        "valueZh": "TEM 告警的集群、组件与异常时间窗匹配",
+        "evidenceIds": ["ev_0000000000000025"]
+      }
+    ],
+    "evidenceIds": [
+      "ev_0000000000000021",
+      "ev_0000000000000023",
+      "ev_0000000000000025",
+      "ev_0000000000000026"
+    ],
+    "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"],
+    "claimIds": ["claim_0000000000000021"],
+    "actionIds": ["act_0000000000000021"]
+  },
+  "sourceSnapshots": [
+    {
+      "sourceId": "src_0000000000000021",
+      "revision": 4,
+      "type": "tidb",
+      "product": "tidb",
+      "versionFamily": "tidb-8.5"
+    },
+    {
+      "sourceId": "src_0000000000000022",
+      "revision": 2,
+      "type": "prometheus",
+      "product": "prometheus",
+      "versionFamily": "prometheus-2.x"
+    },
+    {
+      "sourceId": "src_0000000000000023",
+      "revision": 1,
+      "type": "tem",
+      "product": "tem",
+      "versionFamily": "tem-v1"
+    }
+  ],
+  "evidence": [
+    {
+      "schemaVersion": "evidence/v2",
+      "evidenceId": "ev_0000000000000021",
+      "revision": 1,
+      "caseId": "case_0000000000000004",
+      "origin": "managed_source",
+      "kind": "statement_summary",
+      "sourceRef": {"sourceId": "src_0000000000000021", "revision": 4},
+      "observedAt": "2026-09-02T06:03:00Z",
+      "collectedAt": "2026-09-02T06:16:00Z",
+      "freshness": "fresh",
+      "coverage": 0.98,
+      "sensitivity": "confidential",
+      "integrityDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "summaryZh": "SQL 计划摘要、扫描行数和调用量与前一基线窗口接近。",
+      "payload": {
+        "schemaRevision": "statement-summary/v1",
+        "storageRef": "payload_0000000000000021",
+        "recordCount": 2,
+        "truncated": false,
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "collection": {
+        "collectorId": "tidb-readonly",
+        "collectorRevision": "v1",
+        "queryId": "statement-window-comparison",
+        "queryRevision": "tidb-8.5/v1",
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {"timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 75, "rowsRead": 2, "bytesRead": 4096}
+      }
+    },
+    {
+      "schemaVersion": "evidence/v2",
+      "evidenceId": "ev_0000000000000023",
+      "revision": 1,
+      "caseId": "case_0000000000000004",
+      "origin": "managed_source",
+      "kind": "runtime_metric",
+      "sourceRef": {"sourceId": "src_0000000000000022", "revision": 2},
+      "observedAt": "2026-09-02T06:03:00Z",
+      "collectedAt": "2026-09-02T06:16:00Z",
+      "freshness": "fresh",
+      "coverage": 0.97,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "summaryZh": "TiKV 请求延迟和 Region 热点指标在 SQL 异常时间窗内同步升高。",
+      "payload": {
+        "schemaRevision": "prometheus-window/v1",
+        "storageRef": "payload_0000000000000023",
+        "recordCount": 26,
+        "truncated": false,
+        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "collection": {
+        "collectorId": "prometheus-readonly",
+        "collectorRevision": "v1",
+        "queryId": "tikv-hotspot-window",
+        "queryRevision": "prometheus/v1",
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {"timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 112, "rowsRead": 26, "bytesRead": 12288}
+      }
+    },
+    {
+      "schemaVersion": "evidence/v2",
+      "evidenceId": "ev_0000000000000025",
+      "revision": 1,
+      "caseId": "case_0000000000000004",
+      "origin": "managed_source",
+      "kind": "alert",
+      "sourceRef": {"sourceId": "src_0000000000000023", "revision": 1},
+      "observedAt": "2026-09-02T06:03:00Z",
+      "collectedAt": "2026-09-02T06:16:00Z",
+      "freshness": "fresh",
+      "coverage": 1,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "summaryZh": "TEM 告警的集群、TiKV 组件与异常时间窗匹配。",
+      "payload": {
+        "schemaRevision": "tem-alert/v1",
+        "storageRef": "payload_0000000000000025",
+        "recordCount": 1,
+        "truncated": false,
+        "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "collection": {
+        "collectorId": "tem-readonly",
+        "collectorRevision": "v1",
+        "queryId": "alert-by-window",
+        "queryRevision": "tem/v1",
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {"timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 54, "rowsRead": 1, "bytesRead": 2048}
+      }
+    },
+    {
+      "schemaVersion": "evidence/v2",
+      "evidenceId": "ev_0000000000000026",
+      "revision": 1,
+      "caseId": "case_0000000000000004",
+      "origin": "manual",
+      "kind": "business_observation",
+      "sourceRef": null,
+      "observedAt": "2026-09-02T06:03:00Z",
+      "collectedAt": "2026-09-02T06:16:00Z",
+      "freshness": "fresh",
+      "coverage": 1,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summaryZh": "支付确认接口错误率升至 2.1%，P99 达 6.4 秒，影响线上交易。",
+      "payload": {
+        "schemaRevision": "business-observation/v1",
+        "storageRef": "payload_0000000000000026",
+        "recordCount": 1,
+        "truncated": false,
+        "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "collection": {
+        "collectorId": "manual-input",
+        "collectorRevision": "v1",
+        "queryId": null,
+        "queryRevision": null,
+        "status": "complete",
+        "redactionRevision": "evidence-redaction/v2",
+        "budget": {"timeoutMs": 1000, "maxRows": 1, "maxBytes": 65536, "elapsedMs": 0, "rowsRead": 1, "bytesRead": 256}
+      }
+    }
+  ],
+  "facts": [
+    {
+      "factId": "fact_0000000000000021",
+      "kind": "time_window_correlation",
+      "statementZh": "SQL 延迟与 TiKV 热点在同一时间窗异常，SQL 计划本身保持稳定。",
+      "valueText": "correlated",
+      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023"]
+    }
+  ],
+  "ruleFindings": [
+    {
+      "ruleId": "RUNTIME_HOTSPOT_001",
+      "status": "hit",
+      "severity": "critical",
+      "minimumEvidenceLevel": "E4",
+      "conclusionZh": "SQL 基线稳定，TiKV 热点和延迟在同一窗口共同异常。",
+      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"],
+      "documentRefs": ["tidb-troubleshoot-hot-regions@2026-09-02"]
+    },
+    {
+      "ruleId": "SQL_REGRESSION_001",
+      "status": "conflicted",
+      "severity": "medium",
+      "minimumEvidenceLevel": "E3",
+      "conclusionZh": "没有检测到计划或扫描量退化，SQL 结构退化假设被冲突证据抑制。",
+      "evidenceIds": ["ev_0000000000000021"],
+      "documentRefs": ["tidb-sql-tuning-overview@2026-09-02"]
+    }
+  ],
+  "aiSynthesis": {
+    "status": "applied",
+    "code": null,
+    "messageZh": null,
+    "claims": [
+      {
+        "claimId": "claim_0000000000000021",
+        "audience": "all",
+        "textZh": "SQL、Prometheus 和 TEM 的时间窗关系支持优先调查 TiKV 热点，但相关性不等于已证明物理因果。",
+        "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"],
+        "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "actionId": "act_0000000000000021",
+      "family": "resource_investigation",
+      "titleZh": "由 SRE/DBA 先验证并缓解 TiKV 热点",
+      "rationaleZh": "SQL 计划稳定，资源指标和告警在相同时间窗异常，应先验证热点。",
+      "risk": "high",
+      "ownerRole": "sre",
+      "prerequisitesZh": [
+        "核对热点 Region、Store 与业务 Key 范围",
+        "取得生产资源处置审批"
+      ],
+      "stepsZh": [
+        "按既有应急手册选择低风险缓解动作",
+        "保持 SQL 与计划不变以避免同时引入第二变量"
+      ],
+      "validation": {
+        "metricZh": "TiKV P99、热点指标和支付接口错误率",
+        "targetZh": "三项指标在 15 分钟内共同回落到客户基线阈值"
+      },
+      "rollbackZh": [
+        "若缓解动作无效或副作用超阈值，立即按客户应急手册回滚",
+        "保留 Region、Store 与时间窗证据"
+      ],
+      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"],
+      "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"],
+      "requiresHumanApproval": true
+    }
+  ],
+  "uncertainty": [
+    {
+      "code": "CAUSALITY_UNCONFIRMED",
+      "descriptionZh": "时间窗相关性不等于根因已被物理证明，仍需 Region/Store 级确认。",
+      "requiredEvidenceKinds": ["runtime_metric"]
+    },
+    {
+      "code": "TEM_SCOPE_READONLY",
+      "descriptionZh": "TEM Key 的只读能力由连接预检确认，本报告未执行任何告警修改。",
+      "requiredEvidenceKinds": ["alert"]
+    }
+  ],
+  "reviews": [],
+  "feedback": [],
+  "transitionEvents": [
+    {
+      "eventId": "evt_0000000000000021",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": null,
+      "toWorkflowState": "queued",
+      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "createdAt": "2026-09-02T06:16:00Z",
+      "reason": "任务已创建"
+    },
+    {
+      "eventId": "evt_0000000000000022",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "queued",
+      "toWorkflowState": "collecting",
+      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "createdAt": "2026-09-02T06:16:00.200Z",
+      "reason": "开始采集证据"
+    },
+    {
+      "eventId": "evt_0000000000000023",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "collecting",
+      "toWorkflowState": "analyzing",
+      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "createdAt": "2026-09-02T06:16:00.700Z",
+      "reason": "证据采集完成"
+    },
+    {
+      "eventId": "evt_0000000000000024",
+      "caseRevision": 1,
+      "type": "workflow_state",
+      "fromWorkflowState": "analyzing",
+      "toWorkflowState": "ready",
+      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "createdAt": "2026-09-02T06:16:02Z",
+      "reason": "规则和报告投影完成"
+    }
+  ],
+  "pinnedRevisions": {
+    "rulePack": "tidb-8.5-rules/v1",
+    "documentPack": "tidb-sql-tuning@2026-09-02",
+    "parser": "sqlglot/mysql@30.17.0",
+    "policy": "diagnosis-policy/v2",
+    "redaction": "evidence-redaction/v2",
+    "provider": "openai-compatible",
+    "model": "gpt-5.6-sol",
+    "prompt": "evidence-bound-synthesis/v1"
+  },
+  "createdAt": "2026-09-02T06:16:00Z",
+  "updatedAt": "2026-09-02T06:16:02Z"
+}

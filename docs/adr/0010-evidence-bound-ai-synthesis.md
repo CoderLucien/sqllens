@@ -3,7 +3,7 @@
 Status: Accepted for vNext P0
 Date: 2026-09-02
 Clarifies: ADR 0003
-Supersedes: ADR 0008 ranking-only output
+Replaces: the earlier ranking-only provider response contract
 
 ## Context
 
@@ -67,5 +67,5 @@ evidence, or action state.
 - The model contract and report renderer require new schemas and threat tests.
 - Ranking-only provider code may be reused for transport/budgets, but its
   request and response contracts are replaced.
-- ADR 0003 remains valid: the model is still an untrusted explainer. ADR 0008
-  remains historical evidence for the narrower implementation.
+- ADR 0003 remains valid: the model is still an untrusted explainer. The
+  ranking-only implementation remains historical code, not an active contract.

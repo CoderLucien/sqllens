@@ -6,13 +6,20 @@ The vNext product baseline adds:
 
 - `source-v1.schema.json`: revisioned database/Prometheus/TEM/Alertmanager
   metadata and capability state; credentials are references, never values.
+- `evidence-v2.schema.json`: standalone immutable evidence envelope with Case
+  and Source revision bindings, payload digest, freshness, redaction revision,
+  collector/query revision, and collection budgets.
 - `diagnosis-case-v2.schema.json`: separates evidence, facts, rule findings,
-  validated AI claims, actions, uncertainty, and pinned revisions.
+  validated AI claims, actions, uncertainty, transition audit, review/feedback,
+  and pinned revisions.
 - `diagnosis-report-v1.schema.json`: Chinese audience projection backed by one
   immutable Case revision.
 
 Review fixtures:
 
+- `examples/diagnosis-case-v2.valid.json`
+- `examples/diagnosis-case-v2.statistics.valid.json`
+- `examples/diagnosis-case-v2.runtime-correlation.valid.json`
 - `examples/diagnosis-report-v1.index-access.review.json`
 - `examples/diagnosis-report-v1.statistics.review.json`
 - `examples/diagnosis-report-v1.runtime-correlation.review.json`
@@ -21,12 +28,38 @@ Validate the vNext drafts and their reference integrity with:
 
 ```bash
 python3 docs/contracts/validate_vnext_examples.py
+python3 docs/contracts/validate_vnext_negative_examples.py
 ```
+
+The positive validator checks all three Case/Report pairs plus one complete
+`validated_effective` transition. A report must be an exact projection of one
+Case revision for mode, conclusion, business impact, evidence summary, rule/AI
+reasoning, ordered actions, uncertainty, and complete provenance. It cannot add
+an evidence ID, action, measurement, or business impact that the Case did not
+bind.
+
+DiagnosisCase/v2 records both workflow and business-outcome transition events.
+A non-pending outcome requires `workflowState=ready`, a same-revision outcome
+event, and linked review/feedback/action/evidence prerequisites. Effect claims
+require an ordered approval -> implementation -> result-evidence -> terminal
+feedback chain. `risk_accepted` and `evidence_insufficient` have separate,
+explicit audit records and cannot be inferred from status text.
+
+Source/v1 lifecycle validation treats a Source revision and credential revision
+as separate immutable identities. Admission pins both and acquires a lease.
+Rotation, disable, and delete stop new admission and enter `draining`; normal
+retirement waits for zero leases. Delete removes the usable credential and
+retains only a non-queryable metadata tombstone. Pending operations outside
+`draining`, mismatched operation states, and tombstones with leases fail.
 
 These fixtures are product-review baselines, not claims that the current
 runtime can generate them.
 
 ## Historical v1 contract
+
+Everything below this heading describes the historical DiagnosisCase/v1
+contract and validator. It does not override the vNext Source/Evidence/Case/
+Report rules above.
 
 `diagnosis-case-v1.schema.json` defines the serializable P0 case envelope.
 
