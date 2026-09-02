@@ -67,6 +67,59 @@ def main() -> None:
     )
 
     invalid_evidence = copy.deepcopy(evidence)
+    invalid_evidence.pop("profileSubjectRef")
+    expect_error(
+        lambda: evidence_validator.validate(invalid_evidence),
+        "Evidence omits its server-owned profile subject identity",
+    )
+
+    invalid_evidence = copy.deepcopy(
+        next(item for item in case["evidence"] if item["kind"] == "index")
+    )
+    invalid_evidence["profileObjectRef"] = "customers"
+    invalid_evidence["payload"]["typed"]["profileObjectRef"] = "customers"
+    invalid_evidence["payload"]["typedDigest"] = typed_digest(
+        invalid_evidence["payload"]["typed"]
+    )
+    expect_error(
+        lambda: contracts.validate_standalone_evidence(
+            invalid_evidence,
+            {
+                f"{item['sourceId']}@{item['revision']}"
+                for item in case["sourceSnapshots"]
+            },
+        ),
+        "table-scoped Evidence object identity differs from typed tableName",
+    )
+
+    invalid_evidence = copy.deepcopy(evidence)
+    invalid_evidence["profileSubjectRef"] = "subject_0000000000000099"
+    expect_error(
+        lambda: contracts.validate_standalone_evidence(
+            invalid_evidence,
+            {
+                f"{item['sourceId']}@{item['revision']}"
+                for item in case["sourceSnapshots"]
+            },
+        ),
+        "Evidence envelope relabels an unchanged canonical typed subject",
+    )
+
+    invalid_case = copy.deepcopy(case)
+    invalid_case.pop("profileObjectRef")
+    expect_error(
+        lambda: case_validator.validate(invalid_case),
+        "Case omits its server-owned profile object identity",
+    )
+
+    invalid_case = copy.deepcopy(case)
+    invalid_case["evidence"][0]["profileObjectRef"] = "customers"
+    expect_error(
+        lambda: validate_case_references(invalid_case),
+        "Fact role Evidence binds another profile object",
+    )
+
+    invalid_evidence = copy.deepcopy(evidence)
     invalid_evidence["payload"]["canonicalRevision"] = "python-json/v1"
     expect_error(
         lambda: contracts.validate_standalone_evidence(
@@ -1144,6 +1197,13 @@ def main() -> None:
     )
 
     invalid = copy.deepcopy(insufficient)
+    invalid["facts"][0]["params"]["profileIdentity"]["profileObjectRef"] = "customers"
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "evidence-gap Fact pins a profile object other than its Case",
+    )
+
+    invalid = copy.deepcopy(insufficient)
     gap_fact = invalid["facts"][0]
     plan_role = next(
         item
@@ -1157,6 +1217,8 @@ def main() -> None:
     orders_plan["freshness"] = "stale"
     customers_plan = copy.deepcopy(orders_plan)
     customers_plan["evidenceId"] = "ev_0000000000000099"
+    customers_plan["profileObjectRef"] = "customers"
+    customers_plan["payload"]["typed"]["profileObjectRef"] = "customers"
     customers_plan["freshness"] = "fresh"
     customers_plan["payload"]["storageRef"] = "payload_0000000000000099"
     customers_plan["payload"]["typed"]["tableName"] = "customers"
@@ -1194,6 +1256,78 @@ def main() -> None:
     expect_error(
         lambda: validate_case_references(invalid),
         "evidence-gap Fact selects a fresh same-kind plan for a different table profile",
+    )
+
+    statistics_insufficient, _ = contracts.build_evidence_insufficient_cases(
+        statistics_case
+    )
+    invalid = copy.deepcopy(statistics_insufficient)
+    gap_fact = invalid["facts"][0]
+    statistics_role = gap_fact["params"]["roleAssessments"][0]
+    selected_id = statistics_role["evidenceId"]
+    selected = next(
+        item for item in invalid["evidence"] if item["evidenceId"] == selected_id
+    )
+    unrelated = copy.deepcopy(selected)
+    unrelated["evidenceId"] = "ev_0000000000000097"
+    unrelated["profileObjectRef"] = "customer_statistics"
+    unrelated["payload"]["typed"]["profileObjectRef"] = "customer_statistics"
+    unrelated["freshness"] = "fresh"
+    unrelated["coverage"] = 1.0
+    unrelated["payload"]["storageRef"] = "payload_0000000000000097"
+    unrelated["payload"]["typed"].update(
+        {
+            "tableName": "customer_statistics",
+            "estimatedRows": 7,
+            "actualRows": 7,
+            "statisticsFreshness": "current",
+        }
+    )
+    unrelated["payload"]["typedDigest"] = typed_digest(unrelated["payload"]["typed"])
+    unrelated["summaryZh"] = contracts.render_evidence_summary(unrelated)
+    invalid["evidence"].append(unrelated)
+    statistics_role.update(
+        {"evidenceId": unrelated["evidenceId"], "eligible": True, "reasonCodes": []}
+    )
+    gap_fact["evidenceIds"] = [unrelated["evidenceId"]]
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "statistics gap selects eligible Evidence for another profile object",
+    )
+
+    runtime_insufficient, _ = contracts.build_evidence_insufficient_cases(
+        load(EXAMPLES / "diagnosis-case-v2.runtime-correlation.valid.json")
+    )
+    invalid = copy.deepcopy(runtime_insufficient)
+    gap_fact = invalid["facts"][0]
+    statement_role = next(
+        item
+        for item in gap_fact["params"]["roleAssessments"]
+        if item["role"] == "statementEvidenceId"
+    )
+    selected_id = statement_role["evidenceId"]
+    selected = next(
+        item for item in invalid["evidence"] if item["evidenceId"] == selected_id
+    )
+    unrelated = copy.deepcopy(selected)
+    unrelated["evidenceId"] = "ev_0000000000000098"
+    unrelated["profileObjectRef"] = "another_hotspot_window"
+    unrelated["payload"]["typed"]["profileObjectRef"] = "another_hotspot_window"
+    unrelated["freshness"] = "fresh"
+    unrelated["coverage"] = 1.0
+    unrelated["payload"]["storageRef"] = "payload_0000000000000098"
+    unrelated["payload"]["typedDigest"] = typed_digest(unrelated["payload"]["typed"])
+    unrelated["summaryZh"] = contracts.render_evidence_summary(unrelated)
+    invalid["evidence"].append(unrelated)
+    statement_role.update(
+        {"evidenceId": unrelated["evidenceId"], "eligible": True, "reasonCodes": []}
+    )
+    gap_fact["evidenceIds"][gap_fact["evidenceIds"].index(selected_id)] = unrelated[
+        "evidenceId"
+    ]
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "runtime-hotspot gap selects eligible Evidence for another profile object",
     )
 
     invalid = copy.deepcopy(terminal)

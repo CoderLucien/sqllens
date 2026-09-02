@@ -62,6 +62,25 @@ FACT_DEPENDENCY_REGISTRY = {
     },
 }
 
+# Candidate identity is separate from measured Fact fields.  Each supported
+# profile explicitly declares canonical typed Evidence fields that identify a
+# role candidate; measurements must never be inferred as identity.
+FACT_CANDIDATE_IDENTITY_REGISTRY = {
+    ("fact.index_scan_profile", "v1"): {
+        "runtimeEvidenceId": ("profileSubjectRef", "profileObjectRef"),
+        "planEvidenceId": ("profileSubjectRef", "profileObjectRef"),
+        "indexEvidenceId": ("profileSubjectRef", "profileObjectRef"),
+    },
+    ("fact.statistics_estimation_profile", "v1"): {
+        "statisticsEvidenceId": ("profileSubjectRef", "profileObjectRef"),
+    },
+    ("fact.runtime_hotspot_profile", "v1"): {
+        "statementEvidenceId": ("profileSubjectRef", "profileObjectRef"),
+        "runtimeEvidenceId": ("profileSubjectRef", "profileObjectRef"),
+        "alertEvidenceId": ("profileSubjectRef", "profileObjectRef"),
+    },
+}
+
 DIAGNOSIS_DEPENDENCY_REGISTRY = {
     ("decision.index_scan_priority", "v1"): {
         "factTemplate": "fact.index_scan_profile",
@@ -369,24 +388,53 @@ def _merge_profile_values(
     return merged
 
 
-def _candidate_matches_profile(
-    dependency: dict[str, Any],
-    evidence: dict[str, Any],
-    anchored_profile: dict[str, Any],
-) -> bool:
-    candidate_profile = evidence_profile_values(dependency, evidence)
-    return all(
-        field not in anchored_profile or anchored_profile[field] == value
-        for field, value in candidate_profile.items()
-    )
+def evidence_candidate_identity(
+    fact_key: tuple[str, str], role: str, evidence: dict[str, Any]
+) -> dict[str, Any]:
+    """Project the canonical typed candidate identity declared for one role."""
+
+    if fact_key not in FACT_CANDIDATE_IDENTITY_REGISTRY:
+        raise ValueError("Fact profile has no candidate identity registry")
+    identity_spec = FACT_CANDIDATE_IDENTITY_REGISTRY[fact_key]
+    if set(identity_spec) != set(FACT_DEPENDENCY_REGISTRY[fact_key]):
+        raise ValueError("Fact candidate identity roles differ from dependencies")
+    if role not in identity_spec:
+        raise ValueError("Fact role has no candidate identity declaration")
+    validate_evidence_object_identity(evidence)
+    typed = evidence["payload"]["typed"]
+    return {field: typed[field] for field in identity_spec[role]}
 
 
-def _shared_profile_fields(role_spec: dict[str, dict[str, Any]]) -> set[str]:
-    occurrences: dict[str, int] = {}
-    for dependency in role_spec.values():
-        for field in dependency["fields"]:
-            occurrences[field] = occurrences.get(field, 0) + 1
-    return {field for field, count in occurrences.items() if count > 1}
+def validate_evidence_object_identity(evidence: dict[str, Any]) -> None:
+    """Bind the Evidence envelope to canonical typed identity and object data."""
+
+    typed = evidence["payload"]["typed"]
+    if evidence["kind"] in {
+        "slow_query",
+        "ordinary_plan",
+        "index",
+        "statistics",
+        "statement_summary",
+        "runtime_metric",
+        "alert",
+    } and {
+        "profileSubjectRef": evidence["profileSubjectRef"],
+        "profileObjectRef": evidence["profileObjectRef"],
+    } != {
+        "profileSubjectRef": typed["profileSubjectRef"],
+        "profileObjectRef": typed["profileObjectRef"],
+    }:
+        raise ValueError("Evidence envelope differs from typed profile identity")
+    if (
+        evidence["kind"]
+        in {
+            "ordinary_plan",
+            "index",
+            "statistics",
+        }
+        and typed["tableName"] != typed["profileObjectRef"]
+    ):
+        raise ValueError("Evidence object identity differs from typed tableName")
 
 
 def derive_evidence_level(
@@ -454,6 +502,7 @@ def validate_gap_fact(
     if set(params) != {
         "attemptedDecisionTemplateId",
         "attemptedDecisionTemplateRevision",
+        "profileIdentity",
         "roleAssessments",
     }:
         raise ValueError("evidence-gap Fact parameters are not closed")
@@ -469,6 +518,12 @@ def validate_gap_fact(
     attempted_spec = DIAGNOSIS_DEPENDENCY_REGISTRY[attempted_key]
     fact_key = (attempted_spec["factTemplate"], "v1")
     role_spec = FACT_DEPENDENCY_REGISTRY[fact_key]
+    identity_spec = FACT_CANDIDATE_IDENTITY_REGISTRY[fact_key]
+    if set(identity_spec) != set(role_spec):
+        raise ValueError("evidence-gap profile identity roles differ from dependencies")
+    profile_identity = params["profileIdentity"]
+    if set(profile_identity) != {"profileSubjectRef", "profileObjectRef"}:
+        raise ValueError("evidence-gap profile identity is not closed")
     provided = params["roleAssessments"]
     if len(provided) != len(role_spec):
         raise ValueError("evidence-gap Fact does not assess every required role")
@@ -492,38 +547,30 @@ def validate_gap_fact(
         evidence = evidence_by_id[evidence_id]
         if evidence["kind"] != dependency["kind"]:
             raise ValueError("evidence-gap Fact role has the wrong Evidence kind")
+        selected_identity = evidence_candidate_identity(fact_key, role, evidence)
+        expected_identity = {
+            field: profile_identity[field] for field in identity_spec[role]
+        }
+        if selected_identity != expected_identity:
+            raise ValueError(
+                "evidence-gap Fact selected Evidence is not profile-compatible"
+            )
         selected_evidence_by_role[role] = evidence
     _merge_profile_values(selected_evidence_by_role, role_spec)
 
     expected: list[dict[str, Any]] = []
-    shared_profile_fields = _shared_profile_fields(role_spec)
     for role, dependency in role_spec.items():
         supplied = provided_by_role[role]
         evidence_id = supplied["evidenceId"]
-        anchored_profile = _merge_profile_values(
-            {
-                selected_role: evidence
-                for selected_role, evidence in selected_evidence_by_role.items()
-                if selected_role != role
-            },
-            role_spec,
-        )
-        if role in selected_evidence_by_role:
-            selected_profile = evidence_profile_values(
-                dependency, selected_evidence_by_role[role]
-            )
-            anchored_profile.update(
-                {
-                    field: value
-                    for field, value in selected_profile.items()
-                    if field in shared_profile_fields
-                }
-            )
+        expected_identity = {
+            field: profile_identity[field] for field in identity_spec[role]
+        }
         matching_candidates = [
             evidence
             for evidence in evidence_by_id.values()
             if evidence["kind"] == dependency["kind"]
-            and _candidate_matches_profile(dependency, evidence, anchored_profile)
+            and evidence_candidate_identity(fact_key, role, evidence)
+            == expected_identity
         ]
         eligible_candidate_ids = {
             evidence["evidenceId"]

@@ -3,6 +3,8 @@
   "evidenceId": "ev_0000000000000001",
   "revision": 1,
   "caseId": "case_0000000000000002",
+  "profileSubjectRef": "subject_0000000000000002",
+  "profileObjectRef": "orders",
   "origin": "managed_source",
   "kind": "slow_query",
   "sourceRef": {
@@ -17,7 +19,7 @@
   "integrityDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "summaryZh": "该 SQL 在 10 分钟窗口内执行 842 次，P95 2.8 秒，平均扫描 126 万行。",
   "payload": {
-    "schemaRevision": "slow-query/v1",
+    "schemaRevision": "slow-query/v2",
     "storageRef": "payload_0000000000000001",
     "recordCount": 1,
     "truncated": false,
@@ -25,13 +27,15 @@
     "extractionRevision": "evidence-extractor/v1",
     "typed": {
       "kind": "slow_query",
+      "profileSubjectRef": "subject_0000000000000002",
+      "profileObjectRef": "orders",
       "windowMinutes": 10,
       "callCount": 842,
       "p95Ms": 2800,
       "averageScanRows": 1260000,
       "averageReturnRows": 400
     },
-    "typedDigest": "sha256:67f3ea3535d3ebceb665258b1001360ba9bda64b37c38d8f2ec31547d8ece25f",
+    "typedDigest": "sha256:9b10ce079c8610618e4ac8959b580ecc67b3d180df4ca475d176533677d417a7",
     "canonicalRevision": "rfc8785-safe-integer/v1"
   },
   "collection": {

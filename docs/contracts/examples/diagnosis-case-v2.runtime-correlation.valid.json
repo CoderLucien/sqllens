@@ -1,6 +1,8 @@
 {
   "schemaVersion": "diagnosis-case/v2",
   "caseId": "case_0000000000000004",
+  "profileSubjectRef": "subject_0000000000000004",
+  "profileObjectRef": "payment_tikv_hotspot_window",
   "revision": 1,
   "inputMode": "managed_source",
   "workflowState": "ready",
@@ -95,6 +97,8 @@
       "evidenceId": "ev_0000000000000021",
       "revision": 1,
       "caseId": "case_0000000000000004",
+      "profileSubjectRef": "subject_0000000000000004",
+      "profileObjectRef": "payment_tikv_hotspot_window",
       "origin": "managed_source",
       "kind": "statement_summary",
       "sourceRef": {
@@ -109,7 +113,7 @@
       "integrityDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "summaryZh": "SQL 计划摘要和扫描行数与前一基线窗口接近。",
       "payload": {
-        "schemaRevision": "statement-summary/v1",
+        "schemaRevision": "statement-summary/v2",
         "storageRef": "payload_0000000000000021",
         "recordCount": 2,
         "truncated": false,
@@ -117,9 +121,11 @@
         "extractionRevision": "evidence-extractor/v1",
         "typed": {
           "kind": "statement_summary",
+          "profileSubjectRef": "subject_0000000000000004",
+          "profileObjectRef": "payment_tikv_hotspot_window",
           "sqlStability": "plan_and_scan_stable"
         },
-        "typedDigest": "sha256:7817af357dcf3e0a09b24701c1552264f27d81904cd365af474a49e5f331e620",
+        "typedDigest": "sha256:6ea0783691fd9a11db97bf3421fbd5f9d7af3675c4f977bf6df5a3928cea39d4",
         "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
@@ -144,6 +150,8 @@
       "evidenceId": "ev_0000000000000023",
       "revision": 1,
       "caseId": "case_0000000000000004",
+      "profileSubjectRef": "subject_0000000000000004",
+      "profileObjectRef": "payment_tikv_hotspot_window",
       "origin": "managed_source",
       "kind": "runtime_metric",
       "sourceRef": {
@@ -158,7 +166,7 @@
       "integrityDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "summaryZh": "TiKV 请求延迟和 Region 热点指标在 SQL 异常时间窗内同步升高。",
       "payload": {
-        "schemaRevision": "prometheus-window/v1",
+        "schemaRevision": "prometheus-window/v2",
         "storageRef": "payload_0000000000000023",
         "recordCount": 26,
         "truncated": false,
@@ -166,9 +174,11 @@
         "extractionRevision": "evidence-extractor/v1",
         "typed": {
           "kind": "runtime_metric",
+          "profileSubjectRef": "subject_0000000000000004",
+          "profileObjectRef": "payment_tikv_hotspot_window",
           "resourceCorrelation": "same_window_elevated"
         },
-        "typedDigest": "sha256:72692466022c08eb3032db30e47e7a59d2fd1c3f717cabeedf1e2129b24c8977",
+        "typedDigest": "sha256:ce68a4c9a5b16afcc84c984c9561d64a89d5771677fcd94d0181415b895519c4",
         "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
@@ -193,6 +203,8 @@
       "evidenceId": "ev_0000000000000025",
       "revision": 1,
       "caseId": "case_0000000000000004",
+      "profileSubjectRef": "subject_0000000000000004",
+      "profileObjectRef": "payment_tikv_hotspot_window",
       "origin": "managed_source",
       "kind": "alert",
       "sourceRef": {
@@ -207,7 +219,7 @@
       "integrityDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "summaryZh": "TEM 告警的集群、TiKV 组件与异常时间窗匹配。",
       "payload": {
-        "schemaRevision": "tem-alert/v1",
+        "schemaRevision": "tem-alert/v2",
         "storageRef": "payload_0000000000000025",
         "recordCount": 1,
         "truncated": false,
@@ -215,9 +227,11 @@
         "extractionRevision": "evidence-extractor/v1",
         "typed": {
           "kind": "alert",
+          "profileSubjectRef": "subject_0000000000000004",
+          "profileObjectRef": "payment_tikv_hotspot_window",
           "alertScope": "cluster_component_window_match"
         },
-        "typedDigest": "sha256:9d429a8e4c860675f81648949e79c5f1f6e0d93491dc5e1f29b35a08476ed09b",
+        "typedDigest": "sha256:9265a19eb1b585a2c8b6d0b6515cb16a168706f445a4e2902ee8c8b26c59143d",
         "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
@@ -242,6 +256,8 @@
       "evidenceId": "ev_0000000000000026",
       "revision": 1,
       "caseId": "case_0000000000000004",
+      "profileSubjectRef": "subject_0000000000000004",
+      "profileObjectRef": "payment_tikv_hotspot_window",
       "origin": "manual",
       "kind": "business_observation",
       "sourceRef": null,

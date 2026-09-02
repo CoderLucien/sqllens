@@ -15,10 +15,13 @@ import validate_vnext_examples as contracts
 from vnext_canonical_json import canonical_json_bytes, canonical_sha256
 from vnext_diagnosis_policy import (
     DIAGNOSIS_DEPENDENCY_REGISTRY,
+    FACT_CANDIDATE_IDENTITY_REGISTRY,
+    FACT_DEPENDENCY_REGISTRY,
     RULE_PACK_BY_VERSION_FAMILY,
     RULE_POLICY_REGISTRY,
     derive_completeness,
     derive_evidence_level,
+    evidence_candidate_identity,
     expected_rule_findings,
     validate_gap_fact,
     validate_policy_pins,
@@ -158,6 +161,63 @@ class DiagnosisPolicyTests(unittest.TestCase):
                     set(RULE_POLICY_REGISTRY[pack_revision]),
                 )
 
+    def test_each_profile_explicitly_declares_candidate_identity_per_role(
+        self,
+    ) -> None:
+        self.assertEqual(
+            set(FACT_CANDIDATE_IDENTITY_REGISTRY),
+            set(FACT_DEPENDENCY_REGISTRY),
+        )
+        for profile, roles in FACT_DEPENDENCY_REGISTRY.items():
+            with self.subTest(profile=profile):
+                self.assertEqual(
+                    set(FACT_CANDIDATE_IDENTITY_REGISTRY[profile]), set(roles)
+                )
+                self.assertTrue(
+                    all(
+                        fields == ("profileSubjectRef", "profileObjectRef")
+                        for fields in FACT_CANDIDATE_IDENTITY_REGISTRY[profile].values()
+                    )
+                )
+
+    def test_statistics_candidate_identity_cannot_be_relabelled_in_envelope(
+        self,
+    ) -> None:
+        case = contracts.load(
+            contracts.EXAMPLES / "diagnosis-case-v2.statistics.valid.json"
+        )
+        evidence = next(
+            item for item in case["evidence"] if item["kind"] == "statistics"
+        )
+        relabelled = copy.deepcopy(evidence)
+        relabelled["profileSubjectRef"] = "subject_0000000000000099"
+
+        with self.assertRaisesRegex(ValueError, "typed profile identity"):
+            evidence_candidate_identity(
+                ("fact.statistics_estimation_profile", "v1"),
+                "statisticsEvidenceId",
+                relabelled,
+            )
+
+    def test_runtime_candidate_identity_cannot_be_relabelled_in_envelope(
+        self,
+    ) -> None:
+        case = contracts.load(
+            contracts.EXAMPLES / "diagnosis-case-v2.runtime-correlation.valid.json"
+        )
+        evidence = next(
+            item for item in case["evidence"] if item["kind"] == "runtime_metric"
+        )
+        relabelled = copy.deepcopy(evidence)
+        relabelled["profileObjectRef"] = "another_hotspot_window"
+
+        with self.assertRaisesRegex(ValueError, "typed profile identity"):
+            evidence_candidate_identity(
+                ("fact.runtime_hotspot_profile", "v1"),
+                "runtimeEvidenceId",
+                relabelled,
+            )
+
     def test_incomplete_evidence_has_an_actionless_terminal_representation(
         self,
     ) -> None:
@@ -220,6 +280,8 @@ class DiagnosisPolicyTests(unittest.TestCase):
 
         customers_plan = copy.deepcopy(orders_plan)
         customers_plan["evidenceId"] = "ev_0000000000000099"
+        customers_plan["profileObjectRef"] = "customers"
+        customers_plan["payload"]["typed"]["profileObjectRef"] = "customers"
         customers_plan["freshness"] = "fresh"
         customers_plan["payload"]["storageRef"] = "payload_0000000000000099"
         customers_plan["payload"]["typed"]["tableName"] = "customers"
@@ -264,6 +326,8 @@ class DiagnosisPolicyTests(unittest.TestCase):
 
         customers_plan = copy.deepcopy(orders_plan)
         customers_plan["evidenceId"] = "ev_0000000000000099"
+        customers_plan["profileObjectRef"] = "customers"
+        customers_plan["payload"]["typed"]["profileObjectRef"] = "customers"
         customers_plan["freshness"] = "fresh"
         customers_plan["payload"]["storageRef"] = "payload_0000000000000099"
         customers_plan["payload"]["typed"]["tableName"] = "customers"
@@ -293,6 +357,8 @@ class DiagnosisPolicyTests(unittest.TestCase):
 
         customers_plan = copy.deepcopy(evidence[orders_plan_id])
         customers_plan["evidenceId"] = "ev_0000000000000099"
+        customers_plan["profileObjectRef"] = "customers"
+        customers_plan["payload"]["typed"]["profileObjectRef"] = "customers"
         customers_plan["freshness"] = "fresh"
         customers_plan["payload"]["storageRef"] = "payload_0000000000000099"
         customers_plan["payload"]["typed"]["tableName"] = "customers"
@@ -313,6 +379,145 @@ class DiagnosisPolicyTests(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(ValueError, "profile-compatible"):
+            validate_gap_fact(fact, evidence)
+
+    def test_statistics_gap_ignores_an_eligible_candidate_for_another_object(
+        self,
+    ) -> None:
+        statistics_case = contracts.load(
+            contracts.EXAMPLES / "diagnosis-case-v2.statistics.valid.json"
+        )
+        pending, _ = contracts.build_evidence_insufficient_cases(statistics_case)
+        fact = pending["facts"][0]
+        evidence = {item["evidenceId"]: item for item in pending["evidence"]}
+        statistics_role = fact["params"]["roleAssessments"][0]
+        selected = evidence[statistics_role["evidenceId"]]
+        selected["profileSubjectRef"] = "subject_0000000000000003"
+
+        unrelated = copy.deepcopy(selected)
+        unrelated["evidenceId"] = "ev_0000000000000099"
+        unrelated["profileSubjectRef"] = "subject_0000000000000003"
+        unrelated["profileObjectRef"] = "customer_statistics"
+        unrelated["payload"]["typed"].update(
+            {
+                "profileSubjectRef": unrelated["profileSubjectRef"],
+                "profileObjectRef": unrelated["profileObjectRef"],
+            }
+        )
+        unrelated["freshness"] = "fresh"
+        unrelated["coverage"] = 1.0
+        unrelated["payload"]["storageRef"] = "payload_0000000000000099"
+        unrelated["payload"]["typed"].update(
+            {
+                "estimatedRows": 7,
+                "actualRows": 7,
+                "statisticsFreshness": "current",
+                "tableName": "customer_statistics",
+            }
+        )
+        unrelated["payload"]["typedDigest"] = canonical_sha256(
+            unrelated["payload"]["typed"]
+        )
+        unrelated["summaryZh"] = contracts.render_evidence_summary(unrelated)
+        evidence[unrelated["evidenceId"]] = unrelated
+
+        rebuilt = validate_gap_fact(fact, evidence)
+        self.assertEqual(rebuilt[0], statistics_role)
+
+    def test_statistics_gap_rejects_ignoring_a_same_profile_candidate(self) -> None:
+        statistics_case = contracts.load(
+            contracts.EXAMPLES / "diagnosis-case-v2.statistics.valid.json"
+        )
+        pending, _ = contracts.build_evidence_insufficient_cases(statistics_case)
+        fact = pending["facts"][0]
+        evidence = {item["evidenceId"]: item for item in pending["evidence"]}
+        statistics_role = fact["params"]["roleAssessments"][0]
+        selected = evidence[statistics_role["evidenceId"]]
+        selected["profileSubjectRef"] = "subject_0000000000000003"
+
+        replacement = copy.deepcopy(selected)
+        replacement["evidenceId"] = "ev_0000000000000099"
+        replacement["freshness"] = "fresh"
+        replacement["coverage"] = 1.0
+        replacement["payload"]["storageRef"] = "payload_0000000000000099"
+        replacement["payload"]["typedDigest"] = canonical_sha256(
+            replacement["payload"]["typed"]
+        )
+        replacement["summaryZh"] = contracts.render_evidence_summary(replacement)
+        evidence[replacement["evidenceId"]] = replacement
+
+        with self.assertRaisesRegex(ValueError, "eligible matching Evidence"):
+            validate_gap_fact(fact, evidence)
+
+    def test_runtime_gap_ignores_an_eligible_candidate_for_another_object(
+        self,
+    ) -> None:
+        runtime_case = contracts.load(
+            contracts.EXAMPLES / "diagnosis-case-v2.runtime-correlation.valid.json"
+        )
+        pending, _ = contracts.build_evidence_insufficient_cases(runtime_case)
+        fact = pending["facts"][0]
+        evidence = {item["evidenceId"]: item for item in pending["evidence"]}
+        statement_role = next(
+            item
+            for item in fact["params"]["roleAssessments"]
+            if item["role"] == "statementEvidenceId"
+        )
+        selected = evidence[statement_role["evidenceId"]]
+        selected["profileSubjectRef"] = "subject_0000000000000004"
+
+        unrelated = copy.deepcopy(selected)
+        unrelated["evidenceId"] = "ev_0000000000000098"
+        unrelated["profileSubjectRef"] = "subject_0000000000000004"
+        unrelated["profileObjectRef"] = "another_hotspot_window"
+        unrelated["payload"]["typed"].update(
+            {
+                "profileSubjectRef": unrelated["profileSubjectRef"],
+                "profileObjectRef": unrelated["profileObjectRef"],
+            }
+        )
+        unrelated["freshness"] = "fresh"
+        unrelated["coverage"] = 1.0
+        unrelated["payload"]["storageRef"] = "payload_0000000000000098"
+        unrelated["payload"]["typed"]["sqlStability"] = "unknown"
+        unrelated["payload"]["typedDigest"] = canonical_sha256(
+            unrelated["payload"]["typed"]
+        )
+        unrelated["summaryZh"] = contracts.render_evidence_summary(unrelated)
+        evidence[unrelated["evidenceId"]] = unrelated
+
+        rebuilt = validate_gap_fact(fact, evidence)
+        self.assertEqual(
+            next(item for item in rebuilt if item["role"] == "statementEvidenceId"),
+            statement_role,
+        )
+
+    def test_runtime_gap_rejects_ignoring_a_same_profile_candidate(self) -> None:
+        runtime_case = contracts.load(
+            contracts.EXAMPLES / "diagnosis-case-v2.runtime-correlation.valid.json"
+        )
+        pending, _ = contracts.build_evidence_insufficient_cases(runtime_case)
+        fact = pending["facts"][0]
+        evidence = {item["evidenceId"]: item for item in pending["evidence"]}
+        statement_role = next(
+            item
+            for item in fact["params"]["roleAssessments"]
+            if item["role"] == "statementEvidenceId"
+        )
+        selected = evidence[statement_role["evidenceId"]]
+
+        replacement = copy.deepcopy(selected)
+        replacement["evidenceId"] = "ev_0000000000000098"
+        replacement["freshness"] = "fresh"
+        replacement["coverage"] = 1.0
+        replacement["payload"]["storageRef"] = "payload_0000000000000098"
+        replacement["payload"]["typedDigest"] = canonical_sha256(
+            replacement["payload"]["typed"]
+        )
+        replacement["summaryZh"] = contracts.render_evidence_summary(replacement)
+        evidence[replacement["evidenceId"]] = replacement
+
+        with self.assertRaisesRegex(ValueError, "eligible matching Evidence"):
             validate_gap_fact(fact, evidence)
 
 

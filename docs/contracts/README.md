@@ -156,11 +156,21 @@ but it cannot support a ready rule hit or Action. Role selection is also
 server-owned: a role cannot be marked `MISSING_EVIDENCE` while a matching Case
 Evidence candidate exists, and an ineligible candidate cannot be selected when
 an eligible candidate for that role is available. “Matching” means both the
-required kind and the dependency registry's shared typed profile fields agree;
-same-kind Evidence whose declared table/object fields conflict is not a
-candidate, and all bound roles must form one compatible profile.
-The selected role's declared shared identity fields remain the candidate
-anchor even when its corroborating role is missing.
+required kind and the exact server-owned `profileSubjectRef` +
+`profileObjectRef` declared by that profile role agree. Both fields are part of
+the canonical typed payload produced by the Evidence extractor; the redundant
+Evidence envelope projection must match them and cannot relabel a payload.
+The Evidence JSON is not caller-authored input: managed collectors and upload
+parsers allocate the subject/object binding while constructing the immutable
+record, before it enters Case validation.
+Every supported profile explicitly lists those candidate identity fields;
+identity is never inferred from whichever measurement names happen to repeat
+across roles. The gap Fact pins the attempted profile identity even when a role
+has no Evidence. All selected roles must bind that same identity, while
+same-kind Evidence for another object cannot suppress an honest gap. For
+table-scoped plan, index, and statistics Evidence, `profileObjectRef` must also
+equal the typed `tableName`. The seven diagnostic typed payloads carrying this
+binding use their `v2` schema revisions.
 
 These fixtures are product-review baselines, not claims that the current
 runtime can generate them.

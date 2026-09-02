@@ -271,9 +271,14 @@ level/completeness; it cannot support a ready rule hit, AI claim, or Action.
 The service selects role candidates: a matching Case Evidence candidate cannot
 be hidden behind `MISSING_EVIDENCE`, and an eligible candidate takes precedence
 over an ineligible one for the same role. A candidate must match the required
-kind and the dependency registry's shared typed profile fields; same-kind
-Evidence whose declared table/object fields conflict is unrelated, and
-selected roles must remain jointly compatible.
+kind and the profile's explicitly registered server-owned
+`profileSubjectRef`/`profileObjectRef`. The server extractor places both in the
+canonical typed payload and the Evidence envelope must be its exact projection,
+so callers cannot relabel an unchanged payload. Candidate identity is not
+inferred from measurement fields. A gap Fact preserves that attempted identity
+even when a role is absent. Same-kind Evidence for another object is unrelated,
+all selected roles bind one identity, and table-scoped typed Evidence must agree
+with its declared object reference.
 
 Rules declare minimum evidence level, supported product/version range, required
 fields, incompatible conditions, confidence ceiling, recommended action
@@ -329,6 +334,9 @@ collected from a managed Source, one exact Source revision. It records payload
 integrity, observation/collection time, freshness, coverage, sensitivity,
 collector/query/redaction revisions, and timeout/row/byte budget consumption.
 Large or sensitive payloads remain behind a storage reference.
+Callers never submit an Evidence JSON record directly: managed collectors and
+upload parsers allocate the profile identity and construct the immutable typed
+record before Case validation.
 
 Typed payload digests pin `rfc8785-safe-integer/v1`, a restricted RFC 8785/JCS
 profile with integer base-unit measurements in the IEEE-754 safe range; NaN, Infinity,

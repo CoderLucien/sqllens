@@ -1,6 +1,8 @@
 {
   "schemaVersion": "diagnosis-case/v2",
   "caseId": "case_0000000000000003",
+  "profileSubjectRef": "subject_0000000000000003",
+  "profileObjectRef": "billing_ledger",
   "revision": 1,
   "inputMode": "managed_source",
   "workflowState": "ready",
@@ -70,6 +72,8 @@
       "evidenceId": "ev_0000000000000011",
       "revision": 1,
       "caseId": "case_0000000000000003",
+      "profileSubjectRef": "subject_0000000000000003",
+      "profileObjectRef": "billing_ledger",
       "origin": "managed_source",
       "kind": "statistics",
       "sourceRef": {
@@ -82,9 +86,9 @@
       "coverage": 0.93,
       "sensitivity": "metadata",
       "integrityDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "summaryZh": "核心表 estRows 为 120、运行时 rows 为 180000，且统计更新时间早于最近一次大批量导入。",
+      "summaryZh": "billing_ledger 表 estRows 为 120、运行时 rows 为 180000，且统计更新时间早于最近一次大批量导入。",
       "payload": {
-        "schemaRevision": "statistics-health/v1",
+        "schemaRevision": "statistics-health/v2",
         "storageRef": "payload_0000000000000011",
         "recordCount": 1,
         "truncated": false,
@@ -92,11 +96,14 @@
         "extractionRevision": "evidence-extractor/v1",
         "typed": {
           "kind": "statistics",
+          "profileSubjectRef": "subject_0000000000000003",
+          "profileObjectRef": "billing_ledger",
+          "tableName": "billing_ledger",
           "estimatedRows": 120,
           "actualRows": 180000,
           "statisticsFreshness": "predates_bulk_import"
         },
-        "typedDigest": "sha256:901c023a8ae7a8cbd51c20955d7a89379167a3516fc153325759fb7a3c7a7005",
+        "typedDigest": "sha256:bc8528c1a9486c795e0ca7836782f8481664203f79125fc15328ca46b667cc45",
         "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
@@ -121,6 +128,8 @@
       "evidenceId": "ev_0000000000000014",
       "revision": 1,
       "caseId": "case_0000000000000003",
+      "profileSubjectRef": "subject_0000000000000003",
+      "profileObjectRef": "billing_ledger",
       "origin": "manual",
       "kind": "business_observation",
       "sourceRef": null,

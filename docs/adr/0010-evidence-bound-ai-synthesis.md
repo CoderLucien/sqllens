@@ -78,12 +78,18 @@ actionless `evidence_insufficient` decision. Such a Fact cannot be converted
 into a rule hit, AI claim, or Action. The service, not the Case caller, selects
 role candidates: `MISSING_EVIDENCE` is legal only when the Case contains no
 matching Evidence candidate, and a role cannot select an ineligible candidate
-when an eligible one exists. Candidate matching uses both kind and the shared
-typed profile fields declared by the dependency registry. Same-kind Evidence
-whose declared object fields conflict cannot displace the compatible
-candidate, and selected roles must form one jointly compatible profile.
-When a corroborating role is missing, the selected role's declared shared
-identity fields still anchor same-role candidate priority.
+when an eligible one exists. Each supported Fact profile explicitly registers
+the canonical identity fields used by every role:
+`profileSubjectRef` and `profileObjectRef`. Candidate matching requires the
+kind and both identity fields; it never infers identity from repeated
+measurement field names. These fields are emitted in the canonical typed
+payload by the server extractor, covered by `typedDigest`, and projected into
+the Evidence envelope; validation rejects an envelope-only relabel. The gap
+Fact pins the attempted identity even when a role is missing, and every
+selected role must bind it. Table-scoped plan, index, and statistics Evidence
+additionally require the object reference to equal the typed table name, so a
+same-kind observation for another object cannot displace the compatible
+candidate.
 
 AI state is explicit. `applied` means a validated invocation contributed at
 least one claim. `degraded` means an invocation was attempted and failed and

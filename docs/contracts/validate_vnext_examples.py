@@ -16,14 +16,17 @@ from vnext_canonical_json import (
 from vnext_diagnosis_policy import (
     DIAGNOSIS_DEPENDENCY_REGISTRY,
     EVIDENCE_LEVELS,
+    FACT_CANDIDATE_IDENTITY_REGISTRY,
     FACT_DEPENDENCY_REGISTRY,
     derive_completeness,
     derive_evidence_level,
+    evidence_candidate_identity,
     evidence_eligibility_reasons,
     evidence_profile_values,
     expected_rule_findings,
     expected_uncertainty,
     require_eligible,
+    validate_evidence_object_identity,
     validate_gap_fact,
     validate_policy_pins,
 )
@@ -158,14 +161,14 @@ AI_STATUS_TEMPLATES = {
 EVIDENCE_SCHEMA_REVISIONS = {
     "business_observation": "business-observation/v1",
     "sql_structure": "sql-structure/v1",
-    "statement_summary": "statement-summary/v1",
-    "slow_query": "slow-query/v1",
+    "statement_summary": "statement-summary/v2",
+    "slow_query": "slow-query/v2",
     "schema": "schema-metadata/v1",
-    "index": "index-metadata/v1",
-    "statistics": "statistics-health/v1",
-    "ordinary_plan": "ordinary-plan/v1",
-    "runtime_metric": "prometheus-window/v1",
-    "alert": "tem-alert/v1",
+    "index": "index-metadata/v2",
+    "statistics": "statistics-health/v2",
+    "ordinary_plan": "ordinary-plan/v2",
+    "runtime_metric": "prometheus-window/v2",
+    "alert": "tem-alert/v2",
     "validation_result": "validation-result/v1",
     "effect_metric_comparison": "effect-metric-comparison/v2",
     "rollback_confirmation": "rollback-confirmation/v1",
@@ -439,7 +442,7 @@ def render_evidence_summary(evidence: dict[str, Any]) -> str:
             "unknown": "统计信息新鲜度未知",
         }[typed["statisticsFreshness"]]
         return (
-            f"核心表 estRows 为 {typed['estimatedRows']}、运行时 rows 为 "
+            f"{typed['tableName']} 表 estRows 为 {typed['estimatedRows']}、运行时 rows 为 "
             f"{typed['actualRows']}，且{freshness}。"
         )
     if kind == "ordinary_plan":
@@ -578,6 +581,17 @@ def validate_fact_evidence_projection(
         raise ValueError(
             f"fact parameters are not reconstructed from typed evidence: {fact['factId']}"
         )
+    fact_key = (fact["templateId"], fact["templateRevision"])
+    identity_spec = FACT_CANDIDATE_IDENTITY_REGISTRY[fact_key]
+    role_bindings = fact_role_evidence_ids(fact)
+    if set(identity_spec) != set(role_bindings):
+        raise ValueError("Fact candidate identity roles differ from typed bindings")
+    identities = [
+        evidence_candidate_identity(fact_key, role, evidence_by_id[evidence_id])
+        for role, evidence_id in role_bindings.items()
+    ]
+    if any(identity != identities[0] for identity in identities[1:]):
+        raise ValueError("Fact Evidence roles bind different profile subjects")
 
 
 def normalized_fact_profile(fact: dict[str, Any]) -> dict[str, Any]:
@@ -645,6 +659,7 @@ def normalized_fact_profile(fact: dict[str, Any]) -> dict[str, Any]:
         expected_keys = {
             "attemptedDecisionTemplateId",
             "attemptedDecisionTemplateRevision",
+            "profileIdentity",
             "roleAssessments",
         }
         if set(params) != expected_keys:
@@ -1835,6 +1850,7 @@ def validate_evidence_semantics(
         raise ValueError(
             f"typed evidence payload does not match kind: {evidence['evidenceId']}"
         )
+    validate_evidence_object_identity(evidence)
     if payload["typedDigest"] != typed_payload_digest(typed):
         raise ValueError(
             f"typed evidence projection digest mismatch: {evidence['evidenceId']}"
@@ -2017,6 +2033,21 @@ def validate_case_references(
     for fact in case["facts"]:
         if not set(fact["evidenceIds"]) <= evidence_ids:
             raise ValueError(f"dangling fact evidence: {fact['factId']}")
+        if fact["templateId"] == "fact.evidence_gap_profile":
+            if fact["params"]["profileIdentity"] != {
+                "profileSubjectRef": case["profileSubjectRef"],
+                "profileObjectRef": case["profileObjectRef"],
+            }:
+                raise ValueError("evidence-gap Fact targets another profile subject")
+        elif any(
+            (
+                evidence_by_id[evidence_id]["profileSubjectRef"],
+                evidence_by_id[evidence_id]["profileObjectRef"],
+            )
+            != (case["profileSubjectRef"], case["profileObjectRef"])
+            for evidence_id in fact["evidenceIds"]
+        ):
+            raise ValueError("Fact Evidence targets another profile subject")
         validate_fact_evidence_projection(fact, evidence_by_id)
         expected_fact = render_fact(fact)
         rendered_fact = {
@@ -2149,6 +2180,11 @@ def validate_case_references(
     ]
     for evidence in business_evidence:
         require_eligible(evidence, "business impact")
+        if (
+            evidence["profileSubjectRef"],
+            evidence["profileObjectRef"],
+        ) != (case["profileSubjectRef"], case["profileObjectRef"]):
+            raise ValueError("business impact targets another profile subject")
     if not any(
         item["kind"] == "business_observation"
         and item["summaryZh"] == case["subject"]["businessZh"]
@@ -2249,6 +2285,8 @@ def validate_case_transition(prior: dict[str, Any], proposed: dict[str, Any]) ->
     immutable_fields = (
         "schemaVersion",
         "caseId",
+        "profileSubjectRef",
+        "profileObjectRef",
         "inputMode",
         "configuredMode",
         "createdAt",
@@ -2347,6 +2385,10 @@ def build_evidence_insufficient_cases(
         "params": {
             "attemptedDecisionTemplateId": case["decision"]["templateId"],
             "attemptedDecisionTemplateRevision": case["decision"]["templateRevision"],
+            "profileIdentity": {
+                "profileSubjectRef": case["profileSubjectRef"],
+                "profileObjectRef": case["profileObjectRef"],
+            },
             "roleAssessments": role_assessments,
         },
         "kind": "evidence_gap",
