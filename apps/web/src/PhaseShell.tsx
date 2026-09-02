@@ -102,7 +102,10 @@ function DailyShell({
         <nav aria-label="日常诊断导航">
           <ul>
             <li>
-              <span aria-current={workbench ? "page" : undefined} className="diagnosis-nav-active">
+              <span
+                aria-current={workbench ? "page" : undefined}
+                className={workbench ? "diagnosis-nav-active" : undefined}
+              >
                 <FileSearch aria-hidden="true" size={18} />
                 SQL 诊断
               </span>

@@ -124,6 +124,9 @@ describe("setup application", () => {
 
     await screen.findByRole("heading", { name: "更新外部模型凭据" });
     expect(window.location.pathname).toBe("/app/settings/model");
+    const diagnosisNavItem = screen.getByText("SQL 诊断").closest("span");
+    expect(diagnosisNavItem?.getAttribute("aria-current")).toBeNull();
+    expect(diagnosisNavItem?.className).not.toContain("diagnosis-nav-active");
     expect(screen.getByText(/规则诊断仍可使用/)).toBeTruthy();
     expect(screen.queryByText(/诊断保持关闭/)).toBeNull();
   });
@@ -227,6 +230,9 @@ describe("setup application", () => {
       target: { value: "correct-horse-battery-staple" }
     });
     expect(screen.getByRole("navigation", { name: "日常诊断导航" })).toBeTruthy();
+    const diagnosisNavItem = screen.getByText("SQL 诊断").closest("span");
+    expect(diagnosisNavItem?.getAttribute("aria-current")).toBeNull();
+    expect(diagnosisNavItem?.className).not.toContain("diagnosis-nav-active");
     expect(screen.queryByRole("navigation", { name: "安装与初始化导航" })).toBeNull();
     expect(screen.queryByLabelText("一次性初始化码")).toBeNull();
     expect(window.location.pathname).toBe("/app/login");
