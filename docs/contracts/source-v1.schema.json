@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/sqllens/contracts/source-v1.schema.json",
+  "title": "SourceV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sourceId",
+    "revision",
+    "type",
+    "name",
+    "state",
+    "product",
+    "version",
+    "endpoint",
+    "auth",
+    "capabilities",
+    "budgets",
+    "owner",
+    "createdAt",
+    "updatedAt",
+    "lastVerifiedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "source/v1" },
+    "sourceId": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "type": {
+      "enum": ["tidb", "prometheus", "tem", "alertmanager"]
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "state": {
+      "enum": ["draft", "enabled", "disabled", "verification_failed"]
+    },
+    "product": {
+      "enum": ["tidb", "pingkaidb", "prometheus", "tem", "alertmanager"]
+    },
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detected", "family", "supported"],
+      "properties": {
+        "detected": { "type": ["string", "null"], "maxLength": 128 },
+        "family": {
+          "enum": ["tidb-8.5", "pingkaidb-7.1", "prometheus", "tem", "alertmanager", "unknown"]
+        },
+        "supported": { "type": "boolean" }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "host", "port", "path", "tlsMode"],
+      "properties": {
+        "scheme": { "enum": ["mysql", "http", "https"] },
+        "host": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "path": { "type": ["string", "null"], "maxLength": 1024 },
+        "tlsMode": { "enum": ["verify_identity", "verify_ca", "disabled"] }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "credentialRef", "username", "expiresAt"],
+      "properties": {
+        "kind": {
+          "enum": ["password", "none", "basic", "bearer", "api_key", "mtls"]
+        },
+        "credentialRef": {
+          "type": ["string", "null"],
+          "pattern": "^cred_[a-z0-9]{16,64}$"
+        },
+        "username": { "type": ["string", "null"], "maxLength": 256 },
+        "expiresAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "associatedSourceIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 32,
+      "items": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" }
+    },
+    "allowedSchemas": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 128,
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeoutMs", "maxRows", "maxConcurrency", "ratePerMinute"],
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
+        "maxRows": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "maxConcurrency": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "ratePerMinute": { "type": "integer", "minimum": 1, "maximum": 600 }
+      }
+    },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["displayName", "reference"],
+      "properties": {
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "reference": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "lastVerifiedAt": { "type": ["string", "null"], "format": "date-time" }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "required", "detail"],
+      "properties": {
+        "name": {
+          "enum": [
+            "version",
+            "schema",
+            "statement_summary",
+            "slow_query",
+            "statistics",
+            "ordinary_explain",
+            "prom_query",
+            "alert_read"
+          ]
+        },
+        "status": { "enum": ["available", "denied", "missing", "unknown"] },
+        "required": { "type": "boolean" },
+        "detail": { "type": "string", "maxLength": 1024 }
+      }
+    }
+  }
+}
