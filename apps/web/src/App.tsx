@@ -2,26 +2,24 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
-  Check,
   CheckCircle2,
   Cloud,
   Cpu,
   Database,
-  FileSearch,
   KeyRound,
   LoaderCircle,
   LogIn,
   LogOut,
-  LockKeyhole,
   RefreshCw,
   ShieldCheck,
   Terminal,
   UserRound
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import { ApiClientError, apiRequest, OwnerSession, SetupStage, SetupStatus } from "./api";
 import { DiagnosisWorkspace } from "./DiagnosisWorkspace";
+import { PhaseShell } from "./PhaseShell";
 import "./styles.css";
 
 const EMPTY_STATUS: SetupStatus = {
@@ -43,20 +41,6 @@ const EMPTY_STATUS: SetupStatus = {
     message: "No qualified local model runtime is exposed to this service."
   }
 };
-
-const STEPS: Array<{ stage: SetupStage; label: string }> = [
-  { stage: "bootstrap_required", label: "验证身份" },
-  { stage: "security_policy_required", label: "安全策略" },
-  { stage: "model_required", label: "模型连接" },
-  { stage: "ready", label: "完成" }
-];
-
-function stageIndex(stage: SetupStage): number {
-  if (stage === "model_recovery_required") {
-    return STEPS.length - 1;
-  }
-  return STEPS.findIndex((step) => step.stage === stage);
-}
 
 function ErrorBanner({ message }: { message: string }) {
   return (
@@ -84,6 +68,7 @@ function LocalModeStatus() {
 
 export function App() {
   const [status, setStatus] = useState<SetupStatus>(EMPTY_STATUS);
+  const [statusKnown, setStatusKnown] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +87,6 @@ export function App() {
     csrf_token: null
   });
 
-  const activeIndex = useMemo(() => stageIndex(status.state), [status.state]);
   const diagnosisReady = status.state === "ready" && ownerSession.authenticated;
 
   async function loadStatus() {
@@ -111,6 +95,7 @@ export function App() {
     try {
       const nextStatus = await apiRequest<SetupStatus>("/api/v1/setup/status");
       setStatus(nextStatus);
+      setStatusKnown(true);
       setExternalEgress(nextStatus.external_model.egress_enabled);
       if (nextStatus.initialized) {
         setOwnerSession(await apiRequest<OwnerSession>("/api/v1/auth/session"));
@@ -313,54 +298,12 @@ export function App() {
         </div>
       </header>
 
-      <div className={diagnosisReady ? "workspace workspace-diagnosis" : "workspace"}>
-        {diagnosisReady ? (
-          <aside className="diagnosis-rail" aria-label="工作台导航">
-            <p className="rail-title">工作台</p>
-            <nav aria-label="诊断类型">
-              <ul>
-                <li>
-                  <span aria-current="page" className="diagnosis-nav-active">
-                    <FileSearch aria-hidden="true" size={18} />
-                    SQL 诊断
-                  </span>
-                </li>
-              </ul>
-            </nav>
-            <div className="diagnosis-boundary">
-              <LockKeyhole aria-hidden="true" size={17} />
-              <div>
-                <strong>Owner 会话</strong>
-                <span>仅监听本机</span>
-              </div>
-            </div>
-          </aside>
-        ) : (
-          <aside className="step-rail" aria-label="初始化进度">
-            <p className="rail-title">初始化</p>
-            <ol>
-              {STEPS.map((step, index) => {
-                const complete = index < activeIndex;
-                const active = index === activeIndex;
-                return (
-                  <li className={active ? "active" : complete ? "complete" : ""} key={step.stage}>
-                    <span className="step-index" aria-hidden="true">
-                      {complete ? <Check size={15} /> : index + 1}
-                    </span>
-                    <span>{step.label}</span>
-                  </li>
-                );
-              })}
-            </ol>
-            <div className="rail-boundary">
-              <LockKeyhole aria-hidden="true" size={17} />
-              <span>默认仅监听本机</span>
-            </div>
-          </aside>
-        )}
-
-        <main className={diagnosisReady ? "diagnosis-main" : "setup-main"}>
-          <div className={diagnosisReady ? "diagnosis-content" : "setup-content"}>
+      <PhaseShell
+        activeStage={status.state}
+        initialized={status.initialized}
+        phaseKnown={statusKnown}
+        workbench={diagnosisReady}
+      >
             {loading ? (
               <div className="loading-state" role="status">
                 <LoaderCircle className="spin" aria-hidden="true" size={24} />
@@ -653,9 +596,7 @@ export function App() {
                 {status.state !== "ready" && <LocalModeStatus />}
               </>
             )}
-          </div>
-        </main>
-      </div>
+      </PhaseShell>
     </div>
   );
 }

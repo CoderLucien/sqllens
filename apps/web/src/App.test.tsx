@@ -31,6 +31,16 @@ describe("setup application", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not expose either phase navigation before runtime state is known", () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)));
+
+    render(<App />);
+
+    expect(screen.getByRole("status", { name: "" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "安装与初始化导航" })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "日常诊断导航" })).toBeNull();
+  });
+
   it("loads first-run status and submits the one-time initialization code", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -41,6 +51,10 @@ describe("setup application", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
+    expect(
+      await screen.findByRole("navigation", { name: "安装与初始化导航" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "日常诊断导航" })).toBeNull();
     const codeInput = await screen.findByLabelText("一次性初始化码");
     fireEvent.change(codeInput, { target: { value: "ABCD-EFGH-JKLM-NPQR" } });
     fireEvent.click(screen.getByRole("button", { name: "验证并继续" }));
@@ -209,8 +223,13 @@ describe("setup application", () => {
     fireEvent.change(await screen.findByLabelText("Owner 密码"), {
       target: { value: "correct-horse-battery-staple" }
     });
+    expect(screen.getByRole("navigation", { name: "日常诊断导航" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "安装与初始化导航" })).toBeNull();
+    expect(screen.queryByLabelText("一次性初始化码")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
     await screen.findByRole("heading", { name: "诊断工作台已就绪" });
+    expect(screen.getByRole("navigation", { name: "日常诊断导航" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "安装与初始化导航" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "退出 Owner 会话" }));
     await screen.findByRole("heading", { name: "登录诊断工作台" });
