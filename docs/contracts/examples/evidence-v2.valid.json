@@ -31,7 +31,8 @@
       "averageScanRows": 1260000,
       "averageReturnRows": 400
     },
-    "typedDigest": "sha256:67f3ea3535d3ebceb665258b1001360ba9bda64b37c38d8f2ec31547d8ece25f"
+    "typedDigest": "sha256:67f3ea3535d3ebceb665258b1001360ba9bda64b37c38d8f2ec31547d8ece25f",
+    "canonicalRevision": "rfc8785-safe-integer/v1"
   },
   "collection": {
     "collectorId": "pingkaidb-readonly",

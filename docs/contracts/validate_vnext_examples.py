@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import re
 from datetime import datetime
@@ -10,6 +9,20 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker, RefResolver
+from vnext_canonical_json import canonical_sha256, reject_non_finite_json
+from vnext_diagnosis_policy import (
+    DIAGNOSIS_DEPENDENCY_REGISTRY,
+    EVIDENCE_LEVELS,
+    FACT_DEPENDENCY_REGISTRY,
+    derive_completeness,
+    derive_evidence_level,
+    expected_rule_findings,
+    expected_uncertainty,
+    require_eligible,
+    validate_policy_pins,
+)
+from vnext_outcome_policy import authorization_snapshot_digest, validate_outcome_policy
+from vnext_source_ledger import replay_source_history
 
 ROOT = Path(__file__).parent
 EXAMPLES = ROOT / "examples"
@@ -105,7 +118,6 @@ SOURCE_OPERATION_ACTORS = {
     "verification_failure_started": "system",
     "verification_failed": "system",
 }
-EVIDENCE_LEVELS = {"E0": 0, "E1": 1, "E2": 2, "E3": 3, "E4": 4}
 AI_CLAIM_TEMPLATES = {
     ("ai.index_candidate_priority", "v1"): (
         {
@@ -152,130 +164,6 @@ EVIDENCE_SCHEMA_REVISIONS = {
     "effect_metric_comparison": "effect-metric-comparison/v1",
     "rollback_confirmation": "rollback-confirmation/v1",
 }
-FACT_DEPENDENCY_REGISTRY = {
-    ("fact.index_scan_profile", "v1"): {
-        "runtimeEvidenceId": {
-            "kind": "slow_query",
-            "fields": {
-                "windowMinutes": "windowMinutes",
-                "callCount": "callCount",
-                "p95Ms": "p95Ms",
-                "averageScanRows": "averageScanRows",
-                "averageReturnRows": "averageReturnRows",
-            },
-        },
-        "planEvidenceId": {
-            "kind": "ordinary_plan",
-            "fields": {"tableName": "tableName", "accessPath": "accessPath"},
-        },
-        "indexEvidenceId": {
-            "kind": "index",
-            "fields": {
-                "tableName": "tableName",
-                "filterColumns": "filterColumns",
-                "indexCoverage": "indexCoverage",
-            },
-        },
-    },
-    ("fact.statistics_estimation_profile", "v1"): {
-        "statisticsEvidenceId": {
-            "kind": "statistics",
-            "fields": {
-                "estimatedRows": "estimatedRows",
-                "actualRows": "actualRows",
-                "statisticsFreshness": "statisticsFreshness",
-            },
-        }
-    },
-    ("fact.runtime_hotspot_profile", "v1"): {
-        "statementEvidenceId": {
-            "kind": "statement_summary",
-            "fields": {"sqlStability": "sqlStability"},
-        },
-        "runtimeEvidenceId": {
-            "kind": "runtime_metric",
-            "fields": {"resourceCorrelation": "resourceCorrelation"},
-        },
-        "alertEvidenceId": {
-            "kind": "alert",
-            "fields": {"alertScope": "alertScope"},
-        },
-    },
-}
-DIAGNOSIS_DEPENDENCY_REGISTRY = {
-    ("decision.index_scan_priority", "v1"): {
-        "factTemplate": "fact.index_scan_profile",
-        "rules": {
-            "IDX_ACCESS_001": (
-                "runtimeEvidenceId",
-                "planEvidenceId",
-                "indexEvidenceId",
-            )
-        },
-        "claims": {
-            ("ai.index_candidate_priority", "v1"): {
-                "rules": ("IDX_ACCESS_001",),
-                "evidenceRoles": (
-                    "runtimeEvidenceId",
-                    "planEvidenceId",
-                    "indexEvidenceId",
-                ),
-            }
-        },
-        "actions": {
-            ("action.index_candidate_isolated", "v1"): {
-                "rules": ("IDX_ACCESS_001",),
-                "evidenceRoles": (
-                    "runtimeEvidenceId",
-                    "planEvidenceId",
-                    "indexEvidenceId",
-                ),
-            }
-        },
-    },
-    ("decision.statistics_estimation", "v1"): {
-        "factTemplate": "fact.statistics_estimation_profile",
-        "rules": {"STATS_ESTIMATION_001": ("statisticsEvidenceId",)},
-        "claims": {},
-        "actions": {
-            ("action.statistics_refresh_isolated", "v1"): {
-                "rules": ("STATS_ESTIMATION_001",),
-                "evidenceRoles": ("statisticsEvidenceId",),
-            }
-        },
-    },
-    ("decision.runtime_hotspot", "v1"): {
-        "factTemplate": "fact.runtime_hotspot_profile",
-        "rules": {
-            "RUNTIME_HOTSPOT_001": (
-                "statementEvidenceId",
-                "runtimeEvidenceId",
-                "alertEvidenceId",
-            ),
-            "SQL_REGRESSION_001": ("statementEvidenceId",),
-        },
-        "claims": {
-            ("ai.resource_hotspot_priority", "v1"): {
-                "rules": ("RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"),
-                "evidenceRoles": (
-                    "statementEvidenceId",
-                    "runtimeEvidenceId",
-                    "alertEvidenceId",
-                ),
-            }
-        },
-        "actions": {
-            ("action.resource_hotspot_runbook", "v1"): {
-                "rules": ("RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"),
-                "evidenceRoles": (
-                    "statementEvidenceId",
-                    "runtimeEvidenceId",
-                    "alertEvidenceId",
-                ),
-            }
-        },
-    },
-}
 RFC3339_DATETIME = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt](?:[01]\d|2[0-3]):[0-5]\d:"
     r"(?:[0-5]\d|60)(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$"
@@ -283,7 +171,14 @@ RFC3339_DATETIME = re.compile(
 
 
 def load(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON constant: {value}")
+
+    loaded = json.loads(
+        path.read_text(encoding="utf-8"), parse_constant=reject_constant
+    )
+    reject_non_finite_json(loaded)
+    return loaded
 
 
 SCHEMAS = {name: load(ROOT / name) for name in SCHEMA_NAMES}
@@ -454,10 +349,7 @@ def validate_source_lease_audit(source: dict[str, Any]) -> None:
 
 
 def typed_payload_digest(value: dict[str, Any]) -> str:
-    canonical = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode()
-    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    return canonical_sha256(value)
 
 
 def join_zh(values: list[str]) -> str:
@@ -558,8 +450,13 @@ def render_evidence_summary(evidence: dict[str, Any]) -> str:
         return f"验证检查 {typed['checkId']} 的结果为{status}。"
     if kind == "effect_metric_comparison":
         result = "达到预设阈值" if typed["passed"] else "未达到预设阈值"
+        metric_zh = {
+            "p95_latency_ms": "P95 延迟",
+            "estimation_ratio_basis_points": "估算/实际行数比",
+            "tikv_p99_latency_ms": "TiKV P99 延迟",
+        }[typed["metricCode"]]
         return (
-            f"隔离环境验证显示{typed['metricZh']}从 {typed['baselineValue']} "
+            f"隔离环境验证显示{metric_zh}从 {typed['baselineValue']} "
             f"{typed['unit']} 变为 {typed['observedValue']} {typed['unit']}，{result}。"
         )
     if kind == "rollback_confirmation":
@@ -628,6 +525,7 @@ def rebuild_fact_params(
             raise ValueError(
                 f"fact evidence kind mismatch: {fact['factId']} -> {evidence_id}"
             )
+        require_eligible(evidence, f"Fact {fact['factId']} role {role}")
         typed = evidence["payload"]["typed"]
         for fact_field, evidence_field in spec[role]["fields"].items():
             value = typed[evidence_field]
@@ -1037,6 +935,9 @@ def validate_diagnosis_dependency_closure(
         expected_evidence = {role_ids[role] for role in roles}
         if set(findings_by_id[rule_id]["evidenceIds"]) != expected_evidence:
             raise ValueError(f"rule provenance is not closed: {rule_id}")
+    for rule_id in spec["supportRules"]:
+        if findings_by_id[rule_id]["status"] != "hit":
+            raise ValueError(f"non-hit rule cannot support a diagnosis: {rule_id}")
 
     synthesis = case["aiSynthesis"]
     claims = synthesis["claims"]
@@ -1060,6 +961,10 @@ def validate_diagnosis_dependency_closure(
             raise ValueError(
                 f"AI claim rule provenance is not closed: {claim['claimId']}"
             )
+        if any(
+            findings_by_id[rule_id]["status"] != "hit" for rule_id in claim["ruleIds"]
+        ):
+            raise ValueError("AI claim is supported by a non-hit rule")
 
     actions_by_template: dict[tuple[str, str], dict[str, Any]] = {}
     for action in case["actions"]:
@@ -1078,6 +983,10 @@ def validate_diagnosis_dependency_closure(
             raise ValueError(
                 f"Action rule provenance is not closed: {action['actionId']}"
             )
+        if any(
+            findings_by_id[rule_id]["status"] != "hit" for rule_id in action["ruleIds"]
+        ):
+            raise ValueError("Action is supported by a non-hit rule")
 
     expected_decision_evidence = {
         *role_ids.values(),
@@ -1085,7 +994,7 @@ def validate_diagnosis_dependency_closure(
     }
     if set(decision["evidenceIds"]) != expected_decision_evidence:
         raise ValueError("decision evidence is not the closed dependency projection")
-    if set(decision["ruleIds"]) != set(findings_by_id):
+    if set(decision["ruleIds"]) != set(spec["supportRules"]):
         raise ValueError("decision rules are not the closed dependency projection")
     if set(decision["claimIds"]) != {
         item["claimId"] for item in claims_by_template.values()
@@ -1098,8 +1007,10 @@ def validate_diagnosis_dependency_closure(
 
 
 def validate_source_semantics(source: dict[str, Any]) -> None:
+    reject_non_finite_json(source)
     validate_source_audit(source)
     validate_source_lease_audit(source)
+    replay_source_history(source, parse_time)
     capability_names = [item["name"] for item in source["capabilities"]]
     if len(capability_names) != len(set(capability_names)):
         raise ValueError("duplicate Source capability name")
@@ -1755,6 +1666,7 @@ def validate_evidence_semantics(
     case_id: str,
     source_revisions: set[str],
 ) -> None:
+    reject_non_finite_json(evidence)
     if evidence["caseId"] != case_id:
         raise ValueError(f"evidence belongs to another case: {evidence['evidenceId']}")
     if parse_time(evidence["observedAt"]) > parse_time(evidence["collectedAt"]):
@@ -1779,6 +1691,10 @@ def validate_evidence_semantics(
     if payload["extractionRevision"] != "evidence-extractor/v1":
         raise ValueError(
             f"unsupported evidence extraction revision: {evidence['evidenceId']}"
+        )
+    if payload["canonicalRevision"] != "rfc8785-safe-integer/v1":
+        raise ValueError(
+            f"unsupported evidence canonical revision: {evidence['evidenceId']}"
         )
     if typed["kind"] != evidence["kind"]:
         raise ValueError(
@@ -1929,111 +1845,12 @@ def validate_transition_events(case: dict[str, Any]) -> None:
 
 
 def validate_outcome_semantics(case: dict[str, Any]) -> None:
-    outcome = case["outcome"]
-    if outcome == "pending":
-        return
-    action_ids = {item["actionId"] for item in case["actions"]}
-    evidence_by_id = {item["evidenceId"]: item for item in case["evidence"]}
-    terminal_events = [
-        event
-        for event in case["transitionEvents"]
-        if event["type"] == "outcome"
-        and event["fromOutcome"] == "pending"
-        and event["toOutcome"] == outcome
-    ]
-    if len(terminal_events) != 1:
-        raise ValueError("terminal outcome requires exactly one pending transition")
-    terminal_event = terminal_events[0]
-
-    if outcome == "risk_accepted":
-        reviews = [
-            item
-            for item in case["reviews"]
-            if item["decision"] == "risk_accepted"
-            and item["caseRevision"] == case["revision"]
-            and set(item["actionIds"]) & action_ids
-        ]
-        if not reviews or not any(
-            review["reviewId"] in terminal_event["reviewIds"]
-            and bool(set(review["actionIds"]) & set(terminal_event["actionIds"]))
-            for review in reviews
-        ):
-            raise ValueError(
-                "risk_accepted requires linked review and transition event"
-            )
-        return
-
-    if outcome == "evidence_insufficient":
-        feedback = [
-            item
-            for item in case["feedback"]
-            if item["kind"] == outcome and item["caseRevision"] == case["revision"]
-        ]
-        if not feedback or not any(
-            item["feedbackId"] in terminal_event["feedbackIds"] for item in feedback
-        ):
-            raise ValueError(
-                "evidence_insufficient requires feedback and transition event"
-            )
-        return
-
-    terminal_kind = "validated" if outcome == "validated_effective" else "rolled_back"
-    required_evidence = (
-        {"effect_metric_comparison"}
-        if outcome == "validated_effective"
-        else {"effect_metric_comparison", "rollback_confirmation"}
-    )
-    for terminal in [
-        item
-        for item in case["feedback"]
-        if item["kind"] == terminal_kind and item["caseRevision"] == case["revision"]
-    ]:
-        action_id = terminal["actionId"]
-        if action_id not in action_ids:
-            continue
-        approvals = [
-            item
-            for item in case["reviews"]
-            if item["decision"] == "approved" and action_id in item["actionIds"]
-        ]
-        implementations = [
-            item
-            for item in case["feedback"]
-            if item["kind"] == "implemented" and item["actionId"] == action_id
-        ]
-        result_evidence = [
-            evidence_by_id[evidence_id]
-            for evidence_id in terminal["evidenceIds"]
-            if evidence_id in evidence_by_id
-        ]
-        if required_evidence - {item["kind"] for item in result_evidence}:
-            continue
-        terminal_at = parse_time(terminal["createdAt"])
-        for review in approvals:
-            if review["reviewId"] not in terminal_event["reviewIds"]:
-                continue
-            for implementation in implementations:
-                if implementation["feedbackId"] not in terminal_event["feedbackIds"]:
-                    continue
-                causal_tuple = (
-                    parse_time(review["createdAt"])
-                    <= parse_time(implementation["createdAt"])
-                    <= min(parse_time(item["observedAt"]) for item in result_evidence)
-                    <= max(parse_time(item["collectedAt"]) for item in result_evidence)
-                    <= terminal_at
-                )
-                tuple_is_in_event = (
-                    action_id in terminal_event["actionIds"]
-                    and set(terminal["evidenceIds"])
-                    <= set(terminal_event["evidenceIds"])
-                    and terminal["feedbackId"] in terminal_event["feedbackIds"]
-                )
-                if causal_tuple and tuple_is_in_event:
-                    return
-    raise ValueError(f"{outcome} lacks one linked, ordered outcome evidence chain")
+    validate_outcome_policy(case, parse_time)
 
 
 def validate_case_references(case: dict[str, Any]) -> None:
+    reject_non_finite_json(case)
+    validate_policy_pins(case)
     source_ids = require_unique(case["sourceSnapshots"], "sourceId")
     source_revisions = {
         f"{item['sourceId']}@{item['revision']}" for item in case["sourceSnapshots"]
@@ -2075,6 +1892,33 @@ def validate_case_references(case: dict[str, Any]) -> None:
                 raise ValueError(
                     f"fact evidence kind mismatch: {fact['factId']} -> {evidence_id}"
                 )
+
+    diagnostic_evidence_ids = {
+        evidence_id for fact in case["facts"] for evidence_id in fact["evidenceIds"]
+    }
+    derived_level = derive_evidence_level(case["evidence"], diagnostic_evidence_ids)
+    if case["evidenceLevel"] != derived_level:
+        raise ValueError(
+            f"Case evidenceLevel is self-reported: expected {derived_level}"
+        )
+    derived_completeness = derive_completeness(
+        case["decision"], facts_by_id, evidence_by_id
+    )
+    if case["evidenceCompleteness"] != derived_completeness:
+        raise ValueError(
+            "Case evidenceCompleteness is not derived from eligible Fact roles"
+        )
+    expected_findings = expected_rule_findings(
+        case["pinnedRevisions"]["rulePack"],
+        case["decision"],
+        facts_by_id,
+        evidence_by_id,
+    )
+    if case["ruleFindings"] != expected_findings:
+        raise ValueError("rule findings are not the deterministic rule-pack result")
+    if case["uncertainty"] != expected_uncertainty(case):
+        raise ValueError("Case uncertainty is not the server-owned policy projection")
+
     for finding in case["ruleFindings"]:
         if not set(finding["evidenceIds"]) <= evidence_ids:
             raise ValueError(f"dangling rule evidence: {finding['ruleId']}")
@@ -2159,6 +2003,8 @@ def validate_case_references(case: dict[str, Any]) -> None:
         evidence_by_id[evidence_id]
         for evidence_id in case["subject"]["businessEvidenceIds"]
     ]
+    for evidence in business_evidence:
+        require_eligible(evidence, "business impact")
     if not any(
         item["kind"] == "business_observation"
         and item["summaryZh"] == case["subject"]["businessZh"]
@@ -2311,6 +2157,13 @@ def validate_case_transition(prior: dict[str, Any], proposed: dict[str, Any]) ->
         for item in proposed[field][len(prior[field]) :]:
             if parse_time(item[time_field]) <= prior_updated:
                 raise ValueError(f"new Case {field} record predates the prior revision")
+            if (
+                field in {"reviews", "feedback", "transitionEvents"}
+                and item["caseRevision"] != proposed["revision"]
+            ):
+                raise ValueError(
+                    f"new Case {field} record does not bind the proposed revision"
+                )
 
     validate_case_references(prior)
     validate_case_references(proposed)
@@ -2340,7 +2193,11 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
             "digest": effect["integrityDigest"],
             "typed": {
                 "kind": "effect_metric_comparison",
-                "metricZh": "P95 延迟",
+                "actionId": "act_0000000000000001",
+                "metricCode": "p95_latency_ms",
+                "validationTargetZh": (
+                    "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归在审批阈值内"
+                ),
                 "baselineValue": 2800,
                 "observedValue": 420,
                 "unit": "ms",
@@ -2353,11 +2210,19 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
     validated["reviews"] = [
         {
             "reviewId": "rev_0000000000000001",
-            "caseRevision": 1,
+            "caseRevision": 2,
             "reviewer": {
                 "kind": "user",
                 "id": "owner",
                 "displayName": "本机 Owner",
+            },
+            "authorizationSnapshot": {
+                "principalId": "owner",
+                "role": "owner",
+                "permission": "approve_diagnosis_action",
+                "authorizationRevision": "owner-action-approval/v1",
+                "capturedAt": "2026-09-02T08:05:59Z",
+                "identityDigest": "",
             },
             "decision": "approved",
             "actionIds": ["act_0000000000000001"],
@@ -2365,10 +2230,13 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
             "comment": "批准隔离环境验证，不批准自动生产变更。",
         }
     ]
+    validated["reviews"][0]["authorizationSnapshot"]["identityDigest"] = (
+        authorization_snapshot_digest(validated["reviews"][0]["authorizationSnapshot"])
+    )
     validated["feedback"] = [
         {
             "feedbackId": "fb_0000000000000001",
-            "caseRevision": 1,
+            "caseRevision": 2,
             "actor": {"kind": "user", "id": "owner", "displayName": "本机 Owner"},
             "kind": "implemented",
             "actionId": "act_0000000000000001",
@@ -2397,6 +2265,13 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
             "actor": {"kind": "user", "id": "owner", "displayName": "本机 Owner"},
             "createdAt": "2026-09-02T08:12:00Z",
             "reason": "隔离环境验证达到预设收益阈值",
+            "outcomeTuple": {
+                "actionId": "act_0000000000000001",
+                "approvalReviewId": "rev_0000000000000001",
+                "implementationFeedbackId": "fb_0000000000000001",
+                "resultEvidenceIds": ["ev_0000000000000005"],
+                "terminalFeedbackId": "fb_0000000000000002",
+            },
             "reviewIds": ["rev_0000000000000001"],
             "feedbackIds": [
                 "fb_0000000000000001",
@@ -2407,6 +2282,60 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
         }
     )
     return validated
+
+
+def build_rolled_back_case(case: dict[str, Any]) -> dict[str, Any]:
+    rolled_back = build_validated_case(case)
+    rolled_back["outcome"] = "rolled_back"
+    effect = next(
+        item
+        for item in rolled_back["evidence"]
+        if item["kind"] == "effect_metric_comparison"
+    )
+    effect["payload"]["typed"]["passed"] = False
+    effect["payload"]["typedDigest"] = typed_payload_digest(effect["payload"]["typed"])
+    effect["summaryZh"] = render_evidence_summary(effect)
+
+    rollback = copy.deepcopy(effect)
+    rollback.update(
+        {
+            "evidenceId": "ev_0000000000000006",
+            "kind": "rollback_confirmation",
+            "observedAt": "2026-09-02T08:10:30Z",
+            "collectedAt": "2026-09-02T08:11:30Z",
+            "integrityDigest": (
+                "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+            ),
+        }
+    )
+    rollback["payload"].update(
+        {
+            "schemaRevision": "rollback-confirmation/v1",
+            "storageRef": "payload_0000000000000006",
+            "digest": rollback["integrityDigest"],
+            "typed": {
+                "kind": "rollback_confirmation",
+                "actionId": "act_0000000000000001",
+                "rollbackState": "confirmed",
+            },
+        }
+    )
+    rollback["payload"]["typedDigest"] = typed_payload_digest(
+        rollback["payload"]["typed"]
+    )
+    rollback["summaryZh"] = render_evidence_summary(rollback)
+    rolled_back["evidence"].append(rollback)
+
+    terminal = rolled_back["feedback"][-1]
+    terminal["kind"] = "rolled_back"
+    terminal["evidenceIds"] = [effect["evidenceId"], rollback["evidenceId"]]
+    terminal["comment"] = "隔离环境验证未达阈值，已确认回滚完成。"
+    event = rolled_back["transitionEvents"][-1]
+    event["toOutcome"] = "rolled_back"
+    event["reason"] = "验证未达阈值且回滚已确认"
+    event["outcomeTuple"]["resultEvidenceIds"] = terminal["evidenceIds"]
+    event["evidenceIds"] = terminal["evidenceIds"]
+    return rolled_back
 
 
 def projected_action(action: dict[str, Any], order: int) -> dict[str, Any]:
@@ -2474,6 +2403,7 @@ def validate_report_projection(report: dict[str, Any], case: dict[str, Any]) -> 
 
     expected_trace = {
         "evidenceLevel": case["evidenceLevel"],
+        "evidenceCompleteness": case["evidenceCompleteness"],
         "evidenceIds": decision["evidenceIds"],
         "ruleIds": decision["ruleIds"],
         "claimIds": decision["claimIds"],
@@ -2556,12 +2486,17 @@ def main() -> None:
     }
     for key in ("provider", "model", "prompt", "payload", "payloadDigest"):
         rules_only_case["pinnedRevisions"][key] = None
+    rules_only_case["uncertainty"] = expected_uncertainty(rules_only_case)
     schema_validator("diagnosis-case-v2.schema.json").validate(rules_only_case)
     validate_case_references(rules_only_case)
     terminal_case = build_validated_case(cases[0])
     schema_validator("diagnosis-case-v2.schema.json").validate(terminal_case)
     validate_case_references(terminal_case)
     validate_case_transition(cases[0], terminal_case)
+    rolled_back_case = build_rolled_back_case(cases[0])
+    schema_validator("diagnosis-case-v2.schema.json").validate(rolled_back_case)
+    validate_case_references(rolled_back_case)
+    validate_case_transition(cases[0], rolled_back_case)
     for report in reports:
         key = (report["caseId"], report["caseRevision"])
         if key not in cases_by_revision:
@@ -2580,12 +2515,15 @@ def main() -> None:
     rules_only_report["trace"]["pinnedRevisions"] = copy.deepcopy(
         rules_only_case["pinnedRevisions"]
     )
+    rules_only_report["uncertainty"] = [
+        item["descriptionZh"] for item in rules_only_case["uncertainty"]
+    ]
     schema_validator("diagnosis-report-v1.schema.json").validate(rules_only_report)
     validate_report_projection(rules_only_report, rules_only_case)
     print(
         "vNext contract examples valid: "
         "3 sources, 1 lease-drain chain, 1 standalone evidence, 3 cases, "
-        "1 AI abstention, 1 rules-only projection, 1 terminal transition, 3 reports"
+        "1 AI abstention, 1 rules-only projection, 2 terminal transitions, 3 reports"
     )
 
 

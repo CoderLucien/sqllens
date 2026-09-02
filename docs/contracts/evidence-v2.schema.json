@@ -96,10 +96,11 @@
     "payload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaRevision", "extractionRevision", "storageRef", "recordCount", "truncated", "digest", "typed", "typedDigest"],
+      "required": ["schemaRevision", "extractionRevision", "canonicalRevision", "storageRef", "recordCount", "truncated", "digest", "typed", "typedDigest"],
       "properties": {
         "schemaRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
         "extractionRevision": { "const": "evidence-extractor/v1" },
+        "canonicalRevision": { "const": "rfc8785-safe-integer/v1" },
         "storageRef": { "type": "string", "pattern": "^payload_[a-z0-9]{16,64}$" },
         "recordCount": { "type": "integer", "minimum": 0, "maximum": 100000 },
         "truncated": { "type": "boolean" },
@@ -226,21 +227,24 @@
     },
     "effectMetricComparisonPayload": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "metricZh", "baselineValue", "observedValue", "unit", "passed"],
+      "required": ["kind", "actionId", "metricCode", "validationTargetZh", "baselineValue", "observedValue", "unit", "passed"],
       "properties": {
         "kind": { "const": "effect_metric_comparison" },
-        "metricZh": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "baselineValue": { "type": "number" },
-        "observedValue": { "type": "number" },
-        "unit": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
+        "metricCode": { "enum": ["p95_latency_ms", "estimation_ratio_basis_points", "tikv_p99_latency_ms"] },
+        "validationTargetZh": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "baselineValue": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "observedValue": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "unit": { "enum": ["ms", "basis_points"] },
         "passed": { "type": "boolean" }
       }
     },
     "rollbackConfirmationPayload": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "rollbackState"],
+      "required": ["kind", "actionId", "rollbackState"],
       "properties": {
         "kind": { "const": "rollback_confirmation" },
+        "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
         "rollbackState": { "enum": ["confirmed", "failed", "unknown"] }
       }
     },

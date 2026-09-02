@@ -105,16 +105,17 @@
       "redactionRevision": "evidence-redaction/v2"
     },
     "pinnedRevisions": {
-      "rulePack": "pingkaidb-7.1-rules/v1",
+      "rulePack": "pingkaidb-7.1-rules/v2",
       "documentPack": "pingkaidb-sql-tuning@2026-09-02",
       "parser": "sqlglot/mysql@30.17.0",
-      "policy": "diagnosis-policy/v2",
+      "policy": "diagnosis-policy/v3",
       "redaction": "evidence-redaction/v2",
       "provider": "openai-compatible/v1",
       "model": "gpt-5.6-sol",
       "prompt": "evidence-bound-synthesis/v1",
       "payload": "diagnosis-ai-payload/v1",
       "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    }
+    },
+    "evidenceCompleteness": 100
   }
 }

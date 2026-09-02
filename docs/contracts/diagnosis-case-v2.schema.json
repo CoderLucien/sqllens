@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "schemaVersion", "caseId", "revision", "inputMode", "workflowState",
-    "outcome", "configuredMode", "effectiveMode", "evidenceLevel", "subject",
+    "outcome", "configuredMode", "effectiveMode", "evidenceLevel", "evidenceCompleteness", "subject",
     "decision", "sourceSnapshots", "evidence", "facts", "ruleFindings",
     "aiSynthesis", "actions", "uncertainty", "reviews", "feedback",
     "transitionEvents", "pinnedRevisions", "createdAt", "updatedAt"
@@ -21,6 +21,7 @@
     "configuredMode": { "enum": ["rules", "rules_ai"] },
     "effectiveMode": { "enum": ["rules", "rules_ai"] },
     "evidenceLevel": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
+    "evidenceCompleteness": { "type": "integer", "minimum": 0, "maximum": 100 },
     "subject": { "$ref": "#/$defs/subject" },
     "decision": { "$ref": "#/$defs/decision" },
     "sourceSnapshots": {
@@ -511,11 +512,17 @@
     },
     "review": {
       "type": "object", "additionalProperties": false,
-      "required": ["reviewId", "caseRevision", "reviewer", "decision", "actionIds", "createdAt", "comment"],
+      "required": ["reviewId", "caseRevision", "reviewer", "authorizationSnapshot", "decision", "actionIds", "createdAt", "comment"],
       "properties": {
         "reviewId": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" },
         "caseRevision": { "type": "integer", "minimum": 1 },
         "reviewer": { "$ref": "#/$defs/actor" },
+        "authorizationSnapshot": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/authorizationSnapshot" }
+          ]
+        },
         "decision": { "enum": ["approved", "rejected", "needs_changes", "risk_accepted"] },
         "actionIds": {
           "type": "array", "uniqueItems": true, "maxItems": 32,
@@ -558,7 +565,7 @@
     },
     "outcomeTransitionEvent": {
       "type": "object", "additionalProperties": false,
-      "required": ["eventId", "caseRevision", "type", "fromOutcome", "toOutcome", "actor", "createdAt", "reason", "reviewIds", "feedbackIds", "actionIds", "evidenceIds"],
+      "required": ["eventId", "caseRevision", "type", "fromOutcome", "toOutcome", "actor", "createdAt", "reason", "outcomeTuple", "reviewIds", "feedbackIds", "actionIds", "evidenceIds"],
       "properties": {
         "eventId": { "type": "string", "pattern": "^evt_[a-z0-9]{16,64}$" },
         "caseRevision": { "type": "integer", "minimum": 1 },
@@ -568,6 +575,7 @@
         "actor": { "$ref": "#/$defs/actor" },
         "createdAt": { "type": "string", "format": "date-time" },
         "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "outcomeTuple": { "$ref": "#/$defs/outcomeTuple" },
         "reviewIds": {
           "type": "array", "uniqueItems": true, "maxItems": 128,
           "items": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" }
@@ -584,6 +592,32 @@
           "type": "array", "uniqueItems": true, "maxItems": 128,
           "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
         }
+      }
+    },
+    "authorizationSnapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["principalId", "role", "permission", "authorizationRevision", "capturedAt", "identityDigest"],
+      "properties": {
+        "principalId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "role": { "enum": ["owner", "dba", "sre"] },
+        "permission": { "const": "approve_diagnosis_action" },
+        "authorizationRevision": { "const": "owner-action-approval/v1" },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "identityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "outcomeTuple": {
+      "type": "object", "additionalProperties": false,
+      "required": ["actionId", "approvalReviewId", "implementationFeedbackId", "resultEvidenceIds", "terminalFeedbackId"],
+      "properties": {
+        "actionId": { "type": ["string", "null"], "pattern": "^act_[a-z0-9]{16,64}$" },
+        "approvalReviewId": { "type": ["string", "null"], "pattern": "^rev_[a-z0-9]{16,64}$" },
+        "implementationFeedbackId": { "type": ["string", "null"], "pattern": "^fb_[a-z0-9]{16,64}$" },
+        "resultEvidenceIds": {
+          "type": "array", "uniqueItems": true, "maxItems": 8,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "terminalFeedbackId": { "type": ["string", "null"], "pattern": "^fb_[a-z0-9]{16,64}$" }
       }
     },
     "pinnedRevisions": {

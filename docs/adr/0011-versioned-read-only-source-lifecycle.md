@@ -41,6 +41,15 @@ set size and is only a consistency check. Lease snapshot/release/completion
 events are runtime-authored; user-authored events are limited to explicit Owner
 registration, edit, enable, and drain-admission decisions.
 
+A Source snapshot is trusted only after one full-history replay combines state
+and lease ledgers by `sourceRevision` and timestamp. The replay starts at
+revision 1, requires exactly one state snapshot per revision, and derives the
+active lease set after each event. Acquisition is legal only in an enabled
+`leases_updated` revision and must precede that revision's state snapshot;
+release/cancel is legal only in its declared lease revision and must also
+precede the snapshot. Prior/proposed validation never accepts an already
+poisoned prior merely because the newest transition is locally valid.
+
 Disable and delete use the same admission barrier. A normal operation enters
 `draining`, records the pending operation and retirement deadline, rejects new
 jobs, preserves the current active-lease identities in that admission revision,

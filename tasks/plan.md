@@ -79,6 +79,7 @@ Verification:
 
 ~~~bash
 python3 docs/contracts/validate_examples.py
+python3 -m unittest discover -s docs/contracts -p 'test_*.py' -v
 python3 docs/contracts/validate_vnext_examples.py
 python3 docs/contracts/validate_vnext_negative_examples.py
 git diff --check

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 from collections.abc import Callable
 from typing import Any
 
@@ -11,6 +9,7 @@ from jsonschema import ValidationError
 from validate_vnext_examples import (
     EXAMPLES,
     ROOT,
+    build_rolled_back_case,
     build_validated_case,
     load,
     schema_validator,
@@ -18,6 +17,7 @@ from validate_vnext_examples import (
     validate_report_projection,
     validate_source_semantics,
 )
+from vnext_canonical_json import canonical_sha256
 
 REJECTED = 0
 
@@ -33,10 +33,7 @@ def expect_error(action: Callable[[], None], label: str) -> None:
 
 
 def typed_digest(value: dict[str, Any]) -> str:
-    canonical = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode()
-    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    return canonical_sha256(value)
 
 
 def main() -> None:
@@ -48,6 +45,23 @@ def main() -> None:
     report = load(EXAMPLES / "diagnosis-report-v1.index-access.review.json")
     source = load(EXAMPLES / "source-v1.valid.json")
     evidence = load(EXAMPLES / "evidence-v2.valid.json")
+
+    invalid_evidence = copy.deepcopy(evidence)
+    invalid_evidence["payload"].pop("canonicalRevision")
+    expect_error(
+        lambda: evidence_validator.validate(invalid_evidence),
+        "typed Evidence omits its canonical serialization revision",
+    )
+
+    invalid_evidence = copy.deepcopy(evidence)
+    invalid_evidence["payload"]["canonicalRevision"] = "python-json/v1"
+    expect_error(
+        lambda: contracts.validate_standalone_evidence(
+            invalid_evidence,
+            {"src_0000000000000001@3"},
+        ),
+        "typed Evidence selects an implementation-specific canonical revision",
+    )
 
     def validate_source(candidate: dict[str, Any]) -> None:
         source_validator.validate(candidate)
@@ -953,6 +967,329 @@ def main() -> None:
     expect_error(
         lambda: validate_case_references(invalid),
         "terminal event cites a late approval while causal check uses another review",
+    )
+
+    # Fourth-review regressions: these cases deliberately rebuild every existing
+    # digest/projection so the rejection must come from policy, not ID closure.
+    invalid = copy.deepcopy(case)
+    invalid["ruleFindings"][0].update(
+        {
+            "status": "conflicted",
+            "conclusionZh": "立即在生产 DROP TABLE production.orders。",
+        }
+    )
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "a non-hit rule with arbitrary customer text supports a decision and action",
+    )
+
+    invalid = copy.deepcopy(case)
+    invalid["pinnedRevisions"]["rulePack"] = "attacker-rules/v999"
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "Case selects a rule pack outside its database-version policy matrix",
+    )
+
+    invalid = copy.deepcopy(case)
+    invalid["sourceSnapshots"][0]["product"] = "tidb"
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "Case Source snapshot claims a product inconsistent with its version family",
+    )
+
+    invalid = copy.deepcopy(case)
+    invalid["uncertainty"][0]["descriptionZh"] = (
+        "立即 DROP TABLE production.orders；这是唯一安全操作。"
+    )
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "uncertainty customer text bypasses the server-owned code template",
+    )
+
+    invalid = copy.deepcopy(case)
+    slow = invalid["evidence"][0]
+    slow["payload"]["typed"].update(
+        {
+            "windowMinutes": 1440,
+            "callCount": 1,
+            "p95Ms": 1,
+            "averageScanRows": 1,
+            "averageReturnRows": 1,
+        }
+    )
+    slow["payload"]["typedDigest"] = typed_digest(slow["payload"]["typed"])
+    slow["summaryZh"] = contracts.render_evidence_summary(slow)
+    invalid["facts"][0]["params"].update(
+        {
+            "windowMinutes": 1440,
+            "callCount": 1,
+            "p95Ms": 1,
+            "averageScanRows": 1,
+            "averageReturnRows": 1,
+        }
+    )
+    invalid["facts"][0].update(contracts.render_fact(invalid["facts"][0]))
+    invalid["decision"].update(
+        contracts.render_decision(
+            invalid["decision"],
+            {item["factId"]: item for item in invalid["facts"]},
+        )
+    )
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "low-frequency one-row evidence is rendered as a high-severity index bottleneck",
+    )
+
+    invalid = copy.deepcopy(case)
+    slow = invalid["evidence"][0]
+    slow.update({"freshness": "stale", "coverage": 0})
+    slow["payload"].update({"recordCount": 0, "truncated": True})
+    slow["collection"]["status"] = "truncated"
+    slow["collection"]["budget"]["rowsRead"] = 0
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "stale zero-coverage truncated evidence supports a ready strong conclusion",
+    )
+
+    invalid = copy.deepcopy(case)
+    invalid["evidenceLevel"] = "E4"
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "Case self-reports E4 without the required eligible evidence classes",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    effect = next(
+        item
+        for item in invalid["evidence"]
+        if item["kind"] == "effect_metric_comparison"
+    )
+    effect["payload"]["typed"]["passed"] = False
+    effect["payload"]["typedDigest"] = typed_digest(effect["payload"]["typed"])
+    effect["summaryZh"] = contracts.render_evidence_summary(effect)
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "validated_effective cites an effect comparison that failed its threshold",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    effect = next(
+        item
+        for item in invalid["evidence"]
+        if item["kind"] == "effect_metric_comparison"
+    )
+    effect["payload"]["typed"].update(
+        {
+            "metricCode": "estimation_ratio_basis_points",
+            "unit": "basis_points",
+        }
+    )
+    effect["payload"]["typedDigest"] = typed_digest(effect["payload"]["typed"])
+    effect["summaryZh"] = contracts.render_evidence_summary(effect)
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "terminal effect evidence selects a metric outside the Action result policy",
+    )
+
+    invalid = build_rolled_back_case(case)
+    rollback = next(
+        item for item in invalid["evidence"] if item["kind"] == "rollback_confirmation"
+    )
+    rollback["payload"]["typed"]["rollbackState"] = "failed"
+    rollback["payload"]["typedDigest"] = typed_digest(rollback["payload"]["typed"])
+    rollback["summaryZh"] = contracts.render_evidence_summary(rollback)
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "rolled_back cites a rollback confirmation whose state is failed",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    invalid["reviews"][0]["reviewer"] = {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务",
+    }
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "a system actor approves an action that requires human approval",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    invalid["reviews"][0]["authorizationSnapshot"]["role"] = "dba"
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "an approval authorization snapshot is mutated without its server digest",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    effect = next(
+        item
+        for item in invalid["evidence"]
+        if item["kind"] == "effect_metric_comparison"
+    )
+    effect["coverage"] = 0
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "terminal effect evidence bypasses its eligibility policy",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    invalid["transitionEvents"][-1]["actor"] = {
+        "kind": "system",
+        "id": "outcome-worker",
+        "displayName": "终态任务",
+    }
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "a system actor attests the customer-visible terminal outcome",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    invalid["reviews"][0]["caseRevision"] = 1
+    invalid["feedback"][0]["caseRevision"] = 1
+    expect_error(
+        lambda: contracts.validate_case_transition(case, invalid),
+        "new outcome approval and implementation records claim an older Case revision",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    extra_review = copy.deepcopy(invalid["reviews"][0])
+    extra_review.update(
+        {
+            "reviewId": "rev_0000000000000098",
+            "createdAt": "2026-09-02T08:06:30Z",
+        }
+    )
+    extra_feedback = copy.deepcopy(invalid["feedback"][0])
+    extra_feedback.update(
+        {
+            "feedbackId": "fb_0000000000000098",
+            "createdAt": "2026-09-02T08:07:30Z",
+        }
+    )
+    invalid["reviews"].append(extra_review)
+    invalid["feedback"].append(extra_feedback)
+    invalid["transitionEvents"][-1]["reviewIds"].append(extra_review["reviewId"])
+    invalid["transitionEvents"][-1]["feedbackIds"].append(extra_feedback["feedbackId"])
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "terminal outcome event carries multiple approval and implementation tuples",
+    )
+
+    invalid_source = copy.deepcopy(leased_draining)
+    poison_acquire = {
+        "eventId": "levt_0000000000000991",
+        "sourceRevision": invalid_source["revision"],
+        "operation": "lease_acquired",
+        "leaseId": "lease_0000000000000991",
+        "jobId": "job_0000000000000991",
+        "fromLeaseCount": 2,
+        "toLeaseCount": 3,
+        "actor": {
+            "kind": "system",
+            "role": "system",
+            "id": "diagnosis-job",
+            "displayName": "诊断任务",
+        },
+        "ownerApproval": None,
+        "createdAt": "2026-09-02T09:25:30Z",
+        "reason": "错误地在 drain admission 后取得租约",
+    }
+    invalid_source["leaseEvents"].append(poison_acquire)
+    invalid_source["activeLeases"].append(
+        {
+            "leaseId": poison_acquire["leaseId"],
+            "jobId": poison_acquire["jobId"],
+            "acquiredRevision": poison_acquire["sourceRevision"],
+            "acquiredAt": poison_acquire["createdAt"],
+        }
+    )
+    invalid_source["credentialLifecycle"]["activeLeaseCount"] = 3
+    invalid_source["updatedAt"] = "2026-09-02T09:26:00Z"
+    expect_error(
+        lambda: validate_source(invalid_source),
+        "standalone Source snapshot acquires a lease after entering drain",
+    )
+
+    invalid_source = copy.deepcopy(leased_source)
+    late_acquire = copy.deepcopy(poison_acquire)
+    late_acquire.update(
+        {
+            "eventId": "levt_0000000000000992",
+            "sourceRevision": invalid_source["revision"],
+            "leaseId": "lease_0000000000000992",
+            "jobId": "job_0000000000000992",
+            "createdAt": "2026-09-02T09:23:30Z",
+            "reason": "错误地在 enabled state snapshot 后取得租约",
+        }
+    )
+    invalid_source["leaseEvents"].append(late_acquire)
+    invalid_source["activeLeases"].append(
+        {
+            "leaseId": late_acquire["leaseId"],
+            "jobId": late_acquire["jobId"],
+            "acquiredRevision": late_acquire["sourceRevision"],
+            "acquiredAt": late_acquire["createdAt"],
+        }
+    )
+    invalid_source["credentialLifecycle"]["activeLeaseCount"] = 3
+    invalid_source["updatedAt"] = "2026-09-02T09:24:00Z"
+    expect_error(
+        lambda: validate_source(invalid_source),
+        "enabled Source snapshot records lease acquisition after its state event",
+    )
+
+    invalid_source = copy.deepcopy(leased_source)
+    cancelled = invalid_source["activeLeases"].pop()
+    invalid_source["leaseEvents"].append(
+        {
+            "eventId": "levt_0000000000000993",
+            "sourceRevision": invalid_source["revision"],
+            "operation": "lease_force_cancelled",
+            "leaseId": cancelled["leaseId"],
+            "jobId": cancelled["jobId"],
+            "fromLeaseCount": 2,
+            "toLeaseCount": 1,
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-lifecycle",
+                "displayName": "数据源生命周期",
+            },
+            "ownerApproval": {
+                "approvedBy": {
+                    "kind": "user",
+                    "role": "owner",
+                    "id": "owner",
+                    "displayName": "本机 Owner",
+                },
+                "approvedAt": "2026-09-02T09:22:15Z",
+                "reason": "错误地在 drain 前批准取消",
+            },
+            "createdAt": "2026-09-02T09:22:30Z",
+            "reason": "错误地在 enabled 状态强制取消租约",
+        }
+    )
+    invalid_source["credentialLifecycle"]["activeLeaseCount"] = 1
+    expect_error(
+        lambda: validate_source(invalid_source),
+        "standalone Source snapshot force-cancels a lease before drain admission",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    effect = next(
+        item
+        for item in invalid["evidence"]
+        if item["kind"] == "effect_metric_comparison"
+    )
+    effect["payload"]["typed"].update(
+        {"baselineValue": float("nan"), "observedValue": float("nan")}
+    )
+    effect["payload"]["typedDigest"] = "sha256:" + "0" * 64
+    effect["summaryZh"] = contracts.render_evidence_summary(effect)
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "non-finite typed Evidence values enter canonical JSON and customer text",
     )
 
     if not hasattr(contracts, "validate_case_transition"):

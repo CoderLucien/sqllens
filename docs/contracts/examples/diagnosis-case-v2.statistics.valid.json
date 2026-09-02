@@ -96,7 +96,8 @@
           "actualRows": 180000,
           "statisticsFreshness": "predates_bulk_import"
         },
-        "typedDigest": "sha256:901c023a8ae7a8cbd51c20955d7a89379167a3516fc153325759fb7a3c7a7005"
+        "typedDigest": "sha256:901c023a8ae7a8cbd51c20955d7a89379167a3516fc153325759fb7a3c7a7005",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
         "collectorId": "tidb-readonly",
@@ -141,7 +142,8 @@
           "kind": "business_observation",
           "textZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。"
         },
-        "typedDigest": "sha256:9f8fed29af39b04836c529c238d3ef2ee6201d64bd72b407ce51fb53bd403c01"
+        "typedDigest": "sha256:9f8fed29af39b04836c529c238d3ef2ee6201d64bd72b407ce51fb53bd403c01",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
         "collectorId": "manual-input",
@@ -323,10 +325,10 @@
     }
   ],
   "pinnedRevisions": {
-    "rulePack": "tidb-8.5-rules/v1",
+    "rulePack": "tidb-8.5-rules/v2",
     "documentPack": "tidb-sql-tuning@2026-09-02",
     "parser": "sqlglot/mysql@30.17.0",
-    "policy": "diagnosis-policy/v2",
+    "policy": "diagnosis-policy/v3",
     "redaction": "evidence-redaction/v2",
     "provider": "openai-compatible/v1",
     "model": "gpt-5.6-sol",
@@ -335,5 +337,6 @@
     "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   },
   "createdAt": "2026-09-02T07:35:00Z",
-  "updatedAt": "2026-09-02T07:35:01Z"
+  "updatedAt": "2026-09-02T07:35:01Z",
+  "evidenceCompleteness": 100
 }

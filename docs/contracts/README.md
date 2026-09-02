@@ -29,24 +29,45 @@ Review fixtures:
 Validate the vNext drafts and their reference integrity with:
 
 ```bash
+python3 -m unittest discover -s docs/contracts -p 'test_*.py' -v
 python3 docs/contracts/validate_vnext_examples.py
 python3 docs/contracts/validate_vnext_negative_examples.py
 ```
 
 The positive validator checks all three Case/Report pairs, an explicit
-non-invoked AI abstention, one complete Source lease-drain chain, and one
-complete `validated_effective` transition. A report must be an exact projection
-of one Case revision for mode, conclusion, priority, business impact, evidence
-summary, rule/AI reasoning, ordered actions, uncertainty, and complete
-provenance. It cannot add an evidence ID, action, measurement, or business
-impact that the Case did not bind.
+non-invoked AI abstention, one complete Source lease-drain chain, and complete
+`validated_effective` and `rolled_back` transitions. A report must be an exact
+projection of one Case revision for mode, conclusion, priority, business
+impact, evidence summary, rule/AI reasoning, ordered actions, uncertainty, and
+complete provenance. It cannot add an evidence ID, action, measurement, or
+business impact that the Case did not bind.
+
+The executable domain policy is deliberately split into independently tested
+models instead of accumulating conditions in the fixture runner:
+
+- `vnext_canonical_json.py` owns the restricted RFC 8785/JCS digest profile;
+- `vnext_diagnosis_policy.py` owns versioned Evidence eligibility, typed
+  Evidence -> Fact extraction, rule predicates/templates, and derived level,
+  completeness, and uncertainty;
+- `vnext_outcome_policy.py` owns the singular authorized outcome tuple and its
+  causal/effect semantics;
+- `vnext_source_ledger.py` performs one full-history replay of Source state and
+  lease events.
 
 DiagnosisCase/v2 records both workflow and business-outcome transition events.
 A non-pending outcome requires `workflowState=ready` and exactly one first
 `pending -> terminal` outcome event whose own references contain the complete
 prerequisite chain; a later terminal self-transition cannot backfill it. Effect
 claims require an ordered approval -> implementation -> result-evidence ->
-terminal feedback -> outcome-event chain. The global event replay requires the
+terminal feedback -> outcome-event chain. The terminal event contains one
+structured tuple and its legacy ID arrays must be its exact projection; records
+from another tuple cannot collectively satisfy an outcome. Human approval is a
+user actor bound to a server-owned, digest-checked authorization snapshot.
+`validated_effective` requires a passed comparison whose server-owned metric
+code/unit and validation target are bound to the Action template; `rolled_back`
+additionally requires confirmed rollback for
+that same Action. Result Evidence must itself pass the Evidence eligibility
+policy. The global event replay requires the
 workflow to be ready, rejects records created after the event, and requires all
 evidence used by the frozen diagnosis to have been collected no later than the
 ready event and that Case revision's `updatedAt`. Prior/proposed Case validation
@@ -58,10 +79,15 @@ Source/v1 lifecycle validation treats a Source revision and credential revision
 as separate immutable identities. Admission pins both and acquires a lease.
 Rotation, disable, and delete stop new admission and enter `draining`; normal
 retirement waits for zero leases. The authoritative lease ledger starts with a
-runtime-emitted acquisition event and exposes an exact active `leaseId`/`jobId` snapshot;
-the numeric count is only a derived cross-check. Entering drain preserves that
-set. Each later normal release or forced cancellation names an acquired lease
-and job, removes exactly that identity, and appends an immutable lease event;
+runtime-emitted acquisition event and exposes an exact active `leaseId`/`jobId`
+snapshot; the numeric count is only a derived cross-check. Every loaded snapshot
+is replayed from revision 1 by one combined state/lease model before it may be
+used as a prior revision. Admission may occur only in an enabled
+`leases_updated` revision before its state snapshot; release/cancel events must
+belong to an allowed lease revision and also precede its state snapshot.
+Entering drain preserves the active set. Each later normal release or forced
+cancellation names an acquired lease and job, removes exactly that identity,
+and appends an immutable lease event;
 forced cancellation also binds a prior Owner approval. The Source state event
 cannot precede the lease events recorded by the same revision. Delete removes
 the usable credential and retains only a non-queryable metadata tombstone. Every
@@ -75,10 +101,13 @@ AI text, the customer-facing decision, and customer actions are not free-form
 persistence fields. The model may select only an allowlisted template and typed
 parameters. Decision parameters reference typed facts bound to exact evidence
 roles, kinds, schema revision, extraction revision, and typed payload fields;
-the validator verifies the canonical typed-payload digest and deterministic
-Evidence summary, rebuilds fact parameters from those fields, then re-renders
-the fact text and every customer-visible
-decision field (including priority and evidence summary), claim, and action and
+the validator verifies a canonical typed-payload digest, rebuilds fact
+parameters from those fields, then evaluates the database-version-selected rule
+pack. Predicate/threshold, status, severity, minimum evidence level, Chinese
+conclusion, evidence roles, and document references are one deterministic rule
+projection. Only a `hit` rule may support a Decision, Claim, or Action. The
+service then re-renders the fact and every customer-visible decision field
+(including priority and evidence summary), claim, action, and uncertainty and
 rejects any mismatch. Ratios and display-scale values are derived from typed raw
 measurements rather than accepted as independent parameters. An applied or
 failed/degraded invocation carries labeled
@@ -91,6 +120,21 @@ Chinese reason exactly.
 
 Standalone Evidence fixtures run the same observation/collection time, Source
 binding, digest, truncation, and budget semantics as Evidence embedded in a Case.
+
+Typed payload digests pin `rfc8785-safe-integer/v1`, a restricted RFC
+8785-compatible canonical form:
+object keys use UTF-16 ordering and measurements use integer base units within
+the IEEE-754 safe range. NaN, Infinity, fractional typed measurements, and
+language-dependent number rendering are rejected; strict JSON serialization
+uses `allow_nan=False`.
+
+Evidence qualification is not inferred from a valid digest alone. The pinned
+policy checks kind-specific freshness, coverage, collection completion,
+truncation, record count, and rows read for every required Fact/rule role.
+`evidenceLevel` is computed only from those supporting roles, so unrelated
+Evidence cannot raise the ceiling. `evidenceCompleteness` is the percentage of
+eligible required roles, and uncertainty text is a server-owned code/template
+projection rather than caller-authored prose.
 
 These fixtures are product-review baselines, not claims that the current
 runtime can generate them.

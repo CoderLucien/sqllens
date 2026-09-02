@@ -43,8 +43,7 @@
   ],
   "reasoning": {
     "ruleFindingsZh": [
-      "SQL 基线稳定，TiKV 热点和延迟在同一窗口共同异常。",
-      "没有检测到计划或扫描量退化，SQL 结构退化假设被冲突证据抑制。"
+      "SQL 基线稳定，TiKV 热点和延迟在同一窗口共同异常。"
     ],
     "aiContributionZh": "SQL、Prometheus 和 TEM 的时间窗关系支持优先调查 TiKV 热点，但相关性不等于已证明物理因果。",
     "aiStatus": "applied",
@@ -90,8 +89,7 @@
       "ev_0000000000000026"
     ],
     "ruleIds": [
-      "RUNTIME_HOTSPOT_001",
-      "SQL_REGRESSION_001"
+      "RUNTIME_HOTSPOT_001"
     ],
     "claimIds": [
       "claim_0000000000000021"
@@ -110,16 +108,17 @@
       "redactionRevision": "evidence-redaction/v2"
     },
     "pinnedRevisions": {
-      "rulePack": "tidb-8.5-rules/v1",
+      "rulePack": "tidb-8.5-rules/v2",
       "documentPack": "tidb-sql-tuning@2026-09-02",
       "parser": "sqlglot/mysql@30.17.0",
-      "policy": "diagnosis-policy/v2",
+      "policy": "diagnosis-policy/v3",
       "redaction": "evidence-redaction/v2",
       "provider": "openai-compatible/v1",
       "model": "gpt-5.6-sol",
       "prompt": "evidence-bound-synthesis/v1",
       "payload": "diagnosis-ai-payload/v1",
       "payloadDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    }
+    },
+    "evidenceCompleteness": 100
   }
 }

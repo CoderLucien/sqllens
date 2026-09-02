@@ -248,15 +248,31 @@ export. SQLLens never acknowledges, closes, silences, or modifies alerts.
 
 ### Evidence levels
 
-- **E0**: SQL structure only. No production root-cause claim.
-- **E1**: SQL + schema/index metadata.
-- **E2**: E1 + statistics + ordinary plan.
-- **E3**: E2 + runtime Statement/Slow Query evidence.
-- **E4**: E3 + correlated Prometheus/TEM evidence.
+- **E0**: no eligible diagnostic Evidence; no diagnosis may become ready.
+- **E1**: at least one eligible bounded observation, but no stronger registered
+  role set is complete.
+- **E2**: eligible SQL/Statement/Slow Query/schema/index/ordinary-plan Evidence
+  supports a bounded structural finding but not a full database rule chain.
+- **E3**: either eligible statistics Evidence or the registered Slow Query +
+  ordinary-plan + index role set supports a database diagnosis.
+- **E4**: the registered Statement Summary + runtime metric + alert role set is
+  fresh and complete for one correlated window.
+
+Eligibility is versioned policy, not a caller flag. Each required role checks
+kind, freshness, minimum coverage, collection completion, truncation, record
+count, and rows read. `evidenceLevel` is derived only from Evidence bound to the
+typed Fact; unrelated Evidence cannot raise it. `evidenceCompleteness` is the
+percentage of that Fact's required roles that are eligible, and uncertainty is
+rendered from server-owned codes for missing or degraded roles.
 
 Rules declare minimum evidence level, supported product/version range, required
 fields, incompatible conditions, confidence ceiling, recommended action
 template, validation, rollback, and official references.
+
+The pinned database version selects one immutable rule-pack revision. For each
+rule, its predicate/threshold, status, severity, conclusion template, Evidence
+roles and document references are evaluated and rendered together. Only a
+`hit` rule can support a Decision, AI Claim, or Action.
 
 The first rule pack is derived from the official SQL tuning documentation,
 including SQL tuning overview, execution plan interpretation, indexes,
@@ -304,6 +320,11 @@ integrity, observation/collection time, freshness, coverage, sensitivity,
 collector/query/redaction revisions, and timeout/row/byte budget consumption.
 Large or sensitive payloads remain behind a storage reference.
 
+Typed payload digests pin `rfc8785-safe-integer/v1`, a restricted RFC 8785/JCS
+profile with integer base-unit measurements in the IEEE-754 safe range; NaN, Infinity,
+fractional typed measurements, and implementation-dependent number rendering
+fail closed.
+
 ### DiagnosisCase/v2
 
 Raw evidence, derived facts, rule findings, AI contribution, actions,
@@ -314,8 +335,13 @@ derived ratios and display values are reconstructed from raw fact measurements;
 facts and every customer-visible decision/claim/action field are deterministic
 renderings of server-owned templates. All diagnosis evidence is collected no
 later than the ready event and Case revision `updatedAt`. The first
-`pending -> terminal` event carries its complete review/feedback/action/evidence
-chain; a later self-transition cannot backfill it. Provider, model, prompt,
+`pending -> terminal` event carries one singular
+Action/approval/implementation/result/terminal-feedback tuple; its legacy ID
+arrays are an exact projection and a later self-transition cannot backfill it.
+Approval is a user actor bound to a server-owned, digest-checked authorization
+snapshot. Effect and rollback Evidence must pass eligibility; its server-owned
+metric code/unit and validation target are bound to the same Action template.
+Provider, model, prompt,
 redacted-payload, payload digest, rule pack, parser, redaction, source, and
 document revisions are pinned with field labels.
 

@@ -27,6 +27,15 @@ the authority for facts and safety. They produce:
 - an evidence ceiling and uncertainty list;
 - an allowlisted set of action templates.
 
+The pinned database version selects one versioned rule pack. A rule pack owns
+its Evidence roles, eligibility requirements, predicate/threshold, hit/miss or
+conflict state, severity, minimum evidence level, Chinese conclusion, and
+document references as one deterministic projection. Only a `hit` rule may
+support a Decision, Claim, or Action. `evidenceLevel`, completeness, and
+uncertainty are computed from eligible Evidence used by the typed Fact; they
+are not writable model or client assertions, and unrelated Evidence cannot
+raise the ceiling.
+
 The model receives only an allowlisted, redacted structured payload. It may
 return template IDs, typed parameters, and existing evidence/rule IDs. It does
 not return persisted customer-facing prose or executable steps. Numeric and
@@ -54,6 +63,12 @@ rendered fact/decision/claim/action fields, unknown action families, new
 measurements, new object names, unsupported confidence, extra fields, unsafe
 verbs, and output above the evidence ceiling. Invalid, unavailable, timed-out,
 or oversized output degrades to a deterministic Chinese rules report.
+
+Typed Evidence digests pin `rfc8785-safe-integer/v1`, a restricted RFC
+8785-compatible canonical JSON profile: keys use JCS ordering and measurements
+use integer base units in the IEEE-754 safe range. Non-finite or fractional
+typed measurements are rejected. This revision is part of the Evidence
+envelope, not an implementation-specific JSON encoder default.
 
 AI state is explicit. `applied` means a validated invocation contributed at
 least one claim. `degraded` means an invocation was attempted and failed and

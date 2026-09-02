@@ -57,8 +57,7 @@
       "ev_0000000000000026"
     ],
     "ruleIds": [
-      "RUNTIME_HOTSPOT_001",
-      "SQL_REGRESSION_001"
+      "RUNTIME_HOTSPOT_001"
     ],
     "claimIds": [
       "claim_0000000000000021"
@@ -120,7 +119,8 @@
           "kind": "statement_summary",
           "sqlStability": "plan_and_scan_stable"
         },
-        "typedDigest": "sha256:7817af357dcf3e0a09b24701c1552264f27d81904cd365af474a49e5f331e620"
+        "typedDigest": "sha256:7817af357dcf3e0a09b24701c1552264f27d81904cd365af474a49e5f331e620",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
         "collectorId": "tidb-readonly",
@@ -168,7 +168,8 @@
           "kind": "runtime_metric",
           "resourceCorrelation": "same_window_elevated"
         },
-        "typedDigest": "sha256:72692466022c08eb3032db30e47e7a59d2fd1c3f717cabeedf1e2129b24c8977"
+        "typedDigest": "sha256:72692466022c08eb3032db30e47e7a59d2fd1c3f717cabeedf1e2129b24c8977",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
         "collectorId": "prometheus-readonly",
@@ -216,7 +217,8 @@
           "kind": "alert",
           "alertScope": "cluster_component_window_match"
         },
-        "typedDigest": "sha256:9d429a8e4c860675f81648949e79c5f1f6e0d93491dc5e1f29b35a08476ed09b"
+        "typedDigest": "sha256:9d429a8e4c860675f81648949e79c5f1f6e0d93491dc5e1f29b35a08476ed09b",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
         "collectorId": "tem-readonly",
@@ -261,7 +263,8 @@
           "kind": "business_observation",
           "textZh": "支付确认接口错误率升至 2.1%，P99 达 6.4 秒，影响线上交易。"
         },
-        "typedDigest": "sha256:e809b3520fdb5305dd597f6caa0be21af47ff2c747fde3bf198cea96c00575e3"
+        "typedDigest": "sha256:e809b3520fdb5305dd597f6caa0be21af47ff2c747fde3bf198cea96c00575e3",
+        "canonicalRevision": "rfc8785-safe-integer/v1"
       },
       "collection": {
         "collectorId": "manual-input",
@@ -363,8 +366,7 @@
           "ev_0000000000000025"
         ],
         "ruleIds": [
-          "RUNTIME_HOTSPOT_001",
-          "SQL_REGRESSION_001"
+          "RUNTIME_HOTSPOT_001"
         ]
       }
     ]
@@ -404,8 +406,7 @@
         "ev_0000000000000025"
       ],
       "ruleIds": [
-        "RUNTIME_HOTSPOT_001",
-        "SQL_REGRESSION_001"
+        "RUNTIME_HOTSPOT_001"
       ],
       "requiresHumanApproval": true
     }
@@ -487,10 +488,10 @@
     }
   ],
   "pinnedRevisions": {
-    "rulePack": "tidb-8.5-rules/v1",
+    "rulePack": "tidb-8.5-rules/v2",
     "documentPack": "tidb-sql-tuning@2026-09-02",
     "parser": "sqlglot/mysql@30.17.0",
-    "policy": "diagnosis-policy/v2",
+    "policy": "diagnosis-policy/v3",
     "redaction": "evidence-redaction/v2",
     "provider": "openai-compatible/v1",
     "model": "gpt-5.6-sol",
@@ -499,5 +500,6 @@
     "payloadDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
   "createdAt": "2026-09-02T06:16:00Z",
-  "updatedAt": "2026-09-02T06:16:02Z"
+  "updatedAt": "2026-09-02T06:16:02Z",
+  "evidenceCompleteness": 100
 }

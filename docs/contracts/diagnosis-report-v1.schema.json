@@ -165,6 +165,7 @@
       "additionalProperties": false,
       "required": [
         "evidenceLevel",
+        "evidenceCompleteness",
         "evidenceIds",
         "ruleIds",
         "claimIds",
@@ -174,6 +175,7 @@
       ],
       "properties": {
         "evidenceLevel": { "enum": ["E0", "E1", "E2", "E3", "E4"] },
+        "evidenceCompleteness": { "type": "integer", "minimum": 0, "maximum": 100 },
         "evidenceIds": {
           "type": "array",
           "uniqueItems": true,
