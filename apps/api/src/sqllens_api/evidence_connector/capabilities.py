@@ -87,9 +87,7 @@ def capability_matrix(pack_id: str) -> Mapping[str, CapabilityDefinition]:
     definitions = _CAPABILITY_MATRICES.get(pack_id)
     if definitions is None:
         raise UnsupportedVersionPackError(f"unsupported version pack: {pack_id}")
-    return MappingProxyType(
-        {definition.capability_id: definition for definition in definitions}
-    )
+    return MappingProxyType({definition.capability_id: definition for definition in definitions})
 
 
 def evaluate_capabilities(
@@ -126,16 +124,12 @@ def evaluate_capabilities(
         and outcome.state is ProbeState.DENIED
     )
     process_state = next(
-        outcome.state
-        for outcome in outcomes
-        if outcome.definition.capability_id == "process"
+        outcome.state for outcome in outcomes if outcome.definition.capability_id == "process"
     )
     return CapabilityEvaluation(
         pack_id=pack_id,
         source_usable=not denied_required and not unverified_required,
-        discovery_scope=(
-            "cross_user" if process_state is ProbeState.AVAILABLE else "current_user"
-        ),
+        discovery_scope=("cross_user" if process_state is ProbeState.AVAILABLE else "current_user"),
         outcomes=outcomes,
         denied_required=denied_required,
         unverified_required=unverified_required,

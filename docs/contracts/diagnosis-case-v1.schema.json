@@ -115,7 +115,6 @@
       ],
       "properties": {
         "ruleSet": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "parser": { "type": "string", "minLength": 1, "maxLength": 128 },
         "policy": { "type": "string", "minLength": 1, "maxLength": 128 },
         "redaction": { "type": "string", "minLength": 1, "maxLength": 128 },
         "provider": { "type": ["string", "null"], "maxLength": 128 },

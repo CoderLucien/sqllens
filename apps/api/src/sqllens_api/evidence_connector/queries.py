@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -52,7 +52,7 @@ class ServerQuery:
     pack_revision: str
     query_id: str
     query_revision: str
-    sql: str
+    sql: str = field(repr=False)
     parameters: tuple[str, ...]
     result_columns: tuple[str, ...]
     required_capability: str | None
@@ -382,9 +382,7 @@ LIMIT 200
 def _slow_query_sql(table: str, *, current_user_only: bool) -> str:
     instance_projection = "    instance,\n" if table == "cluster_slow_query" else ""
     current_user_predicate = (
-        "  AND user = SUBSTRING_INDEX(CURRENT_USER(), '@', 1)\n"
-        if current_user_only
-        else ""
+        "  AND user = SUBSTRING_INDEX(CURRENT_USER(), '@', 1)\n" if current_user_only else ""
     )
     return f"""\
 SELECT

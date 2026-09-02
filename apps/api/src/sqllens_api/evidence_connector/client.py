@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from sqllens_api.evidence_connector.queries import ServerQuery
@@ -12,7 +12,7 @@ type QueryValue = str | int | float | bool | None
 @dataclass(frozen=True, slots=True)
 class QueryResult:
     columns: tuple[str, ...]
-    rows: tuple[Mapping[str, QueryValue], ...]
+    rows: tuple[Mapping[str, QueryValue], ...] = field(repr=False)
     truncated: bool
     observed_bytes: int
     elapsed_ms: int

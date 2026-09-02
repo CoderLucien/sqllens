@@ -65,13 +65,25 @@ def test_query_result_records_elapsed_budget_usage() -> None:
     assert result.elapsed_ms == 4
 
 
+def test_query_and_result_repr_do_not_expose_sql_or_raw_rows() -> None:
+    query = query_pack("tidb-8.5")["slow_query.current_user"]
+    result = QueryResult(
+        columns=("schema_name",),
+        rows=({"schema_name": "confidential_schema"},),
+        truncated=False,
+        observed_bytes=32,
+        elapsed_ms=4,
+    )
+
+    assert "information_schema.slow_query" not in repr(query)
+    assert "confidential_schema" not in repr(result)
+
+
 @pytest.mark.parametrize("pack_id", ["tidb-8.5", "pingkaidb-7.1"])
 def test_slow_query_registry_collects_result_rows(pack_id: str) -> None:
     queries = query_pack(pack_id)
 
-    assert queries["slow_query.current_user"].pack_revision == (
-        f"{pack_id}/queries-v2"
-    )
+    assert queries["slow_query.current_user"].pack_revision == (f"{pack_id}/queries-v2")
     assert queries["slow_query.current_user"].query_revision == (
         f"{pack_id}/slow_query.current_user-v2"
     )

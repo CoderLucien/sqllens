@@ -1,3 +1,11 @@
+from sqllens_api.evidence_connector.canonical import (
+    MAX_SAFE_INTEGER,
+    JsonValue,
+    canonical_json_bytes,
+    canonical_sha256,
+    strict_json_bytes,
+    strict_json_loads,
+)
 from sqllens_api.evidence_connector.capabilities import (
     CapabilityClass,
     CapabilityDefinition,
@@ -12,6 +20,16 @@ from sqllens_api.evidence_connector.client import (
     QueryResult,
     QueryValue,
     ReadOnlyQueryClient,
+)
+from sqllens_api.evidence_connector.evidence import (
+    CANONICAL_REVISION,
+    COLLECTOR_REVISION,
+    EXTRACTION_REVISION,
+    CollectedEvidence,
+    EvidenceBuildError,
+    EvidenceFreshness,
+    ManagedEvidenceContext,
+    build_managed_evidence,
 )
 from sqllens_api.evidence_connector.queries import (
     QueryBudget,
@@ -32,13 +50,22 @@ from sqllens_api.evidence_connector.versioning import (
 )
 
 __all__ = [
+    "CANONICAL_REVISION",
+    "COLLECTOR_REVISION",
+    "EXTRACTION_REVISION",
+    "MAX_SAFE_INTEGER",
     "CapabilityClass",
     "CapabilityDefinition",
     "CapabilityEvaluation",
     "CapabilityOutcome",
+    "CollectedEvidence",
     "DatabaseProduct",
     "DetectedDatabaseVersion",
     "DetectionStatus",
+    "EvidenceBuildError",
+    "EvidenceFreshness",
+    "JsonValue",
+    "ManagedEvidenceContext",
     "ProbeState",
     "QueryBudget",
     "QueryCardinality",
@@ -51,9 +78,14 @@ __all__ = [
     "UnsafeServerQueryError",
     "UnsupportedVersionPackError",
     "VersionFingerprint",
+    "build_managed_evidence",
+    "canonical_json_bytes",
+    "canonical_sha256",
     "capability_matrix",
     "detect_database_version",
     "evaluate_capabilities",
     "query_pack",
+    "strict_json_bytes",
+    "strict_json_loads",
     "validate_server_query",
 ]

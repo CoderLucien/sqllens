@@ -183,10 +183,6 @@ Report rules above.
 
 `diagnosis-case-v1.schema.json` defines the serializable P0 case envelope.
 
-New SQL-layer cases include the optional `pinnedRevisions.parser` field. It
-pins the exact parser, dialect, and version used for statement classification;
-the field remains optional in v1 so previously frozen cases stay valid.
-
 The examples serve different assertions:
 
 - `examples/diagnosis-case-v1.valid.json` must validate.

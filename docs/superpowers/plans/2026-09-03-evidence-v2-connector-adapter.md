@@ -83,7 +83,7 @@ Expected: `44 passed`.
 - Produces: `QueryResult.elapsed_ms`, the existing `observed_bytes`, and Slow
   Query rows containing official `result_rows` metadata.
 
-- [ ] **Step 1: Add failing query/result contract tests**
+- [x] **Step 1: Add failing query/result contract tests**
 
 ```python
 def test_query_result_records_elapsed_budget_usage() -> None:
@@ -103,26 +103,26 @@ def test_slow_query_registry_collects_result_rows() -> None:
         assert query.query_revision.endswith("-v2")
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `.venv/bin/python -m pytest -q tests/api/test_evidence_connector_queries.py`
 
 Expected: failures because `QueryResult` has no `elapsed_ms` and the query does
 not project `result_rows`.
 
-- [ ] **Step 3: Add elapsed usage and bump immutable query revisions**
+- [x] **Step 3: Add elapsed usage and bump immutable query revisions**
 
 Add required `elapsed_ms: int` to `QueryResult`. Add `result_rows` to both Slow
 Query projections, advance each changed Slow Query revision to `v2`, and
 advance the containing pack revision to `queries-v2` while preserving unchanged
 query revisions at `v1`.
 
-- [ ] **Step 4: Update documentation-derived recordings**
+- [x] **Step 4: Update documentation-derived recordings**
 
 Add integer `result_rows` values and update fixture revisions to `connector-v2`.
 Do not add query text, SQL literals, credentials, hostnames, or customer data.
 
-- [ ] **Step 5: Run GREEN and focused static gates**
+- [x] **Step 5: Run GREEN and focused static gates**
 
 Run: `.venv/bin/python -m pytest -q tests/api/test_evidence_connector_queries.py`
 
@@ -145,7 +145,7 @@ Run: `.venv/bin/python -m mypy apps/api/src/sqllens_api/evidence_connector`
 - Produces: `CollectedEvidence(document, storage_payload)` through
   `build_managed_evidence(query, result, context)`.
 
-- [ ] **Step 1: Write canonical and envelope RED tests**
+- [x] **Step 1: Write canonical and envelope RED tests**
 
 Tests must assert:
 
@@ -173,27 +173,27 @@ Also assert identity is duplicated exactly into the typed payload, raw rows are
 absent from the envelope, and `payload.digest` equals the SHA-256 digest of the
 returned storage payload.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `.venv/bin/python -m pytest -q tests/api/test_evidence_connector_evidence.py`
 
 Expected: collection fails because the canonical and Evidence adapter modules
 do not exist.
 
-- [ ] **Step 3: Implement restricted canonical JSON**
+- [x] **Step 3: Implement restricted canonical JSON**
 
 Implement the frozen `rfc8785-safe-integer/v1` profile: UTF-16 object-key
 ordering, strict JSON strings, finite values only, integer typed measurements
 inside the IEEE-754 safe range, and SHA-256 with the `sha256:` prefix. Keep this
 module independent of the documentation validator.
 
-- [ ] **Step 4: Implement the managed collection context and result boundary**
+- [x] **Step 4: Implement the managed collection context and result boundary**
 
 Validate every ID and timestamp against Evidence/v2, require a whole-minute
 window in `[1, 1440]`, require coverage basis points in `[0, 10000]`, validate
 the exact result columns and row keys, and reject over-budget results.
 
-- [ ] **Step 5: Implement Slow Query typed extraction**
+- [x] **Step 5: Implement Slow Query typed extraction**
 
 Use the official Slow Query metadata only: nearest-rank P95 of `query_time`
 converted from seconds to integer milliseconds, rounded integer averages of
@@ -201,7 +201,7 @@ converted from seconds to integer milliseconds, rounded integer averages of
 Boolean, non-finite, fractional row-count, out-of-window, cross-schema, or
 cross-digest values rather than coercing them.
 
-- [ ] **Step 6: Implement conservative Statement Summary extraction**
+- [x] **Step 6: Implement conservative Statement Summary extraction**
 
 Emit `unknown` unless at least two complete comparison windows make an exact
 plan/scan classification possible. Exact plan-digest difference emits
@@ -209,7 +209,7 @@ plan/scan classification possible. Exact plan-digest difference emits
 keys emits `plan_and_scan_stable`; other scan differences remain `unknown`
 because the frozen contract defines no connector-side regression threshold.
 
-- [ ] **Step 7: Render contract-owned summaries and envelope metadata**
+- [x] **Step 7: Render contract-owned summaries and envelope metadata**
 
 Use `slow-query/v2` or `statement-summary/v2`,
 `evidence-extractor/v1`, `rfc8785-safe-integer/v1`,
@@ -217,7 +217,7 @@ Use `slow-query/v2` or `statement-summary/v2`,
 Derive truncation from the client flag or row/byte saturation, and mirror it in
 both payload and collection status.
 
-- [ ] **Step 8: Run GREEN and adversarial tests**
+- [x] **Step 8: Run GREEN and adversarial tests**
 
 Run: `.venv/bin/python -m pytest -q tests/api/test_evidence_connector_evidence.py`
 
@@ -236,17 +236,17 @@ numeric types.
 - Consumes: generated `CollectedEvidence.document` records.
 - Produces: unit-test and frozen semantic-validator evidence for the handoff.
 
-- [ ] **Step 1: Add recorded-fixture compatibility tests**
+- [x] **Step 1: Add recorded-fixture compatibility tests**
 
 For both supported packs, load the `runtimeVerified=false` Slow Query recording,
 build an Evidence document, and assert exact field sets, schema revisions,
 deterministic summaries/digests, Source revision, and budget usage.
 
-- [ ] **Step 2: Run all connector tests**
+- [x] **Step 2: Run all connector tests**
 
 Run: `.venv/bin/python -m pytest -q tests/api/test_evidence_connector_*.py`
 
-- [ ] **Step 3: Run the API regression and static suites**
+- [x] **Step 3: Run the API regression and static suites**
 
 Run: `.venv/bin/python -m pytest -q tests/api`
 
@@ -256,7 +256,7 @@ Run: `.venv/bin/python -m ruff check apps/api/src tests/api`
 
 Run: `.venv/bin/python -m mypy apps/api/src`
 
-- [ ] **Step 4: Run frozen contract validation without editing it**
+- [x] **Step 4: Run frozen contract validation without editing it**
 
 Run: `python3 docs/contracts/validate_vnext_examples.py`
 
@@ -265,19 +265,22 @@ Run: `python3 docs/contracts/validate_vnext_negative_examples.py`
 Expected: frozen positive fixtures pass and all frozen adversarial examples are
 rejected.
 
-- [ ] **Step 5: Review scope and sensitive data**
+- [x] **Step 5: Review scope and sensitive data**
 
-Run: `git diff --check b5795e6..HEAD`
+Run: `git diff --check 60ba008..HEAD`
 
-Run: `git diff --stat b5795e6..HEAD`
+Run: `git diff --stat 60ba008..HEAD`
 
-Run: `git diff b5795e6..HEAD -- tests/fixtures/evidence_connector | rg -n -i 'password|api[_-]?key|access[_-]?token|query_sample_text|digest_text|select |insert |update |delete '`
+Run: `git diff --quiet b5795e6 -- docs/contracts`
+
+Run: `git diff 60ba008..HEAD -- tests/fixtures/evidence_connector | rg -n -i 'password|api[_-]?key|access[_-]?token|query_sample_text|digest_text|select |insert |update |delete '`
 
 Expected: no sensitive or SQL-literal additions.
 
 - [ ] **Step 6: Commit, push, checkpoint, and request review**
 
-Create one behavior commit after the baseline merge, push
+Create the remaining adapter behavior commit after the existing budget-audit
+commit, push
 `feature/vnext-evidence-connector`, checkpoint #t19 with exact evidence and
 `runtimeVerified=false`, and request #t23 review only the connector diff. Do not
 start #t18 integration, QA, deployment, or release work.
