@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "schemaVersion", "sourceId", "revision", "type", "name", "state",
-    "product", "version", "endpoint", "auth", "credentialLifecycle",
+    "product", "version", "endpoint", "auth", "credentialLifecycle", "activeLeases",
     "associatedSourceIds", "allowedSchemas", "capabilities", "budgets",
     "owner", "verification", "transitionEvents", "leaseEvents", "createdAt", "updatedAt"
   ],
@@ -55,9 +55,13 @@
       "properties": {
         "state": { "enum": ["none", "active", "rotating", "retiring", "tombstoned"] },
         "activeLeaseCount": { "type": "integer", "minimum": 0, "maximum": 1024 },
-        "pendingOperation": { "type": ["string", "null"], "enum": [null, "rotate", "disable", "delete"] },
+        "pendingOperation": { "type": ["string", "null"], "enum": [null, "rotate", "disable", "delete", "verification_failure"] },
         "retireAfter": { "type": ["string", "null"], "format": "date-time" }
       }
+    },
+    "activeLeases": {
+      "type": "array", "maxItems": 1024,
+      "items": { "$ref": "#/$defs/activeLease" }
     },
     "associatedSourceIds": {
       "type": "array", "uniqueItems": true, "maxItems": 32,
@@ -270,7 +274,7 @@
       "if": { "properties": { "state": { "const": "draining" } }, "required": ["state"] },
       "then": {
         "properties": {
-          "credentialLifecycle": { "properties": { "state": { "enum": ["rotating", "retiring"] }, "pendingOperation": { "enum": ["rotate", "disable", "delete"] } } }
+          "credentialLifecycle": { "properties": { "state": { "enum": ["active", "rotating", "retiring"] }, "pendingOperation": { "enum": ["rotate", "disable", "delete", "verification_failure"] } } }
         }
       }
     },
@@ -308,7 +312,7 @@
     },
     {
       "if": { "properties": { "verification": { "properties": { "status": { "const": "failed" } }, "required": ["status"] } }, "required": ["verification"] },
-      "then": { "properties": { "state": { "const": "verification_failed" } } }
+      "then": { "properties": { "state": { "enum": ["draining", "verification_failed"] } } }
     },
     {
       "if": { "properties": { "credentialLifecycle": { "properties": { "state": { "const": "tombstoned" } }, "required": ["state"] } }, "required": ["credentialLifecycle"] },
@@ -336,7 +340,11 @@
       "then": { "properties": { "credentialLifecycle": { "properties": { "state": { "const": "retiring" } } } } }
     },
     {
-      "if": { "properties": { "credentialLifecycle": { "properties": { "state": { "enum": ["none", "active", "tombstoned"] } }, "required": ["state"] } }, "required": ["credentialLifecycle"] },
+      "if": { "properties": { "credentialLifecycle": { "properties": { "pendingOperation": { "const": "verification_failure" } }, "required": ["pendingOperation"] } }, "required": ["credentialLifecycle"] },
+      "then": { "properties": { "credentialLifecycle": { "properties": { "state": { "const": "active" }, "retireAfter": { "type": "null" } } } } }
+    },
+    {
+      "if": { "properties": { "credentialLifecycle": { "properties": { "state": { "enum": ["none", "tombstoned"] } }, "required": ["state"] } }, "required": ["credentialLifecycle"] },
       "then": {
         "properties": {
           "credentialLifecycle": {
@@ -355,6 +363,16 @@
     }
   ],
   "$defs": {
+    "activeLease": {
+      "type": "object", "additionalProperties": false,
+      "required": ["leaseId", "jobId", "acquiredRevision", "acquiredAt"],
+      "properties": {
+        "leaseId": { "type": "string", "pattern": "^lease_[a-z0-9]{16,64}$" },
+        "jobId": { "type": "string", "pattern": "^job_[a-z0-9]{16,64}$" },
+        "acquiredRevision": { "type": "integer", "minimum": 1 },
+        "acquiredAt": { "type": "string", "format": "date-time" }
+      }
+    },
     "actor": {
       "type": "object", "additionalProperties": false,
       "required": ["kind", "role", "id", "displayName"],
@@ -382,7 +400,7 @@
         "eventId": { "type": "string", "pattern": "^sevt_[a-z0-9]{16,64}$" },
         "sourceRevision": { "type": "integer", "minimum": 1 },
         "type": { "const": "source_state" },
-        "operation": { "enum": ["registered", "verified", "enabled", "edited", "rotation_started", "rotation_completed", "disable_started", "disabled", "delete_started", "leases_drained", "tombstoned", "verification_failed"] },
+        "operation": { "enum": ["registered", "verified", "enabled", "edited", "leases_updated", "rotation_started", "rotation_completed", "disable_started", "disabled", "delete_started", "leases_drained", "tombstoned", "verification_failure_started", "verification_failed"] },
         "fromState": { "enum": [null, "draft", "enabled", "disabled", "draining", "verification_failed", "tombstoned"] },
         "toState": { "enum": ["draft", "enabled", "disabled", "draining", "verification_failed", "tombstoned"] },
         "credentialRevision": { "type": ["integer", "null"], "minimum": 1 },
@@ -411,11 +429,11 @@
       "properties": {
         "eventId": { "type": "string", "pattern": "^levt_[a-z0-9]{16,64}$" },
         "sourceRevision": { "type": "integer", "minimum": 1 },
-        "operation": { "enum": ["lease_released", "lease_force_cancelled"] },
+        "operation": { "enum": ["lease_acquired", "lease_released", "lease_force_cancelled"] },
         "leaseId": { "type": "string", "pattern": "^lease_[a-z0-9]{16,64}$" },
         "jobId": { "type": "string", "pattern": "^job_[a-z0-9]{16,64}$" },
-        "fromLeaseCount": { "type": "integer", "minimum": 1, "maximum": 1024 },
-        "toLeaseCount": { "type": "integer", "minimum": 0, "maximum": 1023 },
+        "fromLeaseCount": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "toLeaseCount": { "type": "integer", "minimum": 0, "maximum": 1024 },
         "actor": { "$ref": "#/$defs/actor" },
         "ownerApproval": {
           "oneOf": [
@@ -427,6 +445,10 @@
         "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
       },
       "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "lease_acquired" } }, "required": ["operation"] },
+          "then": { "properties": { "ownerApproval": { "type": "null" } } }
+        },
         {
           "if": { "properties": { "operation": { "const": "lease_released" } }, "required": ["operation"] },
           "then": { "properties": { "ownerApproval": { "type": "null" } } }

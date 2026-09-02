@@ -14,18 +14,24 @@
     "sqlDigest": "digest:3ac8...e112",
     "timeWindowZh": "2026-09-02 15:20-15:35 CST",
     "businessZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。",
-    "businessEvidenceIds": ["ev_0000000000000014"]
+    "businessEvidenceIds": [
+      "ev_0000000000000014"
+    ]
   },
   "evidenceSummary": [
     {
       "labelZh": "估算偏差",
       "valueZh": "estRows 120，运行时 rows 180000，偏差约 1500 倍",
-      "evidenceIds": ["ev_0000000000000011"]
+      "evidenceIds": [
+        "ev_0000000000000011"
+      ]
     },
     {
       "labelZh": "统计健康",
       "valueZh": "目标表统计更新时间早于最近一次大批量导入",
-      "evidenceIds": ["ev_0000000000000011"]
+      "evidenceIds": [
+        "ev_0000000000000011"
+      ]
     }
   ],
   "reasoning": {
@@ -33,8 +39,9 @@
       "估算/实际行数偏差超过版本规则阈值，且统计早于数据变更。"
     ],
     "aiContributionZh": null,
-    "degradationCode": "MODEL_TIMEOUT",
-    "degradationZh": "外部模型超时，本报告使用确定性规则生成；事实、动作和证据不受影响。"
+    "aiStatus": "degraded",
+    "aiCode": "MODEL_TIMEOUT",
+    "aiReasonZh": "外部模型超时，本报告使用确定性规则生成；事实、动作和证据不受影响。"
   },
   "actions": [
     {
@@ -72,9 +79,13 @@
       "ev_0000000000000011",
       "ev_0000000000000014"
     ],
-    "ruleIds": ["STATS_ESTIMATION_001"],
+    "ruleIds": [
+      "STATS_ESTIMATION_001"
+    ],
     "claimIds": [],
-    "sourceRevisions": ["src_0000000000000011@2"],
+    "sourceRevisions": [
+      "src_0000000000000011@2"
+    ],
     "aiInvocation": {
       "providerRevision": "openai-compatible/v1",
       "modelRevision": "gpt-5.6-sol",

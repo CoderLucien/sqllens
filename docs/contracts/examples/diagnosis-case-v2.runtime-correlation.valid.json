@@ -14,7 +14,9 @@
     "sqlDigest": "digest:9bd1...42f0",
     "timeWindowZh": "2026-09-02 14:03-14:16 CST",
     "businessZh": "支付确认接口错误率升至 2.1%，P99 达 6.4 秒，影响线上交易。",
-    "businessEvidenceIds": ["ev_0000000000000026"]
+    "businessEvidenceIds": [
+      "ev_0000000000000026"
+    ]
   },
   "decision": {
     "templateId": "decision.runtime_hotspot",
@@ -29,17 +31,23 @@
       {
         "labelZh": "SQL 稳定性",
         "valueZh": "计划摘要、扫描行数和调用量与前一基线窗口接近",
-        "evidenceIds": ["ev_0000000000000021"]
+        "evidenceIds": [
+          "ev_0000000000000021"
+        ]
       },
       {
         "labelZh": "资源相关性",
         "valueZh": "同一时间窗 TiKV 请求延迟和 Region 热点指标显著升高",
-        "evidenceIds": ["ev_0000000000000023"]
+        "evidenceIds": [
+          "ev_0000000000000023"
+        ]
       },
       {
         "labelZh": "告警关联",
         "valueZh": "TEM 告警的集群、组件与异常时间窗匹配",
-        "evidenceIds": ["ev_0000000000000025"]
+        "evidenceIds": [
+          "ev_0000000000000025"
+        ]
       }
     ],
     "evidenceIds": [
@@ -48,9 +56,16 @@
       "ev_0000000000000025",
       "ev_0000000000000026"
     ],
-    "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"],
-    "claimIds": ["claim_0000000000000021"],
-    "actionIds": ["act_0000000000000021"]
+    "ruleIds": [
+      "RUNTIME_HOTSPOT_001",
+      "SQL_REGRESSION_001"
+    ],
+    "claimIds": [
+      "claim_0000000000000021"
+    ],
+    "actionIds": [
+      "act_0000000000000021"
+    ]
   },
   "sourceSnapshots": [
     {
@@ -83,20 +98,29 @@
       "caseId": "case_0000000000000004",
       "origin": "managed_source",
       "kind": "statement_summary",
-      "sourceRef": {"sourceId": "src_0000000000000021", "revision": 4},
+      "sourceRef": {
+        "sourceId": "src_0000000000000021",
+        "revision": 4
+      },
       "observedAt": "2026-09-02T06:03:00Z",
       "collectedAt": "2026-09-02T06:16:00Z",
       "freshness": "fresh",
       "coverage": 0.98,
       "sensitivity": "confidential",
       "integrityDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "summaryZh": "SQL 计划摘要、扫描行数和调用量与前一基线窗口接近。",
+      "summaryZh": "SQL 计划摘要和扫描行数与前一基线窗口接近。",
       "payload": {
         "schemaRevision": "statement-summary/v1",
         "storageRef": "payload_0000000000000021",
         "recordCount": 2,
         "truncated": false,
-        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "statement_summary",
+          "sqlStability": "plan_and_scan_stable"
+        },
+        "typedDigest": "sha256:7817af357dcf3e0a09b24701c1552264f27d81904cd365af474a49e5f331e620"
       },
       "collection": {
         "collectorId": "tidb-readonly",
@@ -105,7 +129,14 @@
         "queryRevision": "tidb-8.5/v1",
         "status": "complete",
         "redactionRevision": "evidence-redaction/v2",
-        "budget": {"timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 75, "rowsRead": 2, "bytesRead": 4096}
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 75,
+          "rowsRead": 2,
+          "bytesRead": 4096
+        }
       }
     },
     {
@@ -115,7 +146,10 @@
       "caseId": "case_0000000000000004",
       "origin": "managed_source",
       "kind": "runtime_metric",
-      "sourceRef": {"sourceId": "src_0000000000000022", "revision": 2},
+      "sourceRef": {
+        "sourceId": "src_0000000000000022",
+        "revision": 2
+      },
       "observedAt": "2026-09-02T06:03:00Z",
       "collectedAt": "2026-09-02T06:16:00Z",
       "freshness": "fresh",
@@ -128,7 +162,13 @@
         "storageRef": "payload_0000000000000023",
         "recordCount": 26,
         "truncated": false,
-        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "runtime_metric",
+          "resourceCorrelation": "same_window_elevated"
+        },
+        "typedDigest": "sha256:72692466022c08eb3032db30e47e7a59d2fd1c3f717cabeedf1e2129b24c8977"
       },
       "collection": {
         "collectorId": "prometheus-readonly",
@@ -137,7 +177,14 @@
         "queryRevision": "prometheus/v1",
         "status": "complete",
         "redactionRevision": "evidence-redaction/v2",
-        "budget": {"timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 112, "rowsRead": 26, "bytesRead": 12288}
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 112,
+          "rowsRead": 26,
+          "bytesRead": 12288
+        }
       }
     },
     {
@@ -147,7 +194,10 @@
       "caseId": "case_0000000000000004",
       "origin": "managed_source",
       "kind": "alert",
-      "sourceRef": {"sourceId": "src_0000000000000023", "revision": 1},
+      "sourceRef": {
+        "sourceId": "src_0000000000000023",
+        "revision": 1
+      },
       "observedAt": "2026-09-02T06:03:00Z",
       "collectedAt": "2026-09-02T06:16:00Z",
       "freshness": "fresh",
@@ -160,7 +210,13 @@
         "storageRef": "payload_0000000000000025",
         "recordCount": 1,
         "truncated": false,
-        "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "alert",
+          "alertScope": "cluster_component_window_match"
+        },
+        "typedDigest": "sha256:9d429a8e4c860675f81648949e79c5f1f6e0d93491dc5e1f29b35a08476ed09b"
       },
       "collection": {
         "collectorId": "tem-readonly",
@@ -169,7 +225,14 @@
         "queryRevision": "tem/v1",
         "status": "complete",
         "redactionRevision": "evidence-redaction/v2",
-        "budget": {"timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 54, "rowsRead": 1, "bytesRead": 2048}
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 54,
+          "rowsRead": 1,
+          "bytesRead": 2048
+        }
       }
     },
     {
@@ -192,7 +255,13 @@
         "storageRef": "payload_0000000000000026",
         "recordCount": 1,
         "truncated": false,
-        "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "business_observation",
+          "textZh": "支付确认接口错误率升至 2.1%，P99 达 6.4 秒，影响线上交易。"
+        },
+        "typedDigest": "sha256:e809b3520fdb5305dd597f6caa0be21af47ff2c747fde3bf198cea96c00575e3"
       },
       "collection": {
         "collectorId": "manual-input",
@@ -201,7 +270,14 @@
         "queryRevision": null,
         "status": "complete",
         "redactionRevision": "evidence-redaction/v2",
-        "budget": {"timeoutMs": 1000, "maxRows": 1, "maxBytes": 65536, "elapsedMs": 0, "rowsRead": 1, "bytesRead": 256}
+        "budget": {
+          "timeoutMs": 1000,
+          "maxRows": 1,
+          "maxBytes": 65536,
+          "elapsedMs": 0,
+          "rowsRead": 1,
+          "bytesRead": 256
+        }
       }
     }
   ],
@@ -221,7 +297,11 @@
       "kind": "time_window_correlation",
       "statementZh": "SQL 延迟与 TiKV 热点在同一时间窗异常，SQL 计划本身保持稳定。",
       "valueText": "correlated",
-      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"]
+      "evidenceIds": [
+        "ev_0000000000000021",
+        "ev_0000000000000023",
+        "ev_0000000000000025"
+      ]
     }
   ],
   "ruleFindings": [
@@ -231,8 +311,14 @@
       "severity": "critical",
       "minimumEvidenceLevel": "E4",
       "conclusionZh": "SQL 基线稳定，TiKV 热点和延迟在同一窗口共同异常。",
-      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"],
-      "documentRefs": ["tidb-troubleshoot-hot-regions@2026-09-02"]
+      "evidenceIds": [
+        "ev_0000000000000021",
+        "ev_0000000000000023",
+        "ev_0000000000000025"
+      ],
+      "documentRefs": [
+        "tidb-troubleshoot-hot-regions@2026-09-02"
+      ]
     },
     {
       "ruleId": "SQL_REGRESSION_001",
@@ -240,8 +326,12 @@
       "severity": "medium",
       "minimumEvidenceLevel": "E3",
       "conclusionZh": "没有检测到计划或扫描量退化，SQL 结构退化假设被冲突证据抑制。",
-      "evidenceIds": ["ev_0000000000000021"],
-      "documentRefs": ["tidb-sql-tuning-overview@2026-09-02"]
+      "evidenceIds": [
+        "ev_0000000000000021"
+      ],
+      "documentRefs": [
+        "tidb-sql-tuning-overview@2026-09-02"
+      ]
     }
   ],
   "aiSynthesis": {
@@ -267,8 +357,15 @@
           "causality": "correlated_not_proven"
         },
         "textZh": "SQL、Prometheus 和 TEM 的时间窗关系支持优先调查 TiKV 热点，但相关性不等于已证明物理因果。",
-        "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"],
-        "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"]
+        "evidenceIds": [
+          "ev_0000000000000021",
+          "ev_0000000000000023",
+          "ev_0000000000000025"
+        ],
+        "ruleIds": [
+          "RUNTIME_HOTSPOT_001",
+          "SQL_REGRESSION_001"
+        ]
       }
     ]
   },
@@ -301,8 +398,15 @@
         "若缓解动作无效或副作用超阈值，立即按客户应急手册回滚",
         "保留 Region、Store 与时间窗证据"
       ],
-      "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"],
-      "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"],
+      "evidenceIds": [
+        "ev_0000000000000021",
+        "ev_0000000000000023",
+        "ev_0000000000000025"
+      ],
+      "ruleIds": [
+        "RUNTIME_HOTSPOT_001",
+        "SQL_REGRESSION_001"
+      ],
       "requiresHumanApproval": true
     }
   ],
@@ -310,12 +414,16 @@
     {
       "code": "CAUSALITY_UNCONFIRMED",
       "descriptionZh": "时间窗相关性不等于根因已被物理证明，仍需 Region/Store 级确认。",
-      "requiredEvidenceKinds": ["runtime_metric"]
+      "requiredEvidenceKinds": [
+        "runtime_metric"
+      ]
     },
     {
       "code": "TEM_SCOPE_READONLY",
       "descriptionZh": "TEM Key 的只读能力由连接预检确认，本报告未执行任何告警修改。",
-      "requiredEvidenceKinds": ["alert"]
+      "requiredEvidenceKinds": [
+        "alert"
+      ]
     }
   ],
   "reviews": [],
@@ -327,7 +435,11 @@
       "type": "workflow_state",
       "fromWorkflowState": null,
       "toWorkflowState": "queued",
-      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T06:16:00Z",
       "reason": "任务已创建"
     },
@@ -337,7 +449,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "queued",
       "toWorkflowState": "collecting",
-      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T06:16:00.200Z",
       "reason": "开始采集证据"
     },
@@ -347,7 +463,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "collecting",
       "toWorkflowState": "analyzing",
-      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T06:16:00.700Z",
       "reason": "证据采集完成"
     },
@@ -357,7 +477,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "analyzing",
       "toWorkflowState": "ready",
-      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T06:16:02Z",
       "reason": "规则和报告投影完成"
     }

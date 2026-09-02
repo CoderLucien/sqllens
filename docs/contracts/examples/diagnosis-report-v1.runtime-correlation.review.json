@@ -14,23 +14,31 @@
     "sqlDigest": "digest:9bd1...42f0",
     "timeWindowZh": "2026-09-02 14:03-14:16 CST",
     "businessZh": "支付确认接口错误率升至 2.1%，P99 达 6.4 秒，影响线上交易。",
-    "businessEvidenceIds": ["ev_0000000000000026"]
+    "businessEvidenceIds": [
+      "ev_0000000000000026"
+    ]
   },
   "evidenceSummary": [
     {
       "labelZh": "SQL 稳定性",
       "valueZh": "计划摘要、扫描行数和调用量与前一基线窗口接近",
-      "evidenceIds": ["ev_0000000000000021"]
+      "evidenceIds": [
+        "ev_0000000000000021"
+      ]
     },
     {
       "labelZh": "资源相关性",
       "valueZh": "同一时间窗 TiKV 请求延迟和 Region 热点指标显著升高",
-      "evidenceIds": ["ev_0000000000000023"]
+      "evidenceIds": [
+        "ev_0000000000000023"
+      ]
     },
     {
       "labelZh": "告警关联",
       "valueZh": "TEM 告警的集群、组件与异常时间窗匹配",
-      "evidenceIds": ["ev_0000000000000025"]
+      "evidenceIds": [
+        "ev_0000000000000025"
+      ]
     }
   ],
   "reasoning": {
@@ -39,8 +47,9 @@
       "没有检测到计划或扫描量退化，SQL 结构退化假设被冲突证据抑制。"
     ],
     "aiContributionZh": "SQL、Prometheus 和 TEM 的时间窗关系支持优先调查 TiKV 热点，但相关性不等于已证明物理因果。",
-    "degradationCode": null,
-    "degradationZh": null
+    "aiStatus": "applied",
+    "aiCode": null,
+    "aiReasonZh": null
   },
   "actions": [
     {
@@ -80,8 +89,13 @@
       "ev_0000000000000025",
       "ev_0000000000000026"
     ],
-    "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"],
-    "claimIds": ["claim_0000000000000021"],
+    "ruleIds": [
+      "RUNTIME_HOTSPOT_001",
+      "SQL_REGRESSION_001"
+    ],
+    "claimIds": [
+      "claim_0000000000000021"
+    ],
     "sourceRevisions": [
       "src_0000000000000021@4",
       "src_0000000000000022@2",

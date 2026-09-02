@@ -39,9 +39,7 @@
       "type": "array", "maxItems": 128,
       "items": { "$ref": "#/$defs/ruleFinding" }
     },
-    "aiSynthesis": {
-      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/aiSynthesis" }]
-    },
+    "aiSynthesis": { "$ref": "#/$defs/aiSynthesis" },
     "actions": {
       "type": "array", "maxItems": 32,
       "items": { "$ref": "#/$defs/action" }
@@ -74,7 +72,17 @@
   "allOf": [
     {
       "if": { "properties": { "configuredMode": { "const": "rules" } }, "required": ["configuredMode"] },
-      "then": { "properties": { "effectiveMode": { "const": "rules" } } }
+      "then": {
+        "properties": {
+          "effectiveMode": { "const": "rules" },
+          "aiSynthesis": {
+            "allOf": [
+              { "$ref": "#/$defs/aiSynthesis" },
+              { "properties": { "status": { "const": "not_requested" } } }
+            ]
+          }
+        }
+      }
     },
     {
       "if": { "properties": { "effectiveMode": { "const": "rules_ai" } }, "required": ["effectiveMode"] },
@@ -382,7 +390,7 @@
           "if": { "properties": { "status": { "const": "degraded" } }, "required": ["status"] },
           "then": {
             "properties": {
-              "code": { "type": "string", "minLength": 1 },
+              "code": { "enum": ["MODEL_TIMEOUT", "PROVIDER_ERROR", "INVALID_MODEL_OUTPUT"] },
               "messageZh": { "type": "string", "minLength": 1 },
               "invocation": { "$ref": "#/$defs/aiInvocation" },
               "claims": { "maxItems": 0 }
@@ -393,8 +401,8 @@
           "if": { "properties": { "status": { "const": "abstained" } }, "required": ["status"] },
           "then": {
             "properties": {
-              "code": { "type": "string", "minLength": 1 },
-              "messageZh": { "type": "string", "minLength": 1 },
+              "code": { "const": "EVIDENCE_POLICY_ABSTENTION" },
+              "messageZh": { "const": "证据策略不允许调用外部模型，本报告仅使用确定性规则。" },
               "invocation": { "type": "null" },
               "claims": { "maxItems": 0 }
             }
@@ -404,8 +412,8 @@
           "if": { "properties": { "status": { "const": "not_requested" } }, "required": ["status"] },
           "then": {
             "properties": {
-              "code": { "type": "null" },
-              "messageZh": { "type": "null" },
+              "code": { "const": "AI_NOT_REQUESTED" },
+              "messageZh": { "const": "此诊断配置为仅规则模式，未调用外部模型。" },
               "invocation": { "type": "null" },
               "claims": { "maxItems": 0 }
             }

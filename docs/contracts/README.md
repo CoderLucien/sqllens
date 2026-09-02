@@ -57,21 +57,27 @@ records and cannot be inferred from status text.
 Source/v1 lifecycle validation treats a Source revision and credential revision
 as separate immutable identities. Admission pins both and acquires a lease.
 Rotation, disable, and delete stop new admission and enter `draining`; normal
-retirement waits for zero leases. Entering drain preserves the admitted lease
-count. Each later normal release or forced cancellation names the lease and job,
-decrements the count by exactly one, and appends an immutable lease event;
-forced cancellation also binds a prior Owner approval. Delete removes the usable
-credential and retains only a non-queryable metadata tombstone. Every Source
-revision appends a chronological state event. Prior/proposed validation rejects
-audit rewrite, revision or credentialRevision rollback, lease growth or silent
-lease erasure while draining, operation/pending-operation mismatch, contradictory
-verification state, and drain completion that does not match its pending
-operation.
+retirement waits for zero leases. The authoritative lease ledger starts with a
+runtime-emitted acquisition event and exposes an exact active `leaseId`/`jobId` snapshot;
+the numeric count is only a derived cross-check. Entering drain preserves that
+set. Each later normal release or forced cancellation names an acquired lease
+and job, removes exactly that identity, and appends an immutable lease event;
+forced cancellation also binds a prior Owner approval. The Source state event
+cannot precede the lease events recorded by the same revision. Delete removes
+the usable credential and retains only a non-queryable metadata tombstone. Every
+Source revision appends a chronological state event. Prior/proposed validation
+rejects audit rewrite, revision or credentialRevision rollback, invented or
+silently erased leases in every state, operation/pending-operation mismatch,
+contradictory verification state, and drain completion that does not match its
+pending operation.
 
 AI text, the customer-facing decision, and customer actions are not free-form
 persistence fields. The model may select only an allowlisted template and typed
 parameters. Decision parameters reference typed facts bound to exact evidence
-kinds; the validator re-renders the fact text and every customer-visible
+roles, kinds, schema revision, extraction revision, and typed payload fields;
+the validator verifies the canonical typed-payload digest and deterministic
+Evidence summary, rebuilds fact parameters from those fields, then re-renders
+the fact text and every customer-visible
 decision field (including priority and evidence summary), claim, and action and
 rejects any mismatch. Ratios and display-scale values are derived from typed raw
 measurements rather than accepted as independent parameters. An applied or
@@ -79,7 +85,9 @@ failed/degraded invocation carries labeled
 provider, model, prompt, redacted-payload, payload digest, and redaction
 revisions. A policy abstention records a code and Chinese reason without
 invocation pins. `rules_ai -> rules` must use one of those two explicit paths,
-and reports project the labels and reason exactly.
+while `rules -> rules` must be `not_requested` with no invocation or provider
+pins. Reports project every AI status, server-owned code, and server-owned
+Chinese reason exactly.
 
 Standalone Evidence fixtures run the same observation/collection time, Source
 binding, digest, truncation, and budget semantics as Evidence embedded in a Case.

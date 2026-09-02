@@ -21,7 +21,17 @@
     "storageRef": "payload_0000000000000001",
     "recordCount": 1,
     "truncated": false,
-    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "extractionRevision": "evidence-extractor/v1",
+    "typed": {
+      "kind": "slow_query",
+      "windowMinutes": 10,
+      "callCount": 842,
+      "p95Ms": 2800,
+      "averageScanRows": 1260000,
+      "averageReturnRows": 400
+    },
+    "typedDigest": "sha256:67f3ea3535d3ebceb665258b1001360ba9bda64b37c38d8f2ec31547d8ece25f"
   },
   "collection": {
     "collectorId": "pingkaidb-readonly",

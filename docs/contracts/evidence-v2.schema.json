@@ -96,13 +96,152 @@
     "payload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaRevision", "storageRef", "recordCount", "truncated", "digest"],
+      "required": ["schemaRevision", "extractionRevision", "storageRef", "recordCount", "truncated", "digest", "typed", "typedDigest"],
       "properties": {
         "schemaRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "extractionRevision": { "const": "evidence-extractor/v1" },
         "storageRef": { "type": "string", "pattern": "^payload_[a-z0-9]{16,64}$" },
         "recordCount": { "type": "integer", "minimum": 0, "maximum": 100000 },
         "truncated": { "type": "boolean" },
-        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "typedDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "typed": {
+          "oneOf": [
+            { "$ref": "#/$defs/businessObservationPayload" },
+            { "$ref": "#/$defs/sqlStructurePayload" },
+            { "$ref": "#/$defs/statementSummaryPayload" },
+            { "$ref": "#/$defs/slowQueryPayload" },
+            { "$ref": "#/$defs/schemaPayload" },
+            { "$ref": "#/$defs/indexPayload" },
+            { "$ref": "#/$defs/statisticsPayload" },
+            { "$ref": "#/$defs/ordinaryPlanPayload" },
+            { "$ref": "#/$defs/runtimeMetricPayload" },
+            { "$ref": "#/$defs/alertPayload" },
+            { "$ref": "#/$defs/validationResultPayload" },
+            { "$ref": "#/$defs/effectMetricComparisonPayload" },
+            { "$ref": "#/$defs/rollbackConfirmationPayload" }
+          ]
+        }
+      }
+    },
+    "businessObservationPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "textZh"],
+      "properties": {
+        "kind": { "const": "business_observation" },
+        "textZh": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "sqlStructurePayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "statementType", "tables", "predicateColumns"],
+      "properties": {
+        "kind": { "const": "sql_structure" },
+        "statementType": { "enum": ["select", "insert", "update", "delete", "other"] },
+        "tables": { "type": "array", "uniqueItems": true, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "predicateColumns": { "type": "array", "uniqueItems": true, "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
+      }
+    },
+    "statementSummaryPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "sqlStability"],
+      "properties": {
+        "kind": { "const": "statement_summary" },
+        "sqlStability": { "enum": ["plan_and_scan_stable", "plan_changed", "scan_changed", "unknown"] }
+      }
+    },
+    "slowQueryPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "windowMinutes", "callCount", "p95Ms", "averageScanRows", "averageReturnRows"],
+      "properties": {
+        "kind": { "const": "slow_query" },
+        "windowMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+        "callCount": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "p95Ms": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+        "averageScanRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "averageReturnRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 }
+      }
+    },
+    "schemaPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "tableNames"],
+      "properties": {
+        "kind": { "const": "schema" },
+        "tableNames": { "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
+      }
+    },
+    "indexPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "tableName", "filterColumns", "indexCoverage"],
+      "properties": {
+        "kind": { "const": "index" },
+        "tableName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "filterColumns": { "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "indexCoverage": { "enum": ["matching_composite_index", "no_matching_composite_index", "unknown"] }
+      }
+    },
+    "statisticsPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "estimatedRows", "actualRows", "statisticsFreshness"],
+      "properties": {
+        "kind": { "const": "statistics" },
+        "estimatedRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "actualRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "statisticsFreshness": { "enum": ["current", "predates_bulk_import", "stale", "unknown"] }
+      }
+    },
+    "ordinaryPlanPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "tableName", "accessPath"],
+      "properties": {
+        "kind": { "const": "ordinary_plan" },
+        "tableName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "accessPath": { "enum": ["table_full_scan", "index_full_scan", "index_range_scan", "point_get", "other"] }
+      }
+    },
+    "runtimeMetricPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "resourceCorrelation"],
+      "properties": {
+        "kind": { "const": "runtime_metric" },
+        "resourceCorrelation": { "enum": ["same_window_elevated", "not_correlated", "unknown"] }
+      }
+    },
+    "alertPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "alertScope"],
+      "properties": {
+        "kind": { "const": "alert" },
+        "alertScope": { "enum": ["cluster_component_window_match", "partial_match", "not_matched", "unknown"] }
+      }
+    },
+    "validationResultPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "status", "checkId"],
+      "properties": {
+        "kind": { "const": "validation_result" },
+        "status": { "enum": ["passed", "failed", "inconclusive"] },
+        "checkId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "effectMetricComparisonPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "metricZh", "baselineValue", "observedValue", "unit", "passed"],
+      "properties": {
+        "kind": { "const": "effect_metric_comparison" },
+        "metricZh": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "baselineValue": { "type": "number" },
+        "observedValue": { "type": "number" },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "passed": { "type": "boolean" }
+      }
+    },
+    "rollbackConfirmationPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "rollbackState"],
+      "properties": {
+        "kind": { "const": "rollback_confirmation" },
+        "rollbackState": { "enum": ["confirmed", "failed", "unknown"] }
       }
     },
     "collection": {

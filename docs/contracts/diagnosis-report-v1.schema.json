@@ -84,8 +84,9 @@
       "required": [
         "ruleFindingsZh",
         "aiContributionZh",
-        "degradationCode",
-        "degradationZh"
+        "aiStatus",
+        "aiCode",
+        "aiReasonZh"
       ],
       "properties": {
         "ruleFindingsZh": {
@@ -95,8 +96,9 @@
           "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
         },
         "aiContributionZh": { "type": ["string", "null"], "maxLength": 2048 },
-        "degradationCode": { "type": ["string", "null"], "maxLength": 128 },
-        "degradationZh": { "type": ["string", "null"], "maxLength": 2048 }
+        "aiStatus": { "enum": ["applied", "degraded", "abstained", "not_requested"] },
+        "aiCode": { "type": ["string", "null"], "maxLength": 128 },
+        "aiReasonZh": { "type": ["string", "null"], "maxLength": 2048 }
       }
     },
     "actions": {

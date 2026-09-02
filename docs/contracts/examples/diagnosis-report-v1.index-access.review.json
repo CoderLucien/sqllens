@@ -14,23 +14,31 @@
     "sqlDigest": "digest:7f3a...91c2",
     "timeWindowZh": "2026-09-02 16:00-16:10 CST",
     "businessZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。",
-    "businessEvidenceIds": ["ev_0000000000000004"]
+    "businessEvidenceIds": [
+      "ev_0000000000000004"
+    ]
   },
   "evidenceSummary": [
     {
       "labelZh": "运行表现",
       "valueZh": "842 次调用，P95 2.8 秒，平均扫描 126 万行",
-      "evidenceIds": ["ev_0000000000000001"]
+      "evidenceIds": [
+        "ev_0000000000000001"
+      ]
     },
     {
       "labelZh": "执行计划",
       "valueZh": "orders 表 TableFullScan，扫描/返回比 3150:1",
-      "evidenceIds": ["ev_0000000000000002"]
+      "evidenceIds": [
+        "ev_0000000000000002"
+      ]
     },
     {
       "labelZh": "索引覆盖",
       "valueZh": "现有索引未匹配 tenant_id、status、created_at 的过滤顺序",
-      "evidenceIds": ["ev_0000000000000003"]
+      "evidenceIds": [
+        "ev_0000000000000003"
+      ]
     }
   ],
   "reasoning": {
@@ -38,8 +46,9 @@
       "高频慢 SQL 使用全表扫描，且过滤列缺少匹配访问路径。"
     ],
     "aiContributionZh": "该 SQL 是当前窗口的主要可行动瓶颈；应先在隔离环境验证复合索引候选，而不是调整集群资源。",
-    "degradationCode": null,
-    "degradationZh": null
+    "aiStatus": "applied",
+    "aiCode": null,
+    "aiReasonZh": null
   },
   "actions": [
     {
@@ -78,9 +87,15 @@
       "ev_0000000000000003",
       "ev_0000000000000004"
     ],
-    "ruleIds": ["IDX_ACCESS_001"],
-    "claimIds": ["claim_0000000000000001"],
-    "sourceRevisions": ["src_0000000000000001@3"],
+    "ruleIds": [
+      "IDX_ACCESS_001"
+    ],
+    "claimIds": [
+      "claim_0000000000000001"
+    ],
+    "sourceRevisions": [
+      "src_0000000000000001@3"
+    ],
     "aiInvocation": {
       "providerRevision": "openai-compatible/v1",
       "modelRevision": "gpt-5.6-sol",

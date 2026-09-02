@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from datetime import datetime
@@ -52,8 +53,14 @@ OUTCOME_TRANSITIONS = {
 }
 SOURCE_STATE_TRANSITIONS = {
     "draft": {"draft", "enabled", "verification_failed", "draining"},
-    "enabled": {"enabled", "draining", "verification_failed"},
-    "draining": {"draining", "enabled", "disabled", "tombstoned"},
+    "enabled": {"enabled", "draining"},
+    "draining": {
+        "draining",
+        "enabled",
+        "disabled",
+        "verification_failed",
+        "tombstoned",
+    },
     "disabled": {"disabled", "enabled", "draining"},
     "verification_failed": {"verification_failed", "draft", "enabled", "draining"},
     "tombstoned": {"tombstoned"},
@@ -68,6 +75,7 @@ SOURCE_AUDIT_TRANSITIONS = {
         ("disabled", "disabled"),
         ("verification_failed", "verification_failed"),
     },
+    "leases_updated": {("enabled", "enabled")},
     "rotation_started": {("enabled", "draining")},
     "rotation_completed": {("draining", "enabled")},
     "disable_started": {("enabled", "draining")},
@@ -75,10 +83,27 @@ SOURCE_AUDIT_TRANSITIONS = {
     "delete_started": {("enabled", "draining"), ("disabled", "draining")},
     "leases_drained": {("draining", "draining")},
     "tombstoned": {("draining", "tombstoned")},
+    "verification_failure_started": {("enabled", "draining")},
     "verification_failed": {
         ("draft", "verification_failed"),
-        ("enabled", "verification_failed"),
+        ("draining", "verification_failed"),
     },
+}
+SOURCE_OPERATION_ACTORS = {
+    "registered": "user",
+    "verified": "system",
+    "enabled": "user",
+    "edited": "user",
+    "leases_updated": "system",
+    "rotation_started": "user",
+    "rotation_completed": "system",
+    "disable_started": "user",
+    "disabled": "system",
+    "delete_started": "user",
+    "leases_drained": "system",
+    "tombstoned": "system",
+    "verification_failure_started": "system",
+    "verification_failed": "system",
 }
 EVIDENCE_LEVELS = {"E0": 0, "E1": 1, "E2": 2, "E3": 3, "E4": 4}
 AI_CLAIM_TEMPLATES = {
@@ -96,6 +121,160 @@ AI_CLAIM_TEMPLATES = {
         },
         "SQL、Prometheus 和 TEM 的时间窗关系支持优先调查 TiKV 热点，但相关性不等于已证明物理因果。",
     ),
+}
+AI_STATUS_TEMPLATES = {
+    ("not_requested", "AI_NOT_REQUESTED"): ("此诊断配置为仅规则模式，未调用外部模型。"),
+    ("abstained", "EVIDENCE_POLICY_ABSTENTION"): (
+        "证据策略不允许调用外部模型，本报告仅使用确定性规则。"
+    ),
+    ("degraded", "MODEL_TIMEOUT"): (
+        "外部模型超时，本报告使用确定性规则生成；事实、动作和证据不受影响。"
+    ),
+    ("degraded", "PROVIDER_ERROR"): (
+        "外部模型服务不可用，本报告使用确定性规则生成；事实、动作和证据不受影响。"
+    ),
+    ("degraded", "INVALID_MODEL_OUTPUT"): (
+        "外部模型输出未通过证据约束校验，本报告使用确定性规则生成。"
+    ),
+}
+EVIDENCE_SCHEMA_REVISIONS = {
+    "business_observation": "business-observation/v1",
+    "sql_structure": "sql-structure/v1",
+    "statement_summary": "statement-summary/v1",
+    "slow_query": "slow-query/v1",
+    "schema": "schema-metadata/v1",
+    "index": "index-metadata/v1",
+    "statistics": "statistics-health/v1",
+    "ordinary_plan": "ordinary-plan/v1",
+    "runtime_metric": "prometheus-window/v1",
+    "alert": "tem-alert/v1",
+    "validation_result": "validation-result/v1",
+    "effect_metric_comparison": "effect-metric-comparison/v1",
+    "rollback_confirmation": "rollback-confirmation/v1",
+}
+FACT_DEPENDENCY_REGISTRY = {
+    ("fact.index_scan_profile", "v1"): {
+        "runtimeEvidenceId": {
+            "kind": "slow_query",
+            "fields": {
+                "windowMinutes": "windowMinutes",
+                "callCount": "callCount",
+                "p95Ms": "p95Ms",
+                "averageScanRows": "averageScanRows",
+                "averageReturnRows": "averageReturnRows",
+            },
+        },
+        "planEvidenceId": {
+            "kind": "ordinary_plan",
+            "fields": {"tableName": "tableName", "accessPath": "accessPath"},
+        },
+        "indexEvidenceId": {
+            "kind": "index",
+            "fields": {
+                "tableName": "tableName",
+                "filterColumns": "filterColumns",
+                "indexCoverage": "indexCoverage",
+            },
+        },
+    },
+    ("fact.statistics_estimation_profile", "v1"): {
+        "statisticsEvidenceId": {
+            "kind": "statistics",
+            "fields": {
+                "estimatedRows": "estimatedRows",
+                "actualRows": "actualRows",
+                "statisticsFreshness": "statisticsFreshness",
+            },
+        }
+    },
+    ("fact.runtime_hotspot_profile", "v1"): {
+        "statementEvidenceId": {
+            "kind": "statement_summary",
+            "fields": {"sqlStability": "sqlStability"},
+        },
+        "runtimeEvidenceId": {
+            "kind": "runtime_metric",
+            "fields": {"resourceCorrelation": "resourceCorrelation"},
+        },
+        "alertEvidenceId": {
+            "kind": "alert",
+            "fields": {"alertScope": "alertScope"},
+        },
+    },
+}
+DIAGNOSIS_DEPENDENCY_REGISTRY = {
+    ("decision.index_scan_priority", "v1"): {
+        "factTemplate": "fact.index_scan_profile",
+        "rules": {
+            "IDX_ACCESS_001": (
+                "runtimeEvidenceId",
+                "planEvidenceId",
+                "indexEvidenceId",
+            )
+        },
+        "claims": {
+            ("ai.index_candidate_priority", "v1"): {
+                "rules": ("IDX_ACCESS_001",),
+                "evidenceRoles": (
+                    "runtimeEvidenceId",
+                    "planEvidenceId",
+                    "indexEvidenceId",
+                ),
+            }
+        },
+        "actions": {
+            ("action.index_candidate_isolated", "v1"): {
+                "rules": ("IDX_ACCESS_001",),
+                "evidenceRoles": (
+                    "runtimeEvidenceId",
+                    "planEvidenceId",
+                    "indexEvidenceId",
+                ),
+            }
+        },
+    },
+    ("decision.statistics_estimation", "v1"): {
+        "factTemplate": "fact.statistics_estimation_profile",
+        "rules": {"STATS_ESTIMATION_001": ("statisticsEvidenceId",)},
+        "claims": {},
+        "actions": {
+            ("action.statistics_refresh_isolated", "v1"): {
+                "rules": ("STATS_ESTIMATION_001",),
+                "evidenceRoles": ("statisticsEvidenceId",),
+            }
+        },
+    },
+    ("decision.runtime_hotspot", "v1"): {
+        "factTemplate": "fact.runtime_hotspot_profile",
+        "rules": {
+            "RUNTIME_HOTSPOT_001": (
+                "statementEvidenceId",
+                "runtimeEvidenceId",
+                "alertEvidenceId",
+            ),
+            "SQL_REGRESSION_001": ("statementEvidenceId",),
+        },
+        "claims": {
+            ("ai.resource_hotspot_priority", "v1"): {
+                "rules": ("RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"),
+                "evidenceRoles": (
+                    "statementEvidenceId",
+                    "runtimeEvidenceId",
+                    "alertEvidenceId",
+                ),
+            }
+        },
+        "actions": {
+            ("action.resource_hotspot_runbook", "v1"): {
+                "rules": ("RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"),
+                "evidenceRoles": (
+                    "statementEvidenceId",
+                    "runtimeEvidenceId",
+                    "alertEvidenceId",
+                ),
+            }
+        },
+    },
 }
 RFC3339_DATETIME = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt](?:[01]\d|2[0-3]):[0-5]\d:"
@@ -176,6 +355,8 @@ def validate_source_audit(source: dict[str, Any]) -> None:
         transition = (event["fromState"], event["toState"])
         if transition not in SOURCE_AUDIT_TRANSITIONS[event["operation"]]:
             raise ValueError("Source operation does not match audited state transition")
+        if event["actor"]["kind"] != SOURCE_OPERATION_ACTORS[event["operation"]]:
+            raise ValueError("Source operation actor is not authoritative")
 
         credential_revision = event["credentialRevision"]
         if credential_revision is not None:
@@ -201,10 +382,14 @@ def validate_source_audit(source: dict[str, Any]) -> None:
 
 def validate_source_lease_audit(source: dict[str, Any]) -> None:
     require_unique(source["leaseEvents"], "eventId")
-    require_unique(source["leaseEvents"], "leaseId")
+    require_unique(source["activeLeases"], "leaseId")
+    require_unique(source["activeLeases"], "jobId")
     source_created = parse_time(source["createdAt"])
     source_updated = parse_time(source["updatedAt"])
     previous_time: datetime | None = None
+    active: dict[str, dict[str, Any]] = {}
+    seen_lease_ids: set[str] = set()
+    seen_job_ids: set[str] = set()
     for event in source["leaseEvents"]:
         event_at = parse_time(event["createdAt"])
         if not source_created <= event_at <= source_updated:
@@ -213,9 +398,37 @@ def validate_source_lease_audit(source: dict[str, Any]) -> None:
             raise ValueError("Source lease events must be chronological")
         if event["sourceRevision"] > source["revision"]:
             raise ValueError("Source lease event references a future revision")
-        if event["toLeaseCount"] != event["fromLeaseCount"] - 1:
-            raise ValueError("each Source lease event must release exactly one lease")
+        if event["fromLeaseCount"] != len(active):
+            raise ValueError("Source lease ledger count chain is discontinuous")
+        if event["actor"]["kind"] != "system":
+            raise ValueError(
+                "Source lease ledger events must be emitted by the runtime"
+            )
         approval = event["ownerApproval"]
+        if event["operation"] == "lease_acquired":
+            if event["leaseId"] in seen_lease_ids or event["jobId"] in seen_job_ids:
+                raise ValueError("Source lease acquisition reuses an audit identity")
+            if event["toLeaseCount"] != event["fromLeaseCount"] + 1:
+                raise ValueError("lease acquisition must add exactly one active lease")
+            if approval is not None:
+                raise ValueError("lease acquisition cannot carry Owner approval")
+            active[event["leaseId"]] = {
+                "leaseId": event["leaseId"],
+                "jobId": event["jobId"],
+                "acquiredRevision": event["sourceRevision"],
+                "acquiredAt": event["createdAt"],
+            }
+            seen_lease_ids.add(event["leaseId"])
+            seen_job_ids.add(event["jobId"])
+            previous_time = event_at
+            continue
+
+        if event["leaseId"] not in active:
+            raise ValueError("Source lease release references an inactive lease")
+        if active[event["leaseId"]]["jobId"] != event["jobId"]:
+            raise ValueError("Source lease release job differs from acquisition")
+        if event["toLeaseCount"] != event["fromLeaseCount"] - 1:
+            raise ValueError("lease release must remove exactly one active lease")
         if event["operation"] == "lease_released" and approval is not None:
             raise ValueError(
                 "ordinary lease release cannot carry force-cancel approval"
@@ -230,7 +443,133 @@ def validate_source_lease_audit(source: dict[str, Any]) -> None:
             approved_at = parse_time(approval["approvedAt"])
             if not source_created <= approved_at <= event_at:
                 raise ValueError("force-cancel approval must precede the lease event")
+        del active[event["leaseId"]]
         previous_time = event_at
+
+    snapshot = {item["leaseId"]: item for item in source["activeLeases"]}
+    if snapshot != active:
+        raise ValueError("Source active lease snapshot differs from replayed ledger")
+    if source["credentialLifecycle"]["activeLeaseCount"] != len(active):
+        raise ValueError("Source activeLeaseCount differs from authoritative ledger")
+
+
+def typed_payload_digest(value: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def join_zh(values: list[str]) -> str:
+    if len(values) == 1:
+        return values[0]
+    return f"{'、'.join(values[:-1])} 与 {values[-1]}"
+
+
+def format_ms(value: int) -> str:
+    if value < 1000:
+        return f"{value} ms"
+    seconds = Decimal(value) / Decimal(1000)
+    return f"{format(seconds.normalize(), 'f')} 秒"
+
+
+def render_evidence_summary(evidence: dict[str, Any]) -> str:
+    typed = evidence["payload"]["typed"]
+    kind = evidence["kind"]
+    if kind == "business_observation":
+        return typed["textZh"]
+    if kind == "sql_structure":
+        tables = join_zh(typed["tables"]) if typed["tables"] else "未识别表"
+        predicates = (
+            join_zh(typed["predicateColumns"])
+            if typed["predicateColumns"]
+            else "未识别过滤列"
+        )
+        return (
+            f"SQL 结构解析为 {typed['statementType'].upper()}，涉及 {tables}；"
+            f"过滤列为 {predicates}。"
+        )
+    if kind == "statement_summary":
+        return {
+            "plan_and_scan_stable": "SQL 计划摘要和扫描行数与前一基线窗口接近。",
+            "plan_changed": "SQL 计划摘要相对前一基线窗口发生变化。",
+            "scan_changed": "SQL 扫描行数相对前一基线窗口发生变化。",
+            "unknown": "当前 Statement Summary 证据不足以判断计划和扫描稳定性。",
+        }[typed["sqlStability"]]
+    if kind == "slow_query":
+        scan_ten_thousands = format_derived_ratio(typed["averageScanRows"], 10000)
+        return (
+            f"该 SQL 在 {typed['windowMinutes']} 分钟窗口内执行 "
+            f"{typed['callCount']} 次，P95 {format_ms(typed['p95Ms'])}，"
+            f"平均扫描 {scan_ten_thousands} 万行。"
+        )
+    if kind == "schema":
+        return f"Schema 元数据包含表 {join_zh(typed['tableNames'])}。"
+    if kind == "index":
+        filters = join_zh(typed["filterColumns"])
+        if typed["indexCoverage"] == "matching_composite_index":
+            return f"现有复合索引覆盖 {filters} 的过滤顺序。"
+        if typed["indexCoverage"] == "no_matching_composite_index":
+            return f"现有索引没有同时覆盖 {filters} 的过滤顺序。"
+        return f"当前证据无法确认是否存在覆盖 {filters} 的复合索引。"
+    if kind == "statistics":
+        freshness = {
+            "current": "统计信息处于当前窗口",
+            "predates_bulk_import": "统计更新时间早于最近一次大批量导入",
+            "stale": "统计信息已过期",
+            "unknown": "统计信息新鲜度未知",
+        }[typed["statisticsFreshness"]]
+        return (
+            f"核心表 estRows 为 {typed['estimatedRows']}、运行时 rows 为 "
+            f"{typed['actualRows']}，且{freshness}。"
+        )
+    if kind == "ordinary_plan":
+        if typed["accessPath"] == "table_full_scan":
+            return (
+                f"普通执行计划显示 {typed['tableName']} 表发生 TableFullScan，"
+                "过滤条件未形成可用访问路径。"
+            )
+        access_path = {
+            "index_full_scan": "IndexFullScan",
+            "index_range_scan": "IndexRangeScan",
+            "point_get": "PointGet",
+            "other": "其他访问路径",
+        }[typed["accessPath"]]
+        return f"普通执行计划显示 {typed['tableName']} 表使用 {access_path}。"
+    if kind == "runtime_metric":
+        return {
+            "same_window_elevated": "TiKV 请求延迟和 Region 热点指标在 SQL 异常时间窗内同步升高。",
+            "not_correlated": "TiKV 请求延迟和 Region 热点指标未与 SQL 异常时间窗同步升高。",
+            "unknown": "当前运行指标不足以判断与 SQL 异常时间窗的关系。",
+        }[typed["resourceCorrelation"]]
+    if kind == "alert":
+        return {
+            "cluster_component_window_match": "TEM 告警的集群、TiKV 组件与异常时间窗匹配。",
+            "partial_match": "TEM 告警仅与异常集群、组件或时间窗部分匹配。",
+            "not_matched": "TEM 告警未与异常集群、组件和时间窗匹配。",
+            "unknown": "当前告警证据不足以判断与异常时间窗的关系。",
+        }[typed["alertScope"]]
+    if kind == "validation_result":
+        status = {
+            "passed": "通过",
+            "failed": "失败",
+            "inconclusive": "无法判断",
+        }[typed["status"]]
+        return f"验证检查 {typed['checkId']} 的结果为{status}。"
+    if kind == "effect_metric_comparison":
+        result = "达到预设阈值" if typed["passed"] else "未达到预设阈值"
+        return (
+            f"隔离环境验证显示{typed['metricZh']}从 {typed['baselineValue']} "
+            f"{typed['unit']} 变为 {typed['observedValue']} {typed['unit']}，{result}。"
+        )
+    if kind == "rollback_confirmation":
+        state = {
+            "confirmed": "已确认回滚完成",
+            "failed": "回滚失败",
+            "unknown": "无法确认回滚状态",
+        }[typed["rollbackState"]]
+        return f"回滚验证结果：{state}。"
+    raise ValueError(f"unknown typed evidence summary template: {kind}")
 
 
 def render_ai_claim(claim: dict[str, Any]) -> str:
@@ -252,6 +591,62 @@ def format_derived_ratio(numerator: int, denominator: int) -> str:
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
     return format(ratio.normalize(), "f")
+
+
+def fact_dependency_spec(fact: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    key = (fact["templateId"], fact["templateRevision"])
+    if key not in FACT_DEPENDENCY_REGISTRY:
+        raise ValueError(f"unknown fact dependency template: {key}")
+    return FACT_DEPENDENCY_REGISTRY[key]
+
+
+def fact_role_evidence_ids(fact: dict[str, Any]) -> dict[str, str]:
+    spec = fact_dependency_spec(fact)
+    params = fact["params"]
+    if not set(spec) <= set(params):
+        raise ValueError(f"fact lacks typed evidence roles: {fact['factId']}")
+    bindings = {role: params[role] for role in spec}
+    if len(set(bindings.values())) != len(bindings):
+        raise ValueError(f"fact evidence roles must be distinct: {fact['factId']}")
+    return bindings
+
+
+def rebuild_fact_params(
+    fact: dict[str, Any], evidence_by_id: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    spec = fact_dependency_spec(fact)
+    role_bindings = fact_role_evidence_ids(fact)
+    rebuilt: dict[str, Any] = dict(role_bindings)
+    for role, evidence_id in role_bindings.items():
+        if evidence_id not in evidence_by_id:
+            raise ValueError(
+                f"fact references missing evidence: {fact['factId']} -> {evidence_id}"
+            )
+        evidence = evidence_by_id[evidence_id]
+        expected_kind = spec[role]["kind"]
+        if evidence["kind"] != expected_kind:
+            raise ValueError(
+                f"fact evidence kind mismatch: {fact['factId']} -> {evidence_id}"
+            )
+        typed = evidence["payload"]["typed"]
+        for fact_field, evidence_field in spec[role]["fields"].items():
+            value = typed[evidence_field]
+            if fact_field in rebuilt and rebuilt[fact_field] != value:
+                raise ValueError(
+                    f"fact evidence roles disagree on {fact_field}: {fact['factId']}"
+                )
+            rebuilt[fact_field] = value
+    return rebuilt
+
+
+def validate_fact_evidence_projection(
+    fact: dict[str, Any], evidence_by_id: dict[str, dict[str, Any]]
+) -> None:
+    expected = rebuild_fact_params(fact, evidence_by_id)
+    if fact["params"] != expected:
+        raise ValueError(
+            f"fact parameters are not reconstructed from typed evidence: {fact['factId']}"
+        )
 
 
 def normalized_fact_profile(fact: dict[str, Any]) -> dict[str, Any]:
@@ -356,23 +751,11 @@ def render_fact(fact: dict[str, Any]) -> dict[str, str]:
 
 
 def fact_evidence_bindings(fact: dict[str, Any]) -> dict[str, str]:
-    key = (fact["templateId"], fact["templateRevision"])
-    params = normalized_fact_profile(fact)
-    if key == ("fact.index_scan_profile", "v1"):
-        return {
-            params["runtimeEvidenceId"]: "slow_query",
-            params["planEvidenceId"]: "ordinary_plan",
-            params["indexEvidenceId"]: "index",
-        }
-    if key == ("fact.statistics_estimation_profile", "v1"):
-        return {params["statisticsEvidenceId"]: "statistics"}
-    if key == ("fact.runtime_hotspot_profile", "v1"):
-        return {
-            params["statementEvidenceId"]: "statement_summary",
-            params["runtimeEvidenceId"]: "runtime_metric",
-            params["alertEvidenceId"]: "alert",
-        }
-    raise ValueError(f"unknown fact template: {key}")
+    spec = fact_dependency_spec(fact)
+    role_bindings = fact_role_evidence_ids(fact)
+    return {
+        evidence_id: spec[role]["kind"] for role, evidence_id in role_bindings.items()
+    }
 
 
 def render_decision(
@@ -576,14 +959,44 @@ def render_action(action: dict[str, Any]) -> dict[str, Any]:
 
 def validate_ai_invocation(case: dict[str, Any]) -> None:
     synthesis = case["aiSynthesis"]
+    if not isinstance(synthesis, dict):
+        raise TypeError("Case requires an explicit AI state object")
     pins = case["pinnedRevisions"]
     invocation_keys = ("provider", "model", "prompt", "payload", "payloadDigest")
-    if synthesis is None or synthesis["status"] in {"abstained", "not_requested"}:
+    mode_matrix = {
+        ("rules", "rules"): {"not_requested"},
+        ("rules_ai", "rules_ai"): {"applied"},
+        ("rules_ai", "rules"): {"degraded", "abstained"},
+    }
+    mode = (case["configuredMode"], case["effectiveMode"])
+    if mode not in mode_matrix or synthesis["status"] not in mode_matrix[mode]:
+        raise ValueError("AI status is not valid for configured/effective mode")
+
+    status = synthesis["status"]
+    if status == "applied":
+        if synthesis["code"] is not None or synthesis["messageZh"] is not None:
+            raise ValueError("applied AI cannot expose a degradation reason")
+        if not synthesis["claims"]:
+            raise ValueError("applied AI requires evidence-bound claims")
+    else:
+        key = (status, synthesis["code"])
+        if key not in AI_STATUS_TEMPLATES:
+            raise ValueError("AI status code is not server-owned")
+        if synthesis["messageZh"] != AI_STATUS_TEMPLATES[key]:
+            raise ValueError("AI status reason is not the server-owned rendering")
+        if synthesis["claims"]:
+            raise ValueError("non-applied AI cannot expose claims")
+
+    if status in {"abstained", "not_requested"}:
+        if synthesis["invocation"] is not None:
+            raise ValueError("non-invoked AI cannot retain an invocation")
         if any(pins[key] is not None for key in invocation_keys):
             raise ValueError("non-invoked AI cannot retain invocation revisions")
         return
 
     invocation = synthesis["invocation"]
+    if invocation is None:
+        raise ValueError("applied/degraded AI requires an invocation")
     expected = {
         "providerRevision": pins["provider"],
         "modelRevision": pins["model"],
@@ -596,6 +1009,92 @@ def validate_ai_invocation(case: dict[str, Any]) -> None:
         raise ValueError("applied/degraded AI requires complete invocation revisions")
     if invocation != expected:
         raise ValueError("AI invocation provenance differs from pinned revisions")
+
+
+def validate_diagnosis_dependency_closure(
+    case: dict[str, Any],
+    facts_by_id: dict[str, dict[str, Any]],
+) -> None:
+    decision = case["decision"]
+    decision_key = (decision["templateId"], decision["templateRevision"])
+    if decision_key not in DIAGNOSIS_DEPENDENCY_REGISTRY:
+        raise ValueError(f"unknown diagnosis dependency template: {decision_key}")
+    spec = DIAGNOSIS_DEPENDENCY_REGISTRY[decision_key]
+    fact_id = decision["params"]["profileFactId"]
+    if fact_id not in facts_by_id:
+        raise ValueError("diagnosis dependency closure lacks its profile fact")
+    fact = facts_by_id[fact_id]
+    if fact["templateId"] != spec["factTemplate"]:
+        raise ValueError("decision dependency registry rejects the profile fact type")
+    if len(facts_by_id) != 1:
+        raise ValueError("P0 diagnosis dependency closure requires one profile fact")
+    role_ids = fact_role_evidence_ids(fact)
+
+    findings_by_id = {item["ruleId"]: item for item in case["ruleFindings"]}
+    if set(findings_by_id) != set(spec["rules"]):
+        raise ValueError("diagnosis rules differ from the decision dependency registry")
+    for rule_id, roles in spec["rules"].items():
+        expected_evidence = {role_ids[role] for role in roles}
+        if set(findings_by_id[rule_id]["evidenceIds"]) != expected_evidence:
+            raise ValueError(f"rule provenance is not closed: {rule_id}")
+
+    synthesis = case["aiSynthesis"]
+    claims = synthesis["claims"]
+    claims_by_template: dict[tuple[str, str], dict[str, Any]] = {}
+    for claim in claims:
+        key = (claim["templateId"], claim["templateRevision"])
+        if key in claims_by_template:
+            raise ValueError(f"duplicate AI claim dependency template: {key}")
+        claims_by_template[key] = claim
+    expected_claim_templates = (
+        set(spec["claims"]) if synthesis["status"] == "applied" else set()
+    )
+    if set(claims_by_template) != expected_claim_templates:
+        raise ValueError("AI claims differ from the decision dependency registry")
+    for key, claim in claims_by_template.items():
+        dependency = spec["claims"][key]
+        expected_evidence = {role_ids[role] for role in dependency["evidenceRoles"]}
+        if set(claim["evidenceIds"]) != expected_evidence:
+            raise ValueError(f"AI claim provenance is not closed: {claim['claimId']}")
+        if set(claim["ruleIds"]) != set(dependency["rules"]):
+            raise ValueError(
+                f"AI claim rule provenance is not closed: {claim['claimId']}"
+            )
+
+    actions_by_template: dict[tuple[str, str], dict[str, Any]] = {}
+    for action in case["actions"]:
+        key = (action["templateId"], action["templateRevision"])
+        if key in actions_by_template:
+            raise ValueError(f"duplicate Action dependency template: {key}")
+        actions_by_template[key] = action
+    if set(actions_by_template) != set(spec["actions"]):
+        raise ValueError("Actions differ from the decision dependency registry")
+    for key, action in actions_by_template.items():
+        dependency = spec["actions"][key]
+        expected_evidence = {role_ids[role] for role in dependency["evidenceRoles"]}
+        if set(action["evidenceIds"]) != expected_evidence:
+            raise ValueError(f"Action provenance is not closed: {action['actionId']}")
+        if set(action["ruleIds"]) != set(dependency["rules"]):
+            raise ValueError(
+                f"Action rule provenance is not closed: {action['actionId']}"
+            )
+
+    expected_decision_evidence = {
+        *role_ids.values(),
+        *case["subject"]["businessEvidenceIds"],
+    }
+    if set(decision["evidenceIds"]) != expected_decision_evidence:
+        raise ValueError("decision evidence is not the closed dependency projection")
+    if set(decision["ruleIds"]) != set(findings_by_id):
+        raise ValueError("decision rules are not the closed dependency projection")
+    if set(decision["claimIds"]) != {
+        item["claimId"] for item in claims_by_template.values()
+    }:
+        raise ValueError("decision claims are not the closed dependency projection")
+    if set(decision["actionIds"]) != {
+        item["actionId"] for item in actions_by_template.values()
+    }:
+        raise ValueError("decision actions are not the closed dependency projection")
 
 
 def validate_source_semantics(source: dict[str, Any]) -> None:
@@ -637,12 +1136,16 @@ def validate_source_semantics(source: dict[str, Any]) -> None:
         and source["verification"]["status"] != "failed"
     ):
         raise ValueError("verification_failed Source requires failed verification")
-    if (
-        source["verification"]["status"] == "failed"
-        and source["state"] != "verification_failed"
+    if source["verification"]["status"] == "failed" and not (
+        source["state"] == "verification_failed"
+        or (
+            source["state"] == "draining"
+            and source["credentialLifecycle"]["pendingOperation"]
+            == "verification_failure"
+        )
     ):
         raise ValueError(
-            "failed verification requires verification_failed Source state"
+            "failed verification requires verification-failure drain or terminal state"
         )
 
     required_by_type = {
@@ -668,6 +1171,7 @@ def validate_source_semantics(source: dict[str, Any]) -> None:
         "rotate",
         "disable",
         "delete",
+        "verification_failure",
     }:
         raise ValueError("draining Source requires an explicit pending operation")
     if (
@@ -691,6 +1195,26 @@ def validate_source_semantics(source: dict[str, Any]) -> None:
         and lifecycle["state"] != "retiring"
     ):
         raise ValueError("disable/delete operation requires retiring credential state")
+    if lifecycle["pendingOperation"] == "verification_failure":
+        if lifecycle["state"] != "active" or lifecycle["retireAfter"] is not None:
+            raise ValueError(
+                "verification-failure drain must retain the active credential"
+            )
+        if source["verification"]["status"] != "failed":
+            raise ValueError(
+                "verification-failure drain requires a failed verification snapshot"
+            )
+    if lifecycle["state"] == "active" and lifecycle["pendingOperation"] not in {
+        None,
+        "verification_failure",
+    }:
+        raise ValueError("active credential has an incompatible pending operation")
+    if (
+        lifecycle["state"] == "active"
+        and lifecycle["pendingOperation"] is None
+        and lifecycle["retireAfter"] is not None
+    ):
+        raise ValueError("active credential cannot retain a retirement deadline")
     if lifecycle["state"] == "tombstoned":
         if source["state"] != "tombstoned" or lifecycle["activeLeaseCount"]:
             raise ValueError("tombstoned Source must have zero active leases")
@@ -743,6 +1267,11 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
         for event in new_lease_events
     ):
         raise ValueError("new lease audit event predates the prior revision")
+    if any(
+        parse_time(event["createdAt"]) > parse_time(state_event["createdAt"])
+        for event in new_lease_events
+    ):
+        raise ValueError("Source state audit precedes its lease ledger events")
 
     if proposed["state"] not in SOURCE_STATE_TRANSITIONS[prior["state"]]:
         raise ValueError("illegal Source state transition")
@@ -752,18 +1281,33 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
     proposed_lease_count = proposed_lifecycle["activeLeaseCount"]
     if proposed["state"] == "draining" and prior["state"] != "draining":
         pending_operation = proposed_lifecycle["pendingOperation"]
-        if pending_operation not in {"rotate", "disable", "delete"}:
+        if pending_operation not in {
+            "rotate",
+            "disable",
+            "delete",
+            "verification_failure",
+        }:
             raise ValueError("drain admission requires a recognized pending operation")
         if proposed_lease_count != prior_lease_count:
             raise ValueError("Source must preserve active leases when entering drain")
+        if proposed["activeLeases"] != prior["activeLeases"]:
+            raise ValueError(
+                "Source must preserve lease identities when entering drain"
+            )
         expected_start = {
             "rotate": "rotation_started",
             "disable": "disable_started",
             "delete": "delete_started",
+            "verification_failure": "verification_failure_started",
         }[pending_operation]
         if state_event["operation"] != expected_start:
             raise ValueError("drain start operation does not match pendingOperation")
-        if (
+        if pending_operation == "verification_failure":
+            if state_event["actor"]["kind"] != "system":
+                raise ValueError(
+                    "verification-failure drain must be initiated by the verifier"
+                )
+        elif (
             state_event["actor"]["kind"] != "user"
             or state_event["actor"].get("role") != "owner"
         ):
@@ -773,6 +1317,8 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
                 "leases cannot be released in the drain admission revision"
             )
     if prior["state"] == "draining":
+        if any(event["operation"] == "lease_acquired" for event in new_lease_events):
+            raise ValueError("draining Source cannot acquire new leases")
         if proposed_lease_count > prior_lease_count:
             raise ValueError("draining Source cannot acquire new leases")
         if proposed["state"] == "draining":
@@ -804,7 +1350,12 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
             if new_lease_events:
                 raise ValueError("lease release must complete before drain completion")
             pending_operation = prior_lifecycle["pendingOperation"]
-            if pending_operation not in {"rotate", "disable", "delete"}:
+            if pending_operation not in {
+                "rotate",
+                "disable",
+                "delete",
+                "verification_failure",
+            }:
                 raise ValueError(
                     "drain completion requires a recognized pending operation"
                 )
@@ -812,6 +1363,7 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
                 "rotate": "enabled",
                 "disable": "disabled",
                 "delete": "tombstoned",
+                "verification_failure": "verification_failed",
             }[pending_operation]
             if proposed["state"] != expected_state:
                 raise ValueError(
@@ -821,13 +1373,25 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
                 "rotate": "rotation_completed",
                 "disable": "disabled",
                 "delete": "tombstoned",
+                "verification_failure": "verification_failed",
             }[pending_operation]
             if state_event["operation"] != expected_completion:
                 raise ValueError(
                     "Source completion operation does not match pendingOperation"
                 )
     elif new_lease_events:
-        raise ValueError("lease releases are only valid during a draining revision")
+        if not (prior["state"] == proposed["state"] == "enabled"):
+            raise ValueError(
+                "lease ledger changes outside draining require an enabled Source"
+            )
+        if any(
+            event["operation"] == "lease_force_cancelled" for event in new_lease_events
+        ):
+            raise ValueError("force cancellation requires an admitted drain operation")
+        if state_event["operation"] != "leases_updated":
+            raise ValueError(
+                "enabled lease ledger changes require a leases_updated state audit"
+            )
 
     prior_ref = prior["auth"]["credentialRef"]
     proposed_ref = proposed["auth"]["credentialRef"]
@@ -848,6 +1412,13 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
             and prior_credential_revision == proposed_credential_revision
         ):
             raise ValueError("disable completion must retain its credential revision")
+        if pending_operation == "verification_failure" and not (
+            prior_ref == proposed_ref
+            and prior_credential_revision == proposed_credential_revision
+        ):
+            raise ValueError(
+                "verification-failure completion must retain its credential revision"
+            )
         if pending_operation == "delete" and not (
             proposed_ref is None and proposed_credential_revision is None
         ):
@@ -962,12 +1533,112 @@ def build_source_lease_drain(
     source: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     leased = copy.deepcopy(source)
+    leased["revision"] = source["revision"] + 1
     leased["credentialLifecycle"]["activeLeaseCount"] = 2
-    draining, _ = build_source_rotation(leased)
+    leased["updatedAt"] = "2026-09-02T09:23:00Z"
+    leased["transitionEvents"].append(
+        {
+            "eventId": "sevt_0000000000000101",
+            "sourceRevision": leased["revision"],
+            "type": "source_state",
+            "operation": "leases_updated",
+            "fromState": "enabled",
+            "toState": "enabled",
+            "credentialRevision": leased["auth"]["credentialRevision"],
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "diagnosis-job",
+                "displayName": "诊断任务",
+            },
+            "createdAt": leased["updatedAt"],
+            "reason": "两个只读诊断任务取得数据源租约",
+        }
+    )
+    leased["leaseEvents"].extend(
+        [
+            {
+                "eventId": "levt_0000000000000101",
+                "sourceRevision": leased["revision"],
+                "operation": "lease_acquired",
+                "leaseId": "lease_0000000000000001",
+                "jobId": "job_0000000000000001",
+                "fromLeaseCount": 0,
+                "toLeaseCount": 1,
+                "actor": {
+                    "kind": "system",
+                    "role": "system",
+                    "id": "diagnosis-job",
+                    "displayName": "诊断任务",
+                },
+                "ownerApproval": None,
+                "createdAt": "2026-09-02T09:21:00Z",
+                "reason": "只读诊断任务取得数据源租约",
+            },
+            {
+                "eventId": "levt_0000000000000102",
+                "sourceRevision": leased["revision"],
+                "operation": "lease_acquired",
+                "leaseId": "lease_0000000000000002",
+                "jobId": "job_0000000000000002",
+                "fromLeaseCount": 1,
+                "toLeaseCount": 2,
+                "actor": {
+                    "kind": "system",
+                    "role": "system",
+                    "id": "diagnosis-job",
+                    "displayName": "诊断任务",
+                },
+                "ownerApproval": None,
+                "createdAt": "2026-09-02T09:22:00Z",
+                "reason": "只读诊断任务取得数据源租约",
+            },
+        ]
+    )
+    leased["activeLeases"] = [
+        {
+            "leaseId": event["leaseId"],
+            "jobId": event["jobId"],
+            "acquiredRevision": event["sourceRevision"],
+            "acquiredAt": event["createdAt"],
+        }
+        for event in leased["leaseEvents"][-2:]
+    ]
+
+    draining = copy.deepcopy(leased)
+    draining["revision"] = leased["revision"] + 1
+    draining["state"] = "draining"
+    draining["credentialLifecycle"] = {
+        "state": "rotating",
+        "activeLeaseCount": 2,
+        "pendingOperation": "rotate",
+        "retireAfter": "2026-09-02T09:30:00Z",
+    }
+    draining["updatedAt"] = "2026-09-02T09:25:00Z"
+    draining["transitionEvents"].append(
+        {
+            "eventId": "sevt_0000000000000102",
+            "sourceRevision": draining["revision"],
+            "type": "source_state",
+            "operation": "rotation_started",
+            "fromState": "enabled",
+            "toState": "draining",
+            "credentialRevision": draining["auth"]["credentialRevision"],
+            "actor": {
+                "kind": "user",
+                "role": "owner",
+                "id": "owner",
+                "displayName": "本机 Owner",
+            },
+            "createdAt": draining["updatedAt"],
+            "reason": "停止旧凭据的新任务准入并等待租约排空",
+        }
+    )
 
     drained = copy.deepcopy(draining)
     drained["revision"] = draining["revision"] + 1
     drained["credentialLifecycle"]["activeLeaseCount"] = 0
+    drained["activeLeases"] = []
     drained["updatedAt"] = "2026-09-02T09:28:00Z"
     drained["transitionEvents"].append(
         {
@@ -1040,6 +1711,45 @@ def build_source_lease_drain(
     return leased, draining, drained
 
 
+def build_source_verification_failure_drain(source: dict[str, Any]) -> dict[str, Any]:
+    draining = copy.deepcopy(source)
+    draining["revision"] = source["revision"] + 1
+    draining["state"] = "draining"
+    draining["credentialLifecycle"] = {
+        "state": "active",
+        "activeLeaseCount": source["credentialLifecycle"]["activeLeaseCount"],
+        "pendingOperation": "verification_failure",
+        "retireAfter": None,
+    }
+    draining["verification"] = {
+        "status": "failed",
+        "testedAt": "2026-09-02T09:24:00Z",
+        "identityDigest": None,
+        "errorCode": "CONNECT_TIMEOUT",
+    }
+    draining["updatedAt"] = "2026-09-02T09:24:00Z"
+    draining["transitionEvents"].append(
+        {
+            "eventId": "sevt_0000000000000103",
+            "sourceRevision": draining["revision"],
+            "type": "source_state",
+            "operation": "verification_failure_started",
+            "fromState": "enabled",
+            "toState": "draining",
+            "credentialRevision": draining["auth"]["credentialRevision"],
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-verifier",
+                "displayName": "连接校验器",
+            },
+            "createdAt": draining["updatedAt"],
+            "reason": "连接重新校验失败，停止新任务并保留已有租约直到排空",
+        }
+    )
+    return draining
+
+
 def validate_evidence_semantics(
     evidence: dict[str, Any],
     case_id: str,
@@ -1060,6 +1770,28 @@ def validate_evidence_semantics(
     payload = evidence["payload"]
     collection = evidence["collection"]
     budget = collection["budget"]
+    typed = payload["typed"]
+    expected_schema_revision = EVIDENCE_SCHEMA_REVISIONS[evidence["kind"]]
+    if payload["schemaRevision"] != expected_schema_revision:
+        raise ValueError(
+            f"evidence schema revision does not match kind: {evidence['evidenceId']}"
+        )
+    if payload["extractionRevision"] != "evidence-extractor/v1":
+        raise ValueError(
+            f"unsupported evidence extraction revision: {evidence['evidenceId']}"
+        )
+    if typed["kind"] != evidence["kind"]:
+        raise ValueError(
+            f"typed evidence payload does not match kind: {evidence['evidenceId']}"
+        )
+    if payload["typedDigest"] != typed_payload_digest(typed):
+        raise ValueError(
+            f"typed evidence projection digest mismatch: {evidence['evidenceId']}"
+        )
+    if evidence["summaryZh"] != render_evidence_summary(evidence):
+        raise ValueError(
+            f"evidence summary differs from typed payload: {evidence['evidenceId']}"
+        )
     if payload["digest"] != evidence["integrityDigest"]:
         raise ValueError(
             f"evidence and payload digests differ: {evidence['evidenceId']}"
@@ -1277,30 +2009,27 @@ def validate_outcome_semantics(case: dict[str, Any]) -> None:
         if required_evidence - {item["kind"] for item in result_evidence}:
             continue
         terminal_at = parse_time(terminal["createdAt"])
-        causal_chain = any(
-            parse_time(review["createdAt"])
-            <= parse_time(implementation["createdAt"])
-            <= min(parse_time(item["observedAt"]) for item in result_evidence)
-            <= max(parse_time(item["collectedAt"]) for item in result_evidence)
-            <= terminal_at
-            for review in approvals
-            for implementation in implementations
-        )
-        if (
-            causal_chain
-            and action_id in terminal_event["actionIds"]
-            and set(terminal["evidenceIds"]) <= set(terminal_event["evidenceIds"])
-            and terminal["feedbackId"] in terminal_event["feedbackIds"]
-            and any(
-                review["reviewId"] in terminal_event["reviewIds"]
-                for review in approvals
-            )
-            and any(
-                implementation["feedbackId"] in terminal_event["feedbackIds"]
-                for implementation in implementations
-            )
-        ):
-            return
+        for review in approvals:
+            if review["reviewId"] not in terminal_event["reviewIds"]:
+                continue
+            for implementation in implementations:
+                if implementation["feedbackId"] not in terminal_event["feedbackIds"]:
+                    continue
+                causal_tuple = (
+                    parse_time(review["createdAt"])
+                    <= parse_time(implementation["createdAt"])
+                    <= min(parse_time(item["observedAt"]) for item in result_evidence)
+                    <= max(parse_time(item["collectedAt"]) for item in result_evidence)
+                    <= terminal_at
+                )
+                tuple_is_in_event = (
+                    action_id in terminal_event["actionIds"]
+                    and set(terminal["evidenceIds"])
+                    <= set(terminal_event["evidenceIds"])
+                    and terminal["feedbackId"] in terminal_event["feedbackIds"]
+                )
+                if causal_tuple and tuple_is_in_event:
+                    return
     raise ValueError(f"{outcome} lacks one linked, ordered outcome evidence chain")
 
 
@@ -1327,6 +2056,7 @@ def validate_case_references(case: dict[str, Any]) -> None:
     for fact in case["facts"]:
         if not set(fact["evidenceIds"]) <= evidence_ids:
             raise ValueError(f"dangling fact evidence: {fact['factId']}")
+        validate_fact_evidence_projection(fact, evidence_by_id)
         expected_fact = render_fact(fact)
         rendered_fact = {
             field: fact[field] for field in ("kind", "statementZh", "valueText")
@@ -1413,6 +2143,7 @@ def validate_case_references(case: dict[str, Any]) -> None:
     ):
         raise ValueError("rules effective mode cannot expose applied AI synthesis")
 
+    validate_diagnosis_dependency_closure(case, facts_by_id)
     decision = case["decision"]
     rendered_decision = render_decision(decision, facts_by_id)
     if any(decision[field] != value for field, value in rendered_decision.items()):
@@ -1599,7 +2330,7 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
             "observedAt": "2026-09-02T08:10:00Z",
             "collectedAt": "2026-09-02T08:11:00Z",
             "integrityDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-            "summaryZh": "隔离环境验证显示扫描行数下降 94%，P95 降至 420 ms。",
+            "summaryZh": "隔离环境验证显示P95 延迟从 2800 ms 变为 420 ms，达到预设阈值。",
         }
     )
     effect["payload"].update(
@@ -1607,8 +2338,17 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
             "schemaRevision": "effect-metric-comparison/v1",
             "storageRef": "payload_0000000000000005",
             "digest": effect["integrityDigest"],
+            "typed": {
+                "kind": "effect_metric_comparison",
+                "metricZh": "P95 延迟",
+                "baselineValue": 2800,
+                "observedValue": 420,
+                "unit": "ms",
+                "passed": True,
+            },
         }
     )
+    effect["payload"]["typedDigest"] = typed_payload_digest(effect["payload"]["typed"])
     validated["evidence"].append(effect)
     validated["reviews"] = [
         {
@@ -1715,15 +2455,12 @@ def validate_report_projection(report: dict[str, Any], case: dict[str, Any]) -> 
         else None
     )
     synthesis = case["aiSynthesis"]
-    expected_code = (
-        synthesis["code"] if synthesis and synthesis["status"] == "degraded" else None
-    )
-    expected_degradation = synthesis["messageZh"] if expected_code else None
     if report["reasoning"] != {
         "ruleFindingsZh": expected_rule_text,
         "aiContributionZh": expected_ai_text,
-        "degradationCode": expected_code,
-        "degradationZh": expected_degradation,
+        "aiStatus": synthesis["status"],
+        "aiCode": synthesis["code"],
+        "aiReasonZh": synthesis["messageZh"],
     }:
         raise ValueError("report reasoning is not a Case projection")
 
@@ -1778,8 +2515,14 @@ def main() -> None:
     source_validator.validate(leased_source)
     source_validator.validate(leased_draining)
     source_validator.validate(drained_source)
+    validate_source_transition(sources[0], leased_source)
     validate_source_transition(leased_source, leased_draining)
     validate_source_transition(leased_draining, drained_source)
+    verification_failure_draining = build_source_verification_failure_drain(
+        leased_source
+    )
+    source_validator.validate(verification_failure_draining)
+    validate_source_transition(leased_source, verification_failure_draining)
     available_source_revisions = {
         f"{source['sourceId']}@{source['revision']}" for source in sources
     }
@@ -1802,6 +2545,19 @@ def main() -> None:
         abstained_case["pinnedRevisions"][key] = None
     schema_validator("diagnosis-case-v2.schema.json").validate(abstained_case)
     validate_case_references(abstained_case)
+    rules_only_case = copy.deepcopy(cases[1])
+    rules_only_case["configuredMode"] = "rules"
+    rules_only_case["aiSynthesis"] = {
+        "status": "not_requested",
+        "code": "AI_NOT_REQUESTED",
+        "messageZh": "此诊断配置为仅规则模式，未调用外部模型。",
+        "invocation": None,
+        "claims": [],
+    }
+    for key in ("provider", "model", "prompt", "payload", "payloadDigest"):
+        rules_only_case["pinnedRevisions"][key] = None
+    schema_validator("diagnosis-case-v2.schema.json").validate(rules_only_case)
+    validate_case_references(rules_only_case)
     terminal_case = build_validated_case(cases[0])
     schema_validator("diagnosis-case-v2.schema.json").validate(terminal_case)
     validate_case_references(terminal_case)
@@ -1811,10 +2567,25 @@ def main() -> None:
         if key not in cases_by_revision:
             raise ValueError(f"report has no matching Case fixture: {key}")
         validate_report_projection(report, cases_by_revision[key])
+    rules_only_report = copy.deepcopy(reports[1])
+    rules_only_report["configuredMode"] = "rules"
+    rules_only_report["reasoning"].update(
+        {
+            "aiStatus": "not_requested",
+            "aiCode": "AI_NOT_REQUESTED",
+            "aiReasonZh": "此诊断配置为仅规则模式，未调用外部模型。",
+        }
+    )
+    rules_only_report["trace"]["aiInvocation"] = None
+    rules_only_report["trace"]["pinnedRevisions"] = copy.deepcopy(
+        rules_only_case["pinnedRevisions"]
+    )
+    schema_validator("diagnosis-report-v1.schema.json").validate(rules_only_report)
+    validate_report_projection(rules_only_report, rules_only_case)
     print(
         "vNext contract examples valid: "
         "3 sources, 1 lease-drain chain, 1 standalone evidence, 3 cases, "
-        "1 explicit AI abstention, 1 terminal transition, 3 reports"
+        "1 AI abstention, 1 rules-only projection, 1 terminal transition, 3 reports"
     )
 
 

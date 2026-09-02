@@ -59,7 +59,12 @@
       "fromState": null,
       "toState": "draft",
       "credentialRevision": 1,
-      "actor": { "kind": "user", "role": "owner", "id": "owner", "displayName": "本机 Owner" },
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
       "createdAt": "2026-09-02T09:00:00Z",
       "reason": "登记只读数据库连接"
     },
@@ -71,7 +76,12 @@
       "fromState": "draft",
       "toState": "enabled",
       "credentialRevision": 1,
-      "actor": { "kind": "user", "role": "owner", "id": "owner", "displayName": "本机 Owner" },
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
       "createdAt": "2026-09-02T09:10:00Z",
       "reason": "启用已验证的数据源"
     },
@@ -83,7 +93,12 @@
       "fromState": "enabled",
       "toState": "enabled",
       "credentialRevision": 1,
-      "actor": { "kind": "user", "role": "owner", "id": "owner", "displayName": "本机 Owner" },
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
       "createdAt": "2026-09-02T09:20:00Z",
       "reason": "更新负责人说明"
     },
@@ -95,7 +110,12 @@
       "fromState": "enabled",
       "toState": "enabled",
       "credentialRevision": 1,
-      "actor": { "kind": "user", "role": "owner", "id": "owner", "displayName": "本机 Owner" },
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
       "createdAt": "2026-09-02T09:30:00Z",
       "reason": "更新查询预算"
     },
@@ -107,7 +127,12 @@
       "fromState": "enabled",
       "toState": "enabled",
       "credentialRevision": 1,
-      "actor": { "kind": "user", "role": "owner", "id": "owner", "displayName": "本机 Owner" },
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
       "createdAt": "2026-09-02T09:40:00Z",
       "reason": "更新允许的 Schema"
     },
@@ -119,7 +144,12 @@
       "fromState": "enabled",
       "toState": "enabled",
       "credentialRevision": 1,
-      "actor": { "kind": "user", "role": "owner", "id": "owner", "displayName": "本机 Owner" },
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
       "createdAt": "2026-09-02T09:45:00Z",
       "reason": "更新数据源名称"
     },
@@ -131,7 +161,12 @@
       "fromState": "enabled",
       "toState": "draining",
       "credentialRevision": 1,
-      "actor": { "kind": "user", "role": "owner", "id": "owner", "displayName": "本机 Owner" },
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
       "createdAt": "2026-09-02T09:50:00Z",
       "reason": "停止新任务并销毁凭据"
     },
@@ -143,12 +178,18 @@
       "fromState": "draining",
       "toState": "tombstoned",
       "credentialRevision": null,
-      "actor": { "kind": "system", "role": "system", "id": "source-lifecycle", "displayName": "数据源生命周期" },
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "source-lifecycle",
+        "displayName": "数据源生命周期"
+      },
       "createdAt": "2026-09-02T10:00:00Z",
       "reason": "活动租约归零并完成凭据销毁"
     }
   ],
   "leaseEvents": [],
   "createdAt": "2026-09-02T09:00:00Z",
-  "updatedAt": "2026-09-02T10:00:00Z"
+  "updatedAt": "2026-09-02T10:00:00Z",
+  "activeLeases": []
 }

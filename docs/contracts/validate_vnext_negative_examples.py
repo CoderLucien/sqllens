@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -24,10 +26,17 @@ def expect_error(action: Callable[[], None], label: str) -> None:
     global REJECTED
     try:
         action()
-    except (ValidationError, ValueError):
+    except (TypeError, ValidationError, ValueError):
         REJECTED += 1
         return
     raise AssertionError(f"negative contract case was accepted: {label}")
+
+
+def typed_digest(value: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
 def main() -> None:
@@ -132,6 +141,98 @@ def main() -> None:
     )
 
     invalid_case = copy.deepcopy(case)
+    invalid_case["facts"][0]["params"].update(
+        {
+            "callCount": 999999999,
+            "p95Ms": 1,
+            "tableName": "fabricated_table",
+        }
+    )
+    invalid_case["facts"][0].update(contracts.render_fact(invalid_case["facts"][0]))
+    invalid_case["decision"].update(
+        contracts.render_decision(
+            invalid_case["decision"],
+            {item["factId"]: item for item in invalid_case["facts"]},
+        )
+    )
+    expect_error(
+        lambda: validate_case_references(invalid_case),
+        "typed Fact raw values are fabricated independently from Evidence payload",
+    )
+
+    invalid_case = copy.deepcopy(case)
+    slow_evidence = next(
+        item for item in invalid_case["evidence"] if item["kind"] == "slow_query"
+    )
+    slow_evidence["payload"]["typed"].update({"callCount": 999999999, "p95Ms": 1})
+    slow_evidence["summaryZh"] = (
+        "该 SQL 在 10 分钟窗口内执行 999999999 次，P95 1 ms，平均扫描 126 万行。"
+    )
+    invalid_case["facts"][0]["params"].update({"callCount": 999999999, "p95Ms": 1})
+    invalid_case["facts"][0].update(contracts.render_fact(invalid_case["facts"][0]))
+    invalid_case["decision"].update(
+        contracts.render_decision(
+            invalid_case["decision"],
+            {item["factId"]: item for item in invalid_case["facts"]},
+        )
+    )
+    expect_error(
+        lambda: validate_case_references(invalid_case),
+        "typed Evidence projection changes without updating its canonical digest",
+    )
+
+    invalid_case = copy.deepcopy(case)
+    slow_evidence = next(
+        item for item in invalid_case["evidence"] if item["kind"] == "slow_query"
+    )
+    slow_evidence["payload"]["typed"].update({"callCount": 999999999, "p95Ms": 1})
+    slow_evidence["payload"]["typedDigest"] = typed_digest(
+        slow_evidence["payload"]["typed"]
+    )
+    invalid_case["facts"][0]["params"].update({"callCount": 999999999, "p95Ms": 1})
+    invalid_case["facts"][0].update(contracts.render_fact(invalid_case["facts"][0]))
+    invalid_case["decision"].update(
+        contracts.render_decision(
+            invalid_case["decision"],
+            {item["factId"]: item for item in invalid_case["facts"]},
+        )
+    )
+    expect_error(
+        lambda: validate_case_references(invalid_case),
+        "typed Evidence summary is not the deterministic typed projection",
+    )
+
+    invalid_case = copy.deepcopy(case)
+    aliased_evidence_id = invalid_case["facts"][0]["params"]["indexEvidenceId"]
+    invalid_case["facts"][0]["params"].update(
+        {
+            "runtimeEvidenceId": aliased_evidence_id,
+            "planEvidenceId": aliased_evidence_id,
+        }
+    )
+    invalid_case["facts"][0]["evidenceIds"] = [aliased_evidence_id]
+    invalid_case["facts"][0].update(contracts.render_fact(invalid_case["facts"][0]))
+    invalid_case["decision"].update(
+        contracts.render_decision(
+            invalid_case["decision"],
+            {item["factId"]: item for item in invalid_case["facts"]},
+        )
+    )
+    expect_error(
+        lambda: validate_case_references(invalid_case),
+        "one Evidence object aliases multiple typed Fact roles",
+    )
+
+    invalid_case = copy.deepcopy(case)
+    invalid_case["decision"]["evidenceIds"] = list(
+        invalid_case["subject"]["businessEvidenceIds"]
+    )
+    expect_error(
+        lambda: validate_case_references(invalid_case),
+        "decision omits the evidence provenance of its Fact, Rule, Claim, and Action",
+    )
+
+    invalid_case = copy.deepcopy(case)
     invalid_case["facts"][0]["params"]["scanReturnRatio"] = 999999999
     expect_error(
         lambda: validate_rerendered_fact_case(invalid_case),
@@ -223,6 +324,53 @@ def main() -> None:
     expect_error(
         lambda: validate_case_references(invalid_case),
         "non-invoked AI abstention retains provider invocation pins",
+    )
+
+    invalid_case = copy.deepcopy(statistics_case)
+    invalid_case["configuredMode"] = "rules"
+    expect_error(
+        lambda: validate_case_references(invalid_case),
+        "rules-only mode carries a degraded model invocation and provider pins",
+    )
+
+    invalid_case = copy.deepcopy(statistics_case)
+    invalid_case["aiSynthesis"]["messageZh"] = (
+        "立即 DROP TABLE production.orders；影响 99% 请求"
+    )
+    invalid_report = load(EXAMPLES / "diagnosis-report-v1.statistics.review.json")
+    invalid_report["reasoning"]["aiReasonZh"] = invalid_case["aiSynthesis"]["messageZh"]
+    expect_error(
+        lambda: (
+            validate_case_references(invalid_case),
+            validate_report_projection(invalid_report, invalid_case),
+        ),
+        "degraded AI exposes arbitrary customer-visible reason text",
+    )
+
+    invalid_case = copy.deepcopy(statistics_case)
+    invalid_case["aiSynthesis"] = {
+        "status": "abstained",
+        "code": "EVIDENCE_POLICY_ABSTENTION",
+        "messageZh": "证据策略不允许调用外部模型，本报告仅使用确定性规则。",
+        "invocation": None,
+        "claims": [],
+    }
+    for key in ("provider", "model", "prompt", "payload", "payloadDigest"):
+        invalid_case["pinnedRevisions"][key] = None
+    invalid_report = load(EXAMPLES / "diagnosis-report-v1.statistics.review.json")
+    invalid_report["reasoning"]["aiStatus"] = "applied"
+    invalid_report["reasoning"]["aiCode"] = None
+    invalid_report["reasoning"]["aiReasonZh"] = None
+    invalid_report["trace"]["aiInvocation"] = None
+    invalid_report["trace"]["pinnedRevisions"] = copy.deepcopy(
+        invalid_case["pinnedRevisions"]
+    )
+    expect_error(
+        lambda: (
+            validate_case_references(invalid_case),
+            validate_report_projection(invalid_report, invalid_case),
+        ),
+        "report hides an AI abstention status, code, and reason",
     )
 
     invalid_case = copy.deepcopy(case)
@@ -439,6 +587,88 @@ def main() -> None:
     contracts.validate_source_transition(leased_source, leased_draining)
     contracts.validate_source_transition(leased_draining, drained_source)
 
+    invalid = copy.deepcopy(leased_source)
+    invalid["leaseEvents"][0]["actor"] = {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner",
+    }
+    expect_error(
+        lambda: validate_source(invalid),
+        "Source lease acquisition is forged by a user rather than job admission",
+    )
+
+    invalid = copy.deepcopy(leased_source)
+    invalid["transitionEvents"][-1]["actor"] = {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner",
+    }
+    expect_error(
+        lambda: validate_source(invalid),
+        "Source lease snapshot state event is forged by a user",
+    )
+
+    invalid = copy.deepcopy(leased_source)
+    invalid["revision"] += 1
+    invalid["credentialLifecycle"]["activeLeaseCount"] = 1
+    invalid["activeLeases"] = invalid["activeLeases"][:1]
+    invalid["updatedAt"] = "2026-09-02T09:25:00Z"
+    invalid["leaseEvents"].append(
+        {
+            "eventId": "levt_0000000000000081",
+            "sourceRevision": invalid["revision"],
+            "operation": "lease_force_cancelled",
+            "leaseId": "lease_0000000000000002",
+            "jobId": "job_0000000000000002",
+            "fromLeaseCount": 2,
+            "toLeaseCount": 1,
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-lifecycle",
+                "displayName": "数据源生命周期",
+            },
+            "ownerApproval": {
+                "approvedBy": {
+                    "kind": "user",
+                    "role": "owner",
+                    "id": "owner",
+                    "displayName": "本机 Owner",
+                },
+                "approvedAt": "2026-09-02T09:23:30Z",
+                "reason": "仅允许在排空阶段强制取消任务",
+            },
+            "createdAt": "2026-09-02T09:24:00Z",
+            "reason": "错误地在 enabled 状态强制取消任务",
+        }
+    )
+    invalid["transitionEvents"].append(
+        {
+            "eventId": "sevt_0000000000000081",
+            "sourceRevision": invalid["revision"],
+            "type": "source_state",
+            "operation": "leases_updated",
+            "fromState": "enabled",
+            "toState": "enabled",
+            "credentialRevision": invalid["auth"]["credentialRevision"],
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-lifecycle",
+                "displayName": "数据源生命周期",
+            },
+            "createdAt": invalid["updatedAt"],
+            "reason": "错误地在未进入 drain 时强制取消任务",
+        }
+    )
+    expect_error(
+        lambda: contracts.validate_source_transition(leased_source, invalid),
+        "Source force-cancels a lease before entering drain",
+    )
+
     invalid = copy.deepcopy(drained_source)
     invalid["leaseEvents"][-1]["ownerApproval"] = None
     expect_error(
@@ -467,6 +697,87 @@ def main() -> None:
     expect_error(
         lambda: contracts.validate_source_transition(leased_draining, invalid),
         "lease release audit count chain skips a state",
+    )
+
+    leased_enabled = copy.deepcopy(leased_source)
+    invalid = copy.deepcopy(leased_enabled)
+    invalid["revision"] += 1
+    invalid["credentialLifecycle"]["activeLeaseCount"] = 0
+    invalid["activeLeases"] = []
+    invalid["updatedAt"] = "2026-09-02T09:25:00Z"
+    invalid["transitionEvents"].append(
+        {
+            "eventId": "sevt_0000000000000081",
+            "sourceRevision": invalid["revision"],
+            "type": "source_state",
+            "operation": "edited",
+            "fromState": "enabled",
+            "toState": "enabled",
+            "credentialRevision": invalid["auth"]["credentialRevision"],
+            "actor": {
+                "kind": "user",
+                "role": "owner",
+                "id": "owner",
+                "displayName": "本机 Owner",
+            },
+            "createdAt": invalid["updatedAt"],
+            "reason": "编辑数据源显示名称",
+        }
+    )
+    expect_error(
+        lambda: contracts.validate_source_transition(leased_enabled, invalid),
+        "enabled edit erases active leases without a ledger event",
+    )
+
+    invalid = copy.deepcopy(leased_enabled)
+    invalid["revision"] += 1
+    invalid["state"] = "verification_failed"
+    invalid["credentialLifecycle"]["activeLeaseCount"] = 0
+    invalid["activeLeases"] = []
+    invalid["verification"] = {
+        "status": "failed",
+        "testedAt": "2026-09-02T09:25:00Z",
+        "identityDigest": None,
+        "errorCode": "CONNECT_TIMEOUT",
+    }
+    invalid["updatedAt"] = "2026-09-02T09:25:00Z"
+    invalid["transitionEvents"].append(
+        {
+            "eventId": "sevt_0000000000000082",
+            "sourceRevision": invalid["revision"],
+            "type": "source_state",
+            "operation": "verification_failed",
+            "fromState": "enabled",
+            "toState": "verification_failed",
+            "credentialRevision": invalid["auth"]["credentialRevision"],
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-verifier",
+                "displayName": "连接校验器",
+            },
+            "createdAt": invalid["updatedAt"],
+            "reason": "重新校验失败",
+        }
+    )
+    expect_error(
+        lambda: contracts.validate_source_transition(leased_enabled, invalid),
+        "verification failure erases active leases instead of entering drain",
+    )
+
+    invalid = copy.deepcopy(drained_source)
+    invalid["leaseEvents"][0]["leaseId"] = "lease_ffffffffffffffff"
+    invalid["leaseEvents"][0]["jobId"] = "job_ffffffffffffffff"
+    expect_error(
+        lambda: contracts.validate_source_transition(leased_draining, invalid),
+        "lease release invents a lease and job absent from an authoritative ledger",
+    )
+
+    invalid = copy.deepcopy(drained_source)
+    invalid["transitionEvents"][-1]["createdAt"] = "2026-09-02T09:26:00Z"
+    expect_error(
+        lambda: contracts.validate_source_transition(leased_draining, invalid),
+        "leases_drained state event precedes its release and cancellation events",
     )
 
     invalid = copy.deepcopy(draining_source)
@@ -627,6 +938,23 @@ def main() -> None:
         "effect outcome event is not linked to its approval review",
     )
 
+    invalid = copy.deepcopy(terminal)
+    late_review = copy.deepcopy(invalid["reviews"][0])
+    late_review.update(
+        {
+            "reviewId": "rev_0000000000000002",
+            "caseRevision": 2,
+            "createdAt": "2026-09-02T08:11:30Z",
+            "comment": "结果证据产生后才补录的审批，不具备因果性。",
+        }
+    )
+    invalid["reviews"].append(late_review)
+    invalid["transitionEvents"][-1]["reviewIds"] = [late_review["reviewId"]]
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "terminal event cites a late approval while causal check uses another review",
+    )
+
     if not hasattr(contracts, "validate_case_transition"):
         raise AssertionError("Case prior/proposed append-only validator is missing")
     contracts.validate_case_transition(case, terminal)
@@ -654,6 +982,14 @@ def main() -> None:
 
     if not (ROOT / "evidence-v2.schema.json").is_file():
         raise AssertionError("Evidence/v2 contract is missing")
+
+    product_spec = (
+        ROOT.parent / "superpowers/specs/2026-09-02-sqllens-vnext-product-spec.md"
+    ).read_text(encoding="utf-8")
+    if "customer-operated upstream Plan Replayer" not in product_spec:
+        raise AssertionError(
+            "Plan Replayer token guidance is not explicitly scoped to the customer-operated upstream tool"
+        )
 
     print(f"vNext negative contract cases rejected: {REJECTED}")
 

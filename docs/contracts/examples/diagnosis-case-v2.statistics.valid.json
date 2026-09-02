@@ -14,7 +14,9 @@
     "sqlDigest": "digest:3ac8...e112",
     "timeWindowZh": "2026-09-02 15:20-15:35 CST",
     "businessZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。",
-    "businessEvidenceIds": ["ev_0000000000000014"]
+    "businessEvidenceIds": [
+      "ev_0000000000000014"
+    ]
   },
   "decision": {
     "templateId": "decision.statistics_estimation",
@@ -29,21 +31,29 @@
       {
         "labelZh": "估算偏差",
         "valueZh": "estRows 120，运行时 rows 180000，偏差约 1500 倍",
-        "evidenceIds": ["ev_0000000000000011"]
+        "evidenceIds": [
+          "ev_0000000000000011"
+        ]
       },
       {
         "labelZh": "统计健康",
         "valueZh": "目标表统计更新时间早于最近一次大批量导入",
-        "evidenceIds": ["ev_0000000000000011"]
+        "evidenceIds": [
+          "ev_0000000000000011"
+        ]
       }
     ],
     "evidenceIds": [
       "ev_0000000000000011",
       "ev_0000000000000014"
     ],
-    "ruleIds": ["STATS_ESTIMATION_001"],
+    "ruleIds": [
+      "STATS_ESTIMATION_001"
+    ],
     "claimIds": [],
-    "actionIds": ["act_0000000000000011"]
+    "actionIds": [
+      "act_0000000000000011"
+    ]
   },
   "sourceSnapshots": [
     {
@@ -78,7 +88,15 @@
         "storageRef": "payload_0000000000000011",
         "recordCount": 1,
         "truncated": false,
-        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "statistics",
+          "estimatedRows": 120,
+          "actualRows": 180000,
+          "statisticsFreshness": "predates_bulk_import"
+        },
+        "typedDigest": "sha256:901c023a8ae7a8cbd51c20955d7a89379167a3516fc153325759fb7a3c7a7005"
       },
       "collection": {
         "collectorId": "tidb-readonly",
@@ -117,7 +135,13 @@
         "storageRef": "payload_0000000000000014",
         "recordCount": 1,
         "truncated": false,
-        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "business_observation",
+          "textZh": "对账任务运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。"
+        },
+        "typedDigest": "sha256:9f8fed29af39b04836c529c238d3ef2ee6201d64bd72b407ce51fb53bd403c01"
       },
       "collection": {
         "collectorId": "manual-input",
@@ -151,7 +175,9 @@
       "kind": "estimation_error",
       "statementZh": "核心表估算 120 行、实际 180000 行，相差约 1500 倍；目标表统计更新时间早于最近一次大批量导入。",
       "valueText": "1500x",
-      "evidenceIds": ["ev_0000000000000011"]
+      "evidenceIds": [
+        "ev_0000000000000011"
+      ]
     }
   ],
   "ruleFindings": [
@@ -161,8 +187,12 @@
       "severity": "high",
       "minimumEvidenceLevel": "E3",
       "conclusionZh": "估算/实际行数偏差超过版本规则阈值，且统计早于数据变更。",
-      "evidenceIds": ["ev_0000000000000011"],
-      "documentRefs": ["tidb-sql-tuning-statistics@2026-09-02"]
+      "evidenceIds": [
+        "ev_0000000000000011"
+      ],
+      "documentRefs": [
+        "tidb-sql-tuning-statistics@2026-09-02"
+      ]
     }
   ],
   "aiSynthesis": {
@@ -209,8 +239,12 @@
         "若计划退化，不在生产执行统计刷新",
         "保留原统计与计划证据并重新评估绑定候选"
       ],
-      "evidenceIds": ["ev_0000000000000011"],
-      "ruleIds": ["STATS_ESTIMATION_001"],
+      "evidenceIds": [
+        "ev_0000000000000011"
+      ],
+      "ruleIds": [
+        "STATS_ESTIMATION_001"
+      ],
       "requiresHumanApproval": true
     }
   ],
@@ -218,7 +252,9 @@
     {
       "code": "PRODUCTION_CAPACITY_UNKNOWN",
       "descriptionZh": "尚未取得生产峰值窗口的资源余量，不能直接安排生产 ANALYZE。",
-      "requiredEvidenceKinds": ["runtime_metric"]
+      "requiredEvidenceKinds": [
+        "runtime_metric"
+      ]
     },
     {
       "code": "AI_DEGRADED",
@@ -235,7 +271,11 @@
       "type": "workflow_state",
       "fromWorkflowState": null,
       "toWorkflowState": "queued",
-      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T07:35:00Z",
       "reason": "任务已创建"
     },
@@ -245,7 +285,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "queued",
       "toWorkflowState": "collecting",
-      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T07:35:00.200Z",
       "reason": "开始采集证据"
     },
@@ -255,7 +299,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "collecting",
       "toWorkflowState": "analyzing",
-      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T07:35:00.700Z",
       "reason": "证据采集完成"
     },
@@ -265,7 +313,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "analyzing",
       "toWorkflowState": "ready",
-      "actor": {"kind": "system", "id": "diagnosis-job", "displayName": "诊断任务"},
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T07:35:01Z",
       "reason": "规则报告投影完成"
     }

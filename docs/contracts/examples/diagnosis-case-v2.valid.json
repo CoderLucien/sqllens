@@ -14,7 +14,9 @@
     "sqlDigest": "digest:7f3a...91c2",
     "timeWindowZh": "2026-09-02 16:00-16:10 CST",
     "businessZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。",
-    "businessEvidenceIds": ["ev_0000000000000004"]
+    "businessEvidenceIds": [
+      "ev_0000000000000004"
+    ]
   },
   "decision": {
     "templateId": "decision.index_scan_priority",
@@ -29,17 +31,23 @@
       {
         "labelZh": "运行表现",
         "valueZh": "842 次调用，P95 2.8 秒，平均扫描 126 万行",
-        "evidenceIds": ["ev_0000000000000001"]
+        "evidenceIds": [
+          "ev_0000000000000001"
+        ]
       },
       {
         "labelZh": "执行计划",
         "valueZh": "orders 表 TableFullScan，扫描/返回比 3150:1",
-        "evidenceIds": ["ev_0000000000000002"]
+        "evidenceIds": [
+          "ev_0000000000000002"
+        ]
       },
       {
         "labelZh": "索引覆盖",
         "valueZh": "现有索引未匹配 tenant_id、status、created_at 的过滤顺序",
-        "evidenceIds": ["ev_0000000000000003"]
+        "evidenceIds": [
+          "ev_0000000000000003"
+        ]
       }
     ],
     "evidenceIds": [
@@ -48,9 +56,15 @@
       "ev_0000000000000003",
       "ev_0000000000000004"
     ],
-    "ruleIds": ["IDX_ACCESS_001"],
-    "claimIds": ["claim_0000000000000001"],
-    "actionIds": ["act_0000000000000001"]
+    "ruleIds": [
+      "IDX_ACCESS_001"
+    ],
+    "claimIds": [
+      "claim_0000000000000001"
+    ],
+    "actionIds": [
+      "act_0000000000000001"
+    ]
   },
   "sourceSnapshots": [
     {
@@ -69,7 +83,10 @@
       "caseId": "case_0000000000000002",
       "origin": "managed_source",
       "kind": "slow_query",
-      "sourceRef": { "sourceId": "src_0000000000000001", "revision": 3 },
+      "sourceRef": {
+        "sourceId": "src_0000000000000001",
+        "revision": 3
+      },
       "observedAt": "2026-09-02T08:00:00Z",
       "collectedAt": "2026-09-02T08:05:00Z",
       "freshness": "fresh",
@@ -82,7 +99,17 @@
         "storageRef": "payload_0000000000000001",
         "recordCount": 1,
         "truncated": false,
-        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "slow_query",
+          "windowMinutes": 10,
+          "callCount": 842,
+          "p95Ms": 2800,
+          "averageScanRows": 1260000,
+          "averageReturnRows": 400
+        },
+        "typedDigest": "sha256:67f3ea3535d3ebceb665258b1001360ba9bda64b37c38d8f2ec31547d8ece25f"
       },
       "collection": {
         "collectorId": "pingkaidb-readonly",
@@ -91,7 +118,14 @@
         "queryRevision": "pingkaidb-7.1/v1",
         "status": "complete",
         "redactionRevision": "evidence-redaction/v2",
-        "budget": { "timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 83, "rowsRead": 1, "bytesRead": 2048 }
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 83,
+          "rowsRead": 1,
+          "bytesRead": 2048
+        }
       }
     },
     {
@@ -101,7 +135,10 @@
       "caseId": "case_0000000000000002",
       "origin": "managed_source",
       "kind": "ordinary_plan",
-      "sourceRef": { "sourceId": "src_0000000000000001", "revision": 3 },
+      "sourceRef": {
+        "sourceId": "src_0000000000000001",
+        "revision": 3
+      },
       "observedAt": "2026-09-02T08:04:00Z",
       "collectedAt": "2026-09-02T08:05:00Z",
       "freshness": "fresh",
@@ -114,7 +151,14 @@
         "storageRef": "payload_0000000000000002",
         "recordCount": 1,
         "truncated": false,
-        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "ordinary_plan",
+          "tableName": "orders",
+          "accessPath": "table_full_scan"
+        },
+        "typedDigest": "sha256:e7254e2435429ef3265b028c7f6ff8a4e4b5051e395649ae11c4a1ed78b303b3"
       },
       "collection": {
         "collectorId": "pingkaidb-readonly",
@@ -123,7 +167,14 @@
         "queryRevision": "pingkaidb-7.1/v1",
         "status": "complete",
         "redactionRevision": "evidence-redaction/v2",
-        "budget": { "timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 41, "rowsRead": 8, "bytesRead": 4096 }
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 41,
+          "rowsRead": 8,
+          "bytesRead": 4096
+        }
       }
     },
     {
@@ -133,7 +184,10 @@
       "caseId": "case_0000000000000002",
       "origin": "managed_source",
       "kind": "index",
-      "sourceRef": { "sourceId": "src_0000000000000001", "revision": 3 },
+      "sourceRef": {
+        "sourceId": "src_0000000000000001",
+        "revision": 3
+      },
       "observedAt": "2026-09-02T08:04:00Z",
       "collectedAt": "2026-09-02T08:05:00Z",
       "freshness": "fresh",
@@ -146,7 +200,19 @@
         "storageRef": "payload_0000000000000003",
         "recordCount": 4,
         "truncated": false,
-        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "index",
+          "tableName": "orders",
+          "filterColumns": [
+            "tenant_id",
+            "status",
+            "created_at"
+          ],
+          "indexCoverage": "no_matching_composite_index"
+        },
+        "typedDigest": "sha256:a60ec9bea71660964eaa09de0605bafe5071781e1dd93cd76ac8a61ef1797511"
       },
       "collection": {
         "collectorId": "pingkaidb-readonly",
@@ -155,7 +221,14 @@
         "queryRevision": "pingkaidb-7.1/v1",
         "status": "complete",
         "redactionRevision": "evidence-redaction/v2",
-        "budget": { "timeoutMs": 5000, "maxRows": 5000, "maxBytes": 1048576, "elapsedMs": 27, "rowsRead": 4, "bytesRead": 3072 }
+        "budget": {
+          "timeoutMs": 5000,
+          "maxRows": 5000,
+          "maxBytes": 1048576,
+          "elapsedMs": 27,
+          "rowsRead": 4,
+          "bytesRead": 3072
+        }
       }
     },
     {
@@ -178,7 +251,13 @@
         "storageRef": "payload_0000000000000004",
         "recordCount": 1,
         "truncated": false,
-        "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "extractionRevision": "evidence-extractor/v1",
+        "typed": {
+          "kind": "business_observation",
+          "textZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。"
+        },
+        "typedDigest": "sha256:1b82aefc2a46f4a96e0665bb1a827935ea648e50fa43753a431ad64141be6fa5"
       },
       "collection": {
         "collectorId": "manual-input",
@@ -187,7 +266,14 @@
         "queryRevision": null,
         "status": "complete",
         "redactionRevision": "evidence-redaction/v2",
-        "budget": { "timeoutMs": 1000, "maxRows": 1, "maxBytes": 65536, "elapsedMs": 0, "rowsRead": 1, "bytesRead": 256 }
+        "budget": {
+          "timeoutMs": 1000,
+          "maxRows": 1,
+          "maxBytes": 65536,
+          "elapsedMs": 0,
+          "rowsRead": 1,
+          "bytesRead": 256
+        }
       }
     }
   ],
@@ -217,7 +303,11 @@
       "kind": "scan_amplification",
       "statementZh": "当前 10 分钟内调用 842 次，P95 为 2800 ms，平均扫描 126 万行；orders 表为 TableFullScan，扫描/返回比 3150:1，且现有索引未匹配 tenant_id、status、created_at 的过滤顺序。",
       "valueText": "3150:1",
-      "evidenceIds": ["ev_0000000000000001", "ev_0000000000000002", "ev_0000000000000003"]
+      "evidenceIds": [
+        "ev_0000000000000001",
+        "ev_0000000000000002",
+        "ev_0000000000000003"
+      ]
     }
   ],
   "ruleFindings": [
@@ -266,7 +356,9 @@
           "ev_0000000000000002",
           "ev_0000000000000003"
         ],
-        "ruleIds": ["IDX_ACCESS_001"]
+        "ruleIds": [
+          "IDX_ACCESS_001"
+        ]
       }
     ]
   },
@@ -305,7 +397,9 @@
         "ev_0000000000000002",
         "ev_0000000000000003"
       ],
-      "ruleIds": ["IDX_ACCESS_001"],
+      "ruleIds": [
+        "IDX_ACCESS_001"
+      ],
       "requiresHumanApproval": true
     }
   ],
@@ -313,7 +407,10 @@
     {
       "code": "PARAMETER_DISTRIBUTION_UNKNOWN",
       "descriptionZh": "当前证据未覆盖所有参数分布，索引收益必须在代表性数据上验证。",
-      "requiredEvidenceKinds": ["statistics", "validation_result"]
+      "requiredEvidenceKinds": [
+        "statistics",
+        "validation_result"
+      ]
     }
   ],
   "reviews": [],
@@ -325,7 +422,11 @@
       "type": "workflow_state",
       "fromWorkflowState": null,
       "toWorkflowState": "queued",
-      "actor": { "kind": "system", "id": "diagnosis-job", "displayName": "诊断任务" },
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T08:05:00Z",
       "reason": "任务已创建"
     },
@@ -335,7 +436,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "queued",
       "toWorkflowState": "collecting",
-      "actor": { "kind": "system", "id": "diagnosis-job", "displayName": "诊断任务" },
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T08:05:00.200Z",
       "reason": "开始采集证据"
     },
@@ -345,7 +450,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "collecting",
       "toWorkflowState": "analyzing",
-      "actor": { "kind": "system", "id": "diagnosis-job", "displayName": "诊断任务" },
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T08:05:00.900Z",
       "reason": "证据采集完成"
     },
@@ -355,7 +464,11 @@
       "type": "workflow_state",
       "fromWorkflowState": "analyzing",
       "toWorkflowState": "ready",
-      "actor": { "kind": "system", "id": "diagnosis-job", "displayName": "诊断任务" },
+      "actor": {
+        "kind": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
       "createdAt": "2026-09-02T08:05:02Z",
       "reason": "规则和报告投影完成"
     }

@@ -31,7 +31,9 @@ The model receives only an allowlisted, redacted structured payload. It may
 return template IDs, typed parameters, and existing evidence/rule IDs. It does
 not return persisted customer-facing prose or executable steps. Numeric and
 object parameters used by a decision reference a typed fact profile whose raw
-fields are bound to exact evidence IDs and evidence kinds; ratios and
+fields are rebuilt from exact typed Evidence roles, kinds, schema revision, and
+extraction revision. The typed projection has its own canonical digest and
+server-rendered Evidence summary; ratios and
 display-scale values are recomputed from those raw fields. The service
 deterministically renders the fact plus every customer-visible decision field
 (title, priority, conclusion, and evidence summary) and the approved Chinese
@@ -59,7 +61,11 @@ therefore retains the labeled invocation provenance plus a code and Chinese
 reason. `abstained` means policy prevented invocation and therefore carries a
 code and Chinese reason but no invocation pins. A configured `rules_ai` request
 may become effective `rules` only through `degraded` or `abstained`; silence is
-not a valid fallback.
+not a valid fallback. A configured `rules` request is always effective `rules`
+with status `not_requested`; it cannot contain an invocation, model claim, or
+provider/model/prompt/payload pin. Degradation, abstention, and not-requested
+reasons are selected by server-owned codes and deterministically rendered into
+the report rather than persisted as provider-authored prose.
 
 The model cannot create evidence, change rule results, invoke a tool, fetch a
 URL, execute SQL, apply a recommendation, or authorize data egress.

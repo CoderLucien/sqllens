@@ -107,7 +107,11 @@ The user explicitly selects:
 
 The configured and effective mode are visible globally and on every report.
 Provider preflight verifies model discovery and one minimal real structured
-diagnosis request. A failed provider degrades visibly to rules-only mode.
+diagnosis request. A failed provider degrades visibly to rules-only mode with a
+server-owned reason. Rules-only configuration never invokes a model and is
+reported as `not_requested`; a Rules + AI request that does not invoke because
+of policy is `abstained`, while an attempted but failed invocation is
+`degraded`.
 
 ### Phase B: Daily Diagnosis
 
@@ -126,10 +130,13 @@ Data sources, and System settings. It does not expose the first-run wizard.
 
 **Plan Replayer**
 
-The page provides version-aware, copyable steps to generate, locate, download,
-inspect, and upload a Plan Replayer package. It explains token expiry, package
-sensitivity, unsupported versions, parser errors, and the fact that a replay
-package does not prove production runtime performance.
+The page provides version-aware, copyable steps for the customer to operate the
+customer-operated upstream Plan Replayer, then inspect and upload only the ZIP
+package to SQLLens. Any file token, download URL, and expiry belong to that
+customer-operated upstream tool: SQLLens neither requests nor persists those
+credentials. The page also explains package sensitivity, unsupported versions,
+parser errors, and the fact that a replay package does not prove production
+runtime performance.
 
 **Manual materials**
 
@@ -187,8 +194,12 @@ deletion affect only new jobs and do not rewrite historical reports.
 
 Admission also pins the credential revision and acquires a lease. Rotation,
 disable, and delete stop new admission and enter drain without changing the
-current lease count. Each later normal release or forced cancellation names the
-lease and job, decrements the count by one, and appends an immutable lease event.
+authoritative active lease set. Every runtime admission first records a unique
+`leaseId`/`jobId`; each later normal release or forced cancellation must name an
+active identity, remove exactly that identity, and append an immutable lease
+event. The displayed count must equal the replayed active set and cannot be
+edited independently. A force cancellation is valid only after an explicit
+drain operation has stopped new admissions.
 Rotation activates a new revision for new jobs; deletion destroys the usable
 secret only after leases reach zero and retains a metadata-only tombstone. A
 forced cancel requires a prior Owner confirmation bound to its audit event.
