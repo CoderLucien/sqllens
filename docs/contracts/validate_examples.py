@@ -189,9 +189,7 @@ def feedback_record(
     return feedback
 
 
-def evidence_record(
-    valid: dict[str, Any], kind: str, ordinal: int
-) -> dict[str, Any]:
+def evidence_record(valid: dict[str, Any], kind: str, ordinal: int) -> dict[str, Any]:
     evidence = copy.deepcopy(valid["evidence"][0])
     evidence["evidenceId"] = f"ev_{ordinal:016d}"
     evidence["kind"] = kind
@@ -233,15 +231,11 @@ def case_for_outcome(valid: dict[str, Any], outcome: str) -> dict[str, Any]:
             feedback_record(valid, "implemented", 1, "2026-08-31T10:00:00.200Z")
         )
     if outcome == "validated_effective":
-        feedback = feedback_record(
-            valid, "validated", 2, "2026-08-31T10:00:00.500Z"
-        )
+        feedback = feedback_record(valid, "validated", 2, "2026-08-31T10:00:00.500Z")
         feedback["evidenceIds"] = effect_evidence_ids
         case["feedback"].append(feedback)
     elif outcome == "rolled_back":
-        feedback = feedback_record(
-            valid, "rolled_back", 2, "2026-08-31T10:00:00.500Z"
-        )
+        feedback = feedback_record(valid, "rolled_back", 2, "2026-08-31T10:00:00.500Z")
         feedback["evidenceIds"] = effect_evidence_ids
         case["feedback"].append(feedback)
     elif outcome == "evidence_insufficient":
@@ -288,9 +282,7 @@ def legacy_case_for_outcome(valid: dict[str, Any], outcome: str) -> dict[str, An
     return case
 
 
-def pending_case_before_outcome(
-    valid: dict[str, Any], outcome: str
-) -> dict[str, Any]:
+def pending_case_before_outcome(valid: dict[str, Any], outcome: str) -> dict[str, Any]:
     case = case_for_outcome(valid, outcome)
     collection, field, expected = OUTCOME_TRIGGERS[outcome]
     case[collection] = [
@@ -315,8 +307,7 @@ def validate_references(case: dict[str, Any]) -> None:
         overlap = supporting & contradicting
         if overlap:
             raise ValueError(
-                "supporting and contradicting evidence IDs overlap: "
-                f"{sorted(overlap)}"
+                f"supporting and contradicting evidence IDs overlap: {sorted(overlap)}"
             )
         referenced = supporting | contradicting
         missing = referenced - evidence_ids
@@ -350,14 +341,11 @@ def validate_references(case: dict[str, Any]) -> None:
         missing_evidence = set(feedback.get("evidenceIds", [])) - evidence_ids
         if missing_evidence:
             raise ValueError(
-                "feedback has unknown evidence IDs: "
-                f"{sorted(missing_evidence)}"
+                f"feedback has unknown evidence IDs: {sorted(missing_evidence)}"
             )
 
 
-def require_unique_ids(
-    records: list[dict[str, Any]], key: str, label: str
-) -> set[str]:
+def require_unique_ids(records: list[dict[str, Any]], key: str, label: str) -> set[str]:
     identifiers = [record[key] for record in records]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError(f"duplicate {label} ID")
@@ -403,8 +391,7 @@ def is_effect_outcome_chain(
     )
     recommendation_id = terminal_feedback.get("recommendationId")
     recommendation_ids = {
-        recommendation["recommendationId"]
-        for recommendation in case["recommendations"]
+        recommendation["recommendationId"] for recommendation in case["recommendations"]
     }
     if (
         terminal_feedback.get("kind") != required_feedback_kind
@@ -413,9 +400,7 @@ def is_effect_outcome_chain(
     ):
         return False
 
-    evidence_by_id = {
-        evidence["evidenceId"]: evidence for evidence in case["evidence"]
-    }
+    evidence_by_id = {evidence["evidenceId"]: evidence for evidence in case["evidence"]}
     bound_result_evidence = [
         evidence_by_id[evidence_id]
         for evidence_id in terminal_feedback["evidenceIds"]
@@ -448,9 +433,7 @@ def is_effect_outcome_chain(
     for approval in approvals:
         approval_time = parse_rfc3339_datetime(approval["createdAt"])
         for implementation in implementations:
-            implementation_time = parse_rfc3339_datetime(
-                implementation["createdAt"]
-            )
+            implementation_time = parse_rfc3339_datetime(implementation["createdAt"])
             if approval_time > implementation_time:
                 continue
             if all(
@@ -676,8 +659,7 @@ def main() -> None:
     no_provenance = copy.deepcopy(valid)
     no_provenance["recommendations"][0]["evidenceIds"] = []
     assert any(
-        error.validator == "minItems"
-        for error in validator.iter_errors(no_provenance)
+        error.validator == "minItems" for error in validator.iter_errors(no_provenance)
     )
 
     missing_model_pin = copy.deepcopy(valid)
@@ -713,18 +695,14 @@ def main() -> None:
                 for error in validator.iter_errors(malformed_timestamp)
             ), f"malformed timestamp {value!r} at {path} must fail"
 
-    missing_owner = load_json(
-        EXAMPLES / "diagnosis-case-v1.invalid-missing-owner.json"
-    )
+    missing_owner = load_json(EXAMPLES / "diagnosis-case-v1.invalid-missing-owner.json")
     owner_errors = list(validator.iter_errors(missing_owner))
     assert any(
         error.validator == "required" and "owner" in error.message
         for error in owner_errors
     )
 
-    invalid_reference = load_json(
-        EXAMPLES / "diagnosis-case-v1.invalid-reference.json"
-    )
+    invalid_reference = load_json(EXAMPLES / "diagnosis-case-v1.invalid-reference.json")
     validator.validate(invalid_reference)
     try:
         validate_references(invalid_reference)
@@ -734,12 +712,8 @@ def main() -> None:
         raise AssertionError("dangling references must fail domain validation")
 
     conflicting_evidence = copy.deepcopy(valid)
-    evidence_id = conflicting_evidence["hypotheses"][0][
-        "supportingEvidenceIds"
-    ][0]
-    conflicting_evidence["hypotheses"][0]["contradictingEvidenceIds"] = [
-        evidence_id
-    ]
+    evidence_id = conflicting_evidence["hypotheses"][0]["supportingEvidenceIds"][0]
+    conflicting_evidence["hypotheses"][0]["contradictingEvidenceIds"] = [evidence_id]
     expect_value_error(
         lambda: validate_references(conflicting_evidence),
         "supporting and contradicting",
@@ -775,9 +749,7 @@ def main() -> None:
     except ValueError as error:
         assert "duplicate recommendation" in str(error)
     else:
-        raise AssertionError(
-            "duplicate recommendation IDs must fail domain validation"
-        )
+        raise AssertionError("duplicate recommendation IDs must fail domain validation")
 
     next_revision = next_revision_of(valid)
     next_revision["feedback"].append(
@@ -806,9 +778,7 @@ def main() -> None:
 
     mutated_pin = copy.deepcopy(next_revision)
     mutated_pin["pinnedRevisions"]["policy"] = "policy/tampered"
-    expect_value_error(
-        lambda: validate_revision(valid, mutated_pin), "pinnedRevisions"
-    )
+    expect_value_error(lambda: validate_revision(valid, mutated_pin), "pinnedRevisions")
 
     lower_case_z = next_revision_of(valid)
     lower_case_z["updatedAt"] = "2026-08-31T10:00:02z"
@@ -853,9 +823,7 @@ def main() -> None:
             feedback_record(valid, "useful", 3, "2026-08-31T10:00:01.500Z"),
         )
     )
-    expect_value_error(
-        lambda: validate_revision(valid, unordered_audit), "createdAt"
-    )
+    expect_value_error(lambda: validate_revision(valid, unordered_audit), "createdAt")
 
     illegal_workflow_transition = next_revision_of(valid)
     illegal_workflow_transition["workflowState"] = "queued"
@@ -903,9 +871,7 @@ def main() -> None:
         "missing evidence",
     )
 
-    insufficient_with_recommendation = case_for_outcome(
-        valid, "evidence_insufficient"
-    )
+    insufficient_with_recommendation = case_for_outcome(valid, "evidence_insufficient")
     insufficient_with_recommendation["recommendations"] = copy.deepcopy(
         valid["recommendations"]
     )
@@ -999,9 +965,9 @@ def main() -> None:
     )
     second_recommendation["recommendationId"] = "rec_0000000000000002"
     cross_recommendation_chain["recommendations"].append(second_recommendation)
-    cross_recommendation_chain["feedback"][-1][
-        "recommendationId"
-    ] = second_recommendation["recommendationId"]
+    cross_recommendation_chain["feedback"][-1]["recommendationId"] = (
+        second_recommendation["recommendationId"]
+    )
     expect_value_error(
         lambda: validate_case_semantics(cross_recommendation_chain),
         "same recommendation",
@@ -1019,9 +985,7 @@ def main() -> None:
             if evidence["kind"] == "effect_metric_comparison"
         )
         if scenario == "approval_after_implementation":
-            invalid_chain["reviews"][0][
-                "createdAt"
-            ] = "2026-08-31T10:00:00.250Z"
+            invalid_chain["reviews"][0]["createdAt"] = "2026-08-31T10:00:00.250Z"
         elif scenario == "evidence_before_implementation":
             result_evidence["observedAt"] = "2026-08-31T10:00:00.150Z"
             result_evidence["collectedAt"] = "2026-08-31T10:00:00.160Z"
