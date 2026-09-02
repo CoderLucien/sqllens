@@ -1,0 +1,13 @@
+{
+  "fixtureRevision": "tidb-8.5.4/identity-v1",
+  "provenance": {
+    "kind": "recorded-normalized",
+    "redaction": "build hash and deployment identity removed",
+    "source": "https://docs.pingcap.com/tidb/stable/release-8.5.4/"
+  },
+  "identity": {
+    "version": "5.7.25-TiDB-v8.5.4",
+    "version_comment": "TiDB Server Community Edition, MySQL 5.7 compatible",
+    "tidb_version": "Release Version: v8.5.4\nEdition: Community\nGit Commit Hash: <redacted>"
+  }
+}
