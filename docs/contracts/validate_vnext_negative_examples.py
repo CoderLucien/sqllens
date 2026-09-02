@@ -1143,6 +1143,59 @@ def main() -> None:
         "evidence-gap Fact marks a role missing while a matching eligible candidate exists",
     )
 
+    invalid = copy.deepcopy(insufficient)
+    gap_fact = invalid["facts"][0]
+    plan_role = next(
+        item
+        for item in gap_fact["params"]["roleAssessments"]
+        if item["role"] == "planEvidenceId"
+    )
+    orders_plan_id = plan_role["evidenceId"]
+    orders_plan = next(
+        item for item in invalid["evidence"] if item["evidenceId"] == orders_plan_id
+    )
+    orders_plan["freshness"] = "stale"
+    customers_plan = copy.deepcopy(orders_plan)
+    customers_plan["evidenceId"] = "ev_0000000000000099"
+    customers_plan["freshness"] = "fresh"
+    customers_plan["payload"]["storageRef"] = "payload_0000000000000099"
+    customers_plan["payload"]["typed"]["tableName"] = "customers"
+    customers_plan["payload"]["typedDigest"] = typed_digest(
+        customers_plan["payload"]["typed"]
+    )
+    customers_plan["summaryZh"] = contracts.render_evidence_summary(customers_plan)
+    invalid["evidence"].append(customers_plan)
+    plan_role.update(
+        {
+            "evidenceId": customers_plan["evidenceId"],
+            "eligible": True,
+            "reasonCodes": [],
+        }
+    )
+    gap_fact["evidenceIds"][gap_fact["evidenceIds"].index(orders_plan_id)] = (
+        customers_plan["evidenceId"]
+    )
+    gap_fact.update(contracts.render_fact(gap_fact))
+    invalid["decision"]["evidenceIds"] = [
+        *gap_fact["evidenceIds"],
+        *invalid["subject"]["businessEvidenceIds"],
+    ]
+    invalid["decision"].update(
+        contracts.render_decision(
+            invalid["decision"],
+            {gap_fact["factId"]: gap_fact},
+        )
+    )
+    invalid["evidenceLevel"] = contracts.derive_evidence_level(
+        invalid["evidence"], set(gap_fact["evidenceIds"])
+    )
+    invalid["evidenceCompleteness"] = 67
+    invalid["uncertainty"] = contracts.expected_uncertainty(invalid)
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "evidence-gap Fact selects a fresh same-kind plan for a different table profile",
+    )
+
     invalid = copy.deepcopy(terminal)
     effect = next(
         item

@@ -205,6 +205,116 @@ class DiagnosisPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "matching Evidence candidate"):
             validate_gap_fact(fact, evidence)
 
+    def test_evidence_gap_keeps_an_ineligible_compatible_candidate(self) -> None:
+        pending, _ = contracts.build_evidence_insufficient_cases(self.case)
+        fact = pending["facts"][0]
+        evidence = {item["evidenceId"]: item for item in pending["evidence"]}
+        plan_role = next(
+            item
+            for item in fact["params"]["roleAssessments"]
+            if item["role"] == "planEvidenceId"
+        )
+        orders_plan = evidence[plan_role["evidenceId"]]
+        orders_plan["freshness"] = "stale"
+        plan_role.update({"eligible": False, "reasonCodes": ["NOT_FRESH"]})
+
+        customers_plan = copy.deepcopy(orders_plan)
+        customers_plan["evidenceId"] = "ev_0000000000000099"
+        customers_plan["freshness"] = "fresh"
+        customers_plan["payload"]["storageRef"] = "payload_0000000000000099"
+        customers_plan["payload"]["typed"]["tableName"] = "customers"
+        customers_plan["payload"]["typedDigest"] = canonical_sha256(
+            customers_plan["payload"]["typed"]
+        )
+        customers_plan["summaryZh"] = contracts.render_evidence_summary(customers_plan)
+        evidence[customers_plan["evidenceId"]] = customers_plan
+
+        assessments = validate_gap_fact(fact, evidence)
+        self.assertEqual(
+            next(item for item in assessments if item["role"] == "planEvidenceId"),
+            plan_role,
+        )
+
+    def test_evidence_gap_keeps_selected_identity_without_corroborating_role(
+        self,
+    ) -> None:
+        pending, _ = contracts.build_evidence_insufficient_cases(self.case)
+        fact = pending["facts"][0]
+        evidence = {item["evidenceId"]: item for item in pending["evidence"]}
+        assessments = fact["params"]["roleAssessments"]
+        plan_role = next(
+            item for item in assessments if item["role"] == "planEvidenceId"
+        )
+        index_role = next(
+            item for item in assessments if item["role"] == "indexEvidenceId"
+        )
+        orders_plan = evidence[plan_role["evidenceId"]]
+        orders_plan["freshness"] = "stale"
+        plan_role.update({"eligible": False, "reasonCodes": ["NOT_FRESH"]})
+        removed_index_id = index_role["evidenceId"]
+        index_role.update(
+            {
+                "evidenceId": None,
+                "eligible": False,
+                "reasonCodes": ["MISSING_EVIDENCE"],
+            }
+        )
+        fact["evidenceIds"].remove(removed_index_id)
+        del evidence[removed_index_id]
+
+        customers_plan = copy.deepcopy(orders_plan)
+        customers_plan["evidenceId"] = "ev_0000000000000099"
+        customers_plan["freshness"] = "fresh"
+        customers_plan["payload"]["storageRef"] = "payload_0000000000000099"
+        customers_plan["payload"]["typed"]["tableName"] = "customers"
+        customers_plan["payload"]["typedDigest"] = canonical_sha256(
+            customers_plan["payload"]["typed"]
+        )
+        customers_plan["summaryZh"] = contracts.render_evidence_summary(customers_plan)
+        evidence[customers_plan["evidenceId"]] = customers_plan
+
+        rebuilt = validate_gap_fact(fact, evidence)
+        self.assertEqual(
+            next(item for item in rebuilt if item["role"] == "planEvidenceId"),
+            plan_role,
+        )
+
+    def test_evidence_gap_rejects_an_incompatible_selected_candidate(self) -> None:
+        pending, _ = contracts.build_evidence_insufficient_cases(self.case)
+        fact = pending["facts"][0]
+        evidence = {item["evidenceId"]: item for item in pending["evidence"]}
+        plan_role = next(
+            item
+            for item in fact["params"]["roleAssessments"]
+            if item["role"] == "planEvidenceId"
+        )
+        orders_plan_id = plan_role["evidenceId"]
+        evidence[orders_plan_id]["freshness"] = "stale"
+
+        customers_plan = copy.deepcopy(evidence[orders_plan_id])
+        customers_plan["evidenceId"] = "ev_0000000000000099"
+        customers_plan["freshness"] = "fresh"
+        customers_plan["payload"]["storageRef"] = "payload_0000000000000099"
+        customers_plan["payload"]["typed"]["tableName"] = "customers"
+        customers_plan["payload"]["typedDigest"] = canonical_sha256(
+            customers_plan["payload"]["typed"]
+        )
+        customers_plan["summaryZh"] = contracts.render_evidence_summary(customers_plan)
+        evidence[customers_plan["evidenceId"]] = customers_plan
+        plan_role.update(
+            {
+                "evidenceId": customers_plan["evidenceId"],
+                "eligible": True,
+                "reasonCodes": [],
+            }
+        )
+        fact["evidenceIds"][fact["evidenceIds"].index(orders_plan_id)] = customers_plan[
+            "evidenceId"
+        ]
+
+        with self.assertRaisesRegex(ValueError, "profile-compatible"):
+            validate_gap_fact(fact, evidence)
+
 
 class OutcomePolicyTests(unittest.TestCase):
     def setUp(self) -> None:

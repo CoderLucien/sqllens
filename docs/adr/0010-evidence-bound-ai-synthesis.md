@@ -78,7 +78,12 @@ actionless `evidence_insufficient` decision. Such a Fact cannot be converted
 into a rule hit, AI claim, or Action. The service, not the Case caller, selects
 role candidates: `MISSING_EVIDENCE` is legal only when the Case contains no
 matching Evidence candidate, and a role cannot select an ineligible candidate
-when an eligible one exists.
+when an eligible one exists. Candidate matching uses both kind and the shared
+typed profile fields declared by the dependency registry. Same-kind Evidence
+whose declared object fields conflict cannot displace the compatible
+candidate, and selected roles must form one jointly compatible profile.
+When a corroborating role is missing, the selected role's declared shared
+identity fields still anchor same-role candidate priority.
 
 AI state is explicit. `applied` means a validated invocation contributed at
 least one claim. `degraded` means an invocation was attempted and failed and

@@ -20,6 +20,7 @@ from vnext_diagnosis_policy import (
     derive_completeness,
     derive_evidence_level,
     evidence_eligibility_reasons,
+    evidence_profile_values,
     expected_rule_findings,
     expected_uncertainty,
     require_eligible,
@@ -557,9 +558,7 @@ def rebuild_fact_params(
                 f"fact evidence kind mismatch: {fact['factId']} -> {evidence_id}"
             )
         require_eligible(evidence, f"Fact {fact['factId']} role {role}")
-        typed = evidence["payload"]["typed"]
-        for fact_field, evidence_field in spec[role]["fields"].items():
-            value = typed[evidence_field]
+        for fact_field, value in evidence_profile_values(spec[role], evidence).items():
             if fact_field in rebuilt and rebuilt[fact_field] != value:
                 raise ValueError(
                     f"fact evidence roles disagree on {fact_field}: {fact['factId']}"

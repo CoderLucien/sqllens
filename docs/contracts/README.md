@@ -155,7 +155,12 @@ produce an actionless `evidence_insufficient` decision and terminal outcome,
 but it cannot support a ready rule hit or Action. Role selection is also
 server-owned: a role cannot be marked `MISSING_EVIDENCE` while a matching Case
 Evidence candidate exists, and an ineligible candidate cannot be selected when
-an eligible candidate for that role is available.
+an eligible candidate for that role is available. “Matching” means both the
+required kind and the dependency registry's shared typed profile fields agree;
+same-kind Evidence whose declared table/object fields conflict is not a
+candidate, and all bound roles must form one compatible profile.
+The selected role's declared shared identity fields remain the candidate
+anchor even when its corroborating role is missing.
 
 These fixtures are product-review baselines, not claims that the current
 runtime can generate them.

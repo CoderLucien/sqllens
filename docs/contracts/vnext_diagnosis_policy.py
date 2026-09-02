@@ -340,6 +340,55 @@ def require_eligible(evidence: dict[str, Any], context: str) -> None:
         )
 
 
+def evidence_profile_values(
+    dependency: dict[str, Any], evidence: dict[str, Any]
+) -> dict[str, Any]:
+    """Project one Evidence role onto the profile fields shared by the registry."""
+
+    if evidence["kind"] != dependency["kind"]:
+        raise ValueError("Evidence kind is incompatible with the profile role")
+    typed = evidence["payload"]["typed"]
+    return {
+        profile_field: typed[evidence_field]
+        for profile_field, evidence_field in dependency["fields"].items()
+    }
+
+
+def _merge_profile_values(
+    role_evidence: dict[str, dict[str, Any]],
+    role_spec: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for role, evidence in role_evidence.items():
+        for field, value in evidence_profile_values(role_spec[role], evidence).items():
+            if field in merged and merged[field] != value:
+                raise ValueError(
+                    "evidence-gap Fact selected Evidence is not profile-compatible"
+                )
+            merged[field] = value
+    return merged
+
+
+def _candidate_matches_profile(
+    dependency: dict[str, Any],
+    evidence: dict[str, Any],
+    anchored_profile: dict[str, Any],
+) -> bool:
+    candidate_profile = evidence_profile_values(dependency, evidence)
+    return all(
+        field not in anchored_profile or anchored_profile[field] == value
+        for field, value in candidate_profile.items()
+    )
+
+
+def _shared_profile_fields(role_spec: dict[str, dict[str, Any]]) -> set[str]:
+    occurrences: dict[str, int] = {}
+    for dependency in role_spec.values():
+        for field in dependency["fields"]:
+            occurrences[field] = occurrences.get(field, 0) + 1
+    return {field for field, count in occurrences.items() if count > 1}
+
+
 def derive_evidence_level(
     evidence: list[dict[str, Any]], supporting_evidence_ids: set[str]
 ) -> str:
@@ -429,15 +478,52 @@ def validate_gap_fact(
     ):
         raise ValueError("evidence-gap Fact role assessments differ from the profile")
 
-    expected: list[dict[str, Any]] = []
+    selected_evidence_by_role: dict[str, dict[str, Any]] = {}
     seen_evidence_ids: set[str] = set()
+    for role, dependency in role_spec.items():
+        evidence_id = provided_by_role[role]["evidenceId"]
+        if evidence_id is None:
+            continue
+        if evidence_id in seen_evidence_ids:
+            raise ValueError("evidence-gap Fact reuses one Evidence for two roles")
+        seen_evidence_ids.add(evidence_id)
+        if evidence_id not in evidence_by_id:
+            raise ValueError("evidence-gap Fact references missing Evidence")
+        evidence = evidence_by_id[evidence_id]
+        if evidence["kind"] != dependency["kind"]:
+            raise ValueError("evidence-gap Fact role has the wrong Evidence kind")
+        selected_evidence_by_role[role] = evidence
+    _merge_profile_values(selected_evidence_by_role, role_spec)
+
+    expected: list[dict[str, Any]] = []
+    shared_profile_fields = _shared_profile_fields(role_spec)
     for role, dependency in role_spec.items():
         supplied = provided_by_role[role]
         evidence_id = supplied["evidenceId"]
+        anchored_profile = _merge_profile_values(
+            {
+                selected_role: evidence
+                for selected_role, evidence in selected_evidence_by_role.items()
+                if selected_role != role
+            },
+            role_spec,
+        )
+        if role in selected_evidence_by_role:
+            selected_profile = evidence_profile_values(
+                dependency, selected_evidence_by_role[role]
+            )
+            anchored_profile.update(
+                {
+                    field: value
+                    for field, value in selected_profile.items()
+                    if field in shared_profile_fields
+                }
+            )
         matching_candidates = [
             evidence
             for evidence in evidence_by_id.values()
             if evidence["kind"] == dependency["kind"]
+            and _candidate_matches_profile(dependency, evidence, anchored_profile)
         ]
         eligible_candidate_ids = {
             evidence["evidenceId"]
@@ -451,14 +537,7 @@ def validate_gap_fact(
                 )
             reasons = ["MISSING_EVIDENCE"]
         else:
-            if evidence_id in seen_evidence_ids:
-                raise ValueError("evidence-gap Fact reuses one Evidence for two roles")
-            seen_evidence_ids.add(evidence_id)
-            if evidence_id not in evidence_by_id:
-                raise ValueError("evidence-gap Fact references missing Evidence")
             evidence = evidence_by_id[evidence_id]
-            if evidence["kind"] != dependency["kind"]:
-                raise ValueError("evidence-gap Fact role has the wrong Evidence kind")
             if eligible_candidate_ids and evidence_id not in eligible_candidate_ids:
                 raise ValueError(
                     "evidence-gap Fact ignores an eligible matching Evidence candidate"

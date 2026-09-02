@@ -270,7 +270,10 @@ actionless `evidence_insufficient` decision with per-role reasons and derived
 level/completeness; it cannot support a ready rule hit, AI claim, or Action.
 The service selects role candidates: a matching Case Evidence candidate cannot
 be hidden behind `MISSING_EVIDENCE`, and an eligible candidate takes precedence
-over an ineligible one for the same role.
+over an ineligible one for the same role. A candidate must match the required
+kind and the dependency registry's shared typed profile fields; same-kind
+Evidence whose declared table/object fields conflict is unrelated, and
+selected roles must remain jointly compatible.
 
 Rules declare minimum evidence level, supported product/version range, required
 fields, incompatible conditions, confidence ceiling, recommended action
