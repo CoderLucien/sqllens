@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import re
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -9,19 +8,25 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker, RefResolver
-from vnext_canonical_json import canonical_sha256, reject_non_finite_json
+from vnext_canonical_json import (
+    canonical_sha256,
+    reject_non_finite_json,
+    strict_json_loads,
+)
 from vnext_diagnosis_policy import (
     DIAGNOSIS_DEPENDENCY_REGISTRY,
     EVIDENCE_LEVELS,
     FACT_DEPENDENCY_REGISTRY,
     derive_completeness,
     derive_evidence_level,
+    evidence_eligibility_reasons,
     expected_rule_findings,
     expected_uncertainty,
     require_eligible,
+    validate_gap_fact,
     validate_policy_pins,
 )
-from vnext_outcome_policy import authorization_snapshot_digest, validate_outcome_policy
+from vnext_outcome_policy import validate_outcome_policy
 from vnext_source_ledger import replay_source_history
 
 ROOT = Path(__file__).parent
@@ -161,7 +166,7 @@ EVIDENCE_SCHEMA_REVISIONS = {
     "runtime_metric": "prometheus-window/v1",
     "alert": "tem-alert/v1",
     "validation_result": "validation-result/v1",
-    "effect_metric_comparison": "effect-metric-comparison/v1",
+    "effect_metric_comparison": "effect-metric-comparison/v2",
     "rollback_confirmation": "rollback-confirmation/v1",
 }
 RFC3339_DATETIME = re.compile(
@@ -169,15 +174,36 @@ RFC3339_DATETIME = re.compile(
     r"(?:[0-5]\d|60)(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$"
 )
 
+# This fixture models a server-owned authorization audit store. It is not part
+# of the caller-controlled Case payload; runtime validation must resolve the
+# opaque record ID from an authenticated server-side ledger.
+SERVER_AUTHORIZATION_AUDIT_FIXTURES = {
+    "authz_0000000000000001": {
+        "auditRecordId": "authz_0000000000000001",
+        "attestationRevision": "server-authorization-audit/v1",
+        "caseId": "case_0000000000000002",
+        "caseRevision": 2,
+        "actionId": "act_0000000000000001",
+        "actionDigest": "sha256:54c28de30bace7de68e0f9f14a8c8fecff0eb52fdcc690f09bac3bfdb3647bc6",
+        "reviewId": "rev_0000000000000001",
+        "principalId": "owner",
+        "role": "owner",
+        "permission": "approve_diagnosis_action",
+        "authorizationRevision": "owner-action-approval/v2",
+        "capturedAt": "2026-09-02T08:05:59Z",
+    }
+}
+
+
+def resolve_authorization_audit(record_id: str) -> dict[str, Any] | None:
+    record = SERVER_AUTHORIZATION_AUDIT_FIXTURES.get(record_id)
+    return copy.deepcopy(record) if record is not None else None
+
 
 def load(path: Path) -> dict[str, Any]:
-    def reject_constant(value: str) -> None:
-        raise ValueError(f"non-finite JSON constant: {value}")
-
-    loaded = json.loads(
-        path.read_text(encoding="utf-8"), parse_constant=reject_constant
-    )
-    reject_non_finite_json(loaded)
+    loaded = strict_json_loads(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise TypeError(f"JSON contract document must be an object: {path}")
     return loaded
 
 
@@ -449,15 +475,20 @@ def render_evidence_summary(evidence: dict[str, Any]) -> str:
         }[typed["status"]]
         return f"验证检查 {typed['checkId']} 的结果为{status}。"
     if kind == "effect_metric_comparison":
-        result = "达到预设阈值" if typed["passed"] else "未达到预设阈值"
         metric_zh = {
             "p95_latency_ms": "P95 延迟",
+            "average_scan_rows": "平均扫描行数",
+            "write_regression_basis_points": "写入开销回归",
             "estimation_ratio_basis_points": "估算/实际行数比",
+            "join_order_change_count": "Join 顺序变化次数",
+            "batch_duration_minutes": "批处理耗时",
             "tikv_p99_latency_ms": "TiKV P99 延迟",
+            "hotspot_score_basis_points": "热点指标",
+            "payment_error_rate_basis_points": "支付接口错误率",
         }[typed["metricCode"]]
         return (
             f"隔离环境验证显示{metric_zh}从 {typed['baselineValue']} "
-            f"{typed['unit']} 变为 {typed['observedValue']} {typed['unit']}，{result}。"
+            f"{typed['unit']} 变为 {typed['observedValue']} {typed['unit']}。"
         )
     if kind == "rollback_confirmation":
         state = {
@@ -540,6 +571,9 @@ def rebuild_fact_params(
 def validate_fact_evidence_projection(
     fact: dict[str, Any], evidence_by_id: dict[str, dict[str, Any]]
 ) -> None:
+    if fact["templateId"] == "fact.evidence_gap_profile":
+        validate_gap_fact(fact, evidence_by_id)
+        return
     expected = rebuild_fact_params(fact, evidence_by_id)
     if fact["params"] != expected:
         raise ValueError(
@@ -608,6 +642,31 @@ def normalized_fact_profile(fact: dict[str, Any]) -> dict[str, Any]:
         if set(params) != expected_keys:
             raise ValueError("runtime fact parameters do not match the typed profile")
         return dict(params)
+    if key == ("fact.evidence_gap_profile", "v1"):
+        expected_keys = {
+            "attemptedDecisionTemplateId",
+            "attemptedDecisionTemplateRevision",
+            "roleAssessments",
+        }
+        if set(params) != expected_keys:
+            raise ValueError("evidence-gap Fact parameters are not closed")
+        assessments = params["roleAssessments"]
+        eligible_count = sum(item["eligible"] for item in assessments)
+        missing_kinds = sorted(
+            {item["expectedKind"] for item in assessments if not item["eligible"]}
+        )
+        return {
+            **params,
+            "eligibleCount": eligible_count,
+            "requiredCount": len(assessments),
+            "completeness": round(eligible_count * 100 / len(assessments)),
+            "missingKinds": missing_kinds,
+            "boundEvidenceIds": [
+                item["evidenceId"]
+                for item in assessments
+                if item["evidenceId"] is not None
+            ],
+        }
     raise ValueError(f"unknown fact template: {key}")
 
 
@@ -645,10 +704,38 @@ def render_fact(fact: dict[str, Any]) -> dict[str, str]:
             ),
             "valueText": "correlated",
         }
+    if key == ("fact.evidence_gap_profile", "v1"):
+        missing_zh = "、".join(
+            {
+                "slow_query": "慢查询运行",
+                "ordinary_plan": "普通执行计划",
+                "index": "索引元数据",
+                "statistics": "统计信息",
+                "statement_summary": "Statement Summary",
+                "runtime_metric": "运行指标",
+                "alert": "告警",
+            }[kind]
+            for kind in params["missingKinds"]
+        )
+        return {
+            "kind": "evidence_gap",
+            "statementZh": (
+                f"诊断所需证据中缺少符合资格的{missing_zh}证据；"
+                f"当前仅 {params['eligibleCount']}/{params['requiredCount']} 个角色合格，"
+                "不能形成可发布根因。"
+            ),
+            "valueText": f"{params['completeness']}%",
+        }
     raise ValueError(f"unknown fact template: {key}")
 
 
 def fact_evidence_bindings(fact: dict[str, Any]) -> dict[str, str]:
+    if fact["templateId"] == "fact.evidence_gap_profile":
+        return {
+            item["evidenceId"]: item["expectedKind"]
+            for item in fact["params"]["roleAssessments"]
+            if item["evidenceId"] is not None
+        }
     spec = fact_dependency_spec(fact)
     role_bindings = fact_role_evidence_ids(fact)
     return {
@@ -668,6 +755,40 @@ def render_decision(
         raise ValueError("decision references a missing typed profile fact")
     fact = facts_by_id[fact_id]
     profile = normalized_fact_profile(fact)
+    if key == ("decision.evidence_insufficient", "v1"):
+        if fact["templateId"] != "fact.evidence_gap_profile":
+            raise ValueError("insufficient decision requires an evidence-gap Fact")
+        missing_zh = "、".join(
+            {
+                "slow_query": "慢查询运行",
+                "ordinary_plan": "普通执行计划",
+                "index": "索引元数据",
+                "statistics": "统计信息",
+                "statement_summary": "Statement Summary",
+                "runtime_metric": "运行指标",
+                "alert": "告警",
+            }[kind]
+            for kind in profile["missingKinds"]
+        )
+        return {
+            "titleZh": "证据不足，暂不发布诊断动作",
+            "priority": "observe",
+            "conclusionZh": (
+                f"当前诊断证据完整度为 {profile['completeness']}%，"
+                f"缺少符合资格的{missing_zh}证据；系统仅记录证据缺口，"
+                "不发布根因、优先级动作或 AI 解释。"
+            ),
+            "evidenceSummary": [
+                {
+                    "labelZh": "证据完整度",
+                    "valueZh": (
+                        f"所需 {profile['requiredCount']} 个证据角色中 "
+                        f"{profile['eligibleCount']} 个合格（{profile['completeness']}%）"
+                    ),
+                    "evidenceIds": profile["boundEvidenceIds"],
+                }
+            ],
+        }
     if key == ("decision.index_scan_priority", "v1"):
         if fact["templateId"] != "fact.index_scan_profile":
             raise ValueError("index decision requires an index scan profile fact")
@@ -788,7 +909,8 @@ def render_action(action: dict[str, Any]) -> dict[str, Any]:
                 "metricZh": "扫描行数、P95 延迟和写入开销",
                 "targetZh": (
                     f"扫描行数下降 {params['minScanReductionPct']}% 以上，"
-                    f"P95 低于 {params['maxP95Ms']} ms，写入回归在审批阈值内"
+                    f"P95 低于 {params['maxP95Ms']} ms，写入回归不超过 "
+                    f"{format_derived_ratio(params['maxWriteRegressionBasisPoints'], 100)}%"
                 ),
             },
             "rollbackZh": [
@@ -926,6 +1048,20 @@ def validate_diagnosis_dependency_closure(
         raise ValueError("decision dependency registry rejects the profile fact type")
     if len(facts_by_id) != 1:
         raise ValueError("P0 diagnosis dependency closure requires one profile fact")
+    if decision_key == ("decision.evidence_insufficient", "v1"):
+        if case["outcome"] not in {"pending", "evidence_insufficient"}:
+            raise ValueError("evidence-gap diagnosis has an incompatible outcome")
+        if case["ruleFindings"] or case["actions"] or case["aiSynthesis"]["claims"]:
+            raise ValueError("evidence-gap diagnosis cannot publish rules or actions")
+        if decision["ruleIds"] or decision["claimIds"] or decision["actionIds"]:
+            raise ValueError("evidence-gap decision dependency closure is not empty")
+        expected_evidence = {
+            *fact["evidenceIds"],
+            *case["subject"]["businessEvidenceIds"],
+        }
+        if set(decision["evidenceIds"]) != expected_evidence:
+            raise ValueError("evidence-gap decision omits its exact provenance")
+        return
     role_ids = fact_role_evidence_ids(fact)
 
     findings_by_id = {item["ruleId"]: item for item in case["ruleFindings"]}
@@ -1550,7 +1686,7 @@ def build_source_lease_drain(
     drained["revision"] = draining["revision"] + 1
     drained["credentialLifecycle"]["activeLeaseCount"] = 0
     drained["activeLeases"] = []
-    drained["updatedAt"] = "2026-09-02T09:28:00Z"
+    drained["updatedAt"] = "2026-09-02T09:29:00Z"
     drained["transitionEvents"].append(
         {
             "eventId": "sevt_0000000000000006",
@@ -1845,7 +1981,7 @@ def validate_transition_events(case: dict[str, Any]) -> None:
 
 
 def validate_outcome_semantics(case: dict[str, Any]) -> None:
-    validate_outcome_policy(case, parse_time)
+    validate_outcome_policy(case, parse_time, resolve_authorization_audit)
 
 
 def validate_case_references(case: dict[str, Any]) -> None:
@@ -2169,44 +2305,200 @@ def validate_case_transition(prior: dict[str, Any], proposed: dict[str, Any]) ->
     validate_case_references(proposed)
 
 
+def build_evidence_insufficient_cases(
+    case: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build a ready actionless Case and its terminal insufficiency revision."""
+
+    pending = copy.deepcopy(case)
+    runtime_evidence = pending["evidence"][0]
+    runtime_evidence["freshness"] = "stale"
+    runtime_evidence["coverage"] = 0.5
+
+    original_fact = pending["facts"][0]
+    original_key = (original_fact["templateId"], original_fact["templateRevision"])
+    role_assessments: list[dict[str, Any]] = []
+    evidence_by_id = {item["evidenceId"]: item for item in pending["evidence"]}
+    for role, dependency in FACT_DEPENDENCY_REGISTRY[original_key].items():
+        evidence_id = original_fact["params"][role]
+        reasons = evidence_eligibility_reasons(evidence_by_id[evidence_id])
+        role_assessments.append(
+            {
+                "role": role,
+                "expectedKind": dependency["kind"],
+                "evidenceId": evidence_id,
+                "eligible": not reasons,
+                "reasonCodes": reasons,
+            }
+        )
+
+    gap_fact = {
+        "factId": original_fact["factId"],
+        "templateId": "fact.evidence_gap_profile",
+        "templateRevision": "v1",
+        "params": {
+            "attemptedDecisionTemplateId": case["decision"]["templateId"],
+            "attemptedDecisionTemplateRevision": case["decision"]["templateRevision"],
+            "roleAssessments": role_assessments,
+        },
+        "kind": "evidence_gap",
+        "statementZh": "",
+        "valueText": None,
+        "evidenceIds": [
+            item["evidenceId"]
+            for item in role_assessments
+            if item["evidenceId"] is not None
+        ],
+    }
+    gap_fact.update(render_fact(gap_fact))
+    pending["facts"] = [gap_fact]
+    pending["decision"] = {
+        "templateId": "decision.evidence_insufficient",
+        "templateRevision": "v1",
+        "params": {"profileFactId": gap_fact["factId"]},
+        "titleZh": "",
+        "priority": "observe",
+        "conclusionZh": "",
+        "evidenceSummary": [],
+        "evidenceIds": [
+            *gap_fact["evidenceIds"],
+            *pending["subject"]["businessEvidenceIds"],
+        ],
+        "ruleIds": [],
+        "claimIds": [],
+        "actionIds": [],
+    }
+    pending["decision"].update(
+        render_decision(pending["decision"], {gap_fact["factId"]: gap_fact})
+    )
+    pending["ruleFindings"] = []
+    pending["actions"] = []
+    pending["configuredMode"] = "rules_ai"
+    pending["effectiveMode"] = "rules"
+    pending["aiSynthesis"] = {
+        "status": "abstained",
+        "code": "EVIDENCE_POLICY_ABSTENTION",
+        "messageZh": "证据策略不允许调用外部模型，本报告仅使用确定性规则。",
+        "invocation": None,
+        "claims": [],
+    }
+    for key in ("provider", "model", "prompt", "payload", "payloadDigest"):
+        pending["pinnedRevisions"][key] = None
+    pending["evidenceLevel"] = derive_evidence_level(
+        pending["evidence"], set(gap_fact["evidenceIds"])
+    )
+    pending["evidenceCompleteness"] = derive_completeness(
+        pending["decision"],
+        {gap_fact["factId"]: gap_fact},
+        evidence_by_id,
+    )
+    pending["uncertainty"] = expected_uncertainty(pending)
+
+    terminal = copy.deepcopy(pending)
+    terminal["revision"] = pending["revision"] + 1
+    terminal["outcome"] = "evidence_insufficient"
+    terminal["updatedAt"] = "2026-09-02T08:06:00Z"
+    terminal["feedback"] = [
+        {
+            "feedbackId": "fb_0000000000000099",
+            "caseRevision": terminal["revision"],
+            "actor": {
+                "kind": "system",
+                "id": "diagnosis-policy",
+                "displayName": "诊断证据策略",
+            },
+            "kind": "evidence_insufficient",
+            "actionId": None,
+            "evidenceIds": [],
+            "createdAt": terminal["updatedAt"],
+            "comment": "证据完整度不足，未发布根因或动作。",
+        }
+    ]
+    terminal["transitionEvents"].append(
+        {
+            "eventId": "evt_0000000000000099",
+            "caseRevision": terminal["revision"],
+            "type": "outcome",
+            "fromOutcome": "pending",
+            "toOutcome": "evidence_insufficient",
+            "actor": {
+                "kind": "system",
+                "id": "diagnosis-policy",
+                "displayName": "诊断证据策略",
+            },
+            "createdAt": terminal["updatedAt"],
+            "reason": "证据资格策略阻止发布诊断动作",
+            "outcomeTuple": {
+                "actionId": None,
+                "approvalReviewId": None,
+                "implementationFeedbackId": None,
+                "resultEvidenceIds": [],
+                "terminalFeedbackId": "fb_0000000000000099",
+            },
+            "reviewIds": [],
+            "feedbackIds": ["fb_0000000000000099"],
+            "actionIds": [],
+            "evidenceIds": [],
+        }
+    )
+    return pending, terminal
+
+
 def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
     validated = copy.deepcopy(case)
     validated["revision"] = 2
     validated["outcome"] = "validated_effective"
     validated["updatedAt"] = "2026-09-02T08:12:00Z"
 
-    effect = copy.deepcopy(validated["evidence"][-1])
-    effect.update(
-        {
-            "evidenceId": "ev_0000000000000005",
-            "kind": "effect_metric_comparison",
-            "observedAt": "2026-09-02T08:10:00Z",
-            "collectedAt": "2026-09-02T08:11:00Z",
-            "integrityDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-            "summaryZh": "隔离环境验证显示P95 延迟从 2800 ms 变为 420 ms，达到预设阈值。",
-        }
+    result_specs = (
+        ("0000000000000005", "average_scan_rows", 1_260_000, 100_000, "rows", "5"),
+        ("0000000000000006", "p95_latency_ms", 2_800, 420, "ms", "6"),
+        (
+            "0000000000000007",
+            "write_regression_basis_points",
+            0,
+            300,
+            "basis_points",
+            "7",
+        ),
     )
-    effect["payload"].update(
-        {
-            "schemaRevision": "effect-metric-comparison/v1",
-            "storageRef": "payload_0000000000000005",
-            "digest": effect["integrityDigest"],
-            "typed": {
+    result_evidence_ids: list[str] = []
+    for suffix, metric_code, baseline, observed, unit, digest_digit in result_specs:
+        effect = copy.deepcopy(validated["evidence"][-1])
+        evidence_id = f"ev_{suffix}"
+        effect.update(
+            {
+                "evidenceId": evidence_id,
                 "kind": "effect_metric_comparison",
-                "actionId": "act_0000000000000001",
-                "metricCode": "p95_latency_ms",
-                "validationTargetZh": (
-                    "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归在审批阈值内"
-                ),
-                "baselineValue": 2800,
-                "observedValue": 420,
-                "unit": "ms",
-                "passed": True,
-            },
-        }
-    )
-    effect["payload"]["typedDigest"] = typed_payload_digest(effect["payload"]["typed"])
-    validated["evidence"].append(effect)
+                "observedAt": "2026-09-02T08:10:00Z",
+                "collectedAt": "2026-09-02T08:11:00Z",
+                "integrityDigest": f"sha256:{digest_digit * 64}",
+            }
+        )
+        effect["payload"].update(
+            {
+                "schemaRevision": "effect-metric-comparison/v2",
+                "storageRef": f"payload_{suffix}",
+                "digest": effect["integrityDigest"],
+                "typed": {
+                    "kind": "effect_metric_comparison",
+                    "actionId": "act_0000000000000001",
+                    "metricCode": metric_code,
+                    "validationTargetZh": validated["actions"][0]["validation"][
+                        "targetZh"
+                    ],
+                    "baselineValue": baseline,
+                    "observedValue": observed,
+                    "unit": unit,
+                },
+            }
+        )
+        effect["payload"]["typedDigest"] = typed_payload_digest(
+            effect["payload"]["typed"]
+        )
+        effect["summaryZh"] = render_evidence_summary(effect)
+        validated["evidence"].append(effect)
+        result_evidence_ids.append(evidence_id)
     validated["reviews"] = [
         {
             "reviewId": "rev_0000000000000001",
@@ -2217,12 +2509,8 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
                 "displayName": "本机 Owner",
             },
             "authorizationSnapshot": {
-                "principalId": "owner",
-                "role": "owner",
-                "permission": "approve_diagnosis_action",
-                "authorizationRevision": "owner-action-approval/v1",
-                "capturedAt": "2026-09-02T08:05:59Z",
-                "identityDigest": "",
+                "auditRecordId": "authz_0000000000000001",
+                "attestationRevision": "server-authorization-audit/v1",
             },
             "decision": "approved",
             "actionIds": ["act_0000000000000001"],
@@ -2230,9 +2518,6 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
             "comment": "批准隔离环境验证，不批准自动生产变更。",
         }
     ]
-    validated["reviews"][0]["authorizationSnapshot"]["identityDigest"] = (
-        authorization_snapshot_digest(validated["reviews"][0]["authorizationSnapshot"])
-    )
     validated["feedback"] = [
         {
             "feedbackId": "fb_0000000000000001",
@@ -2250,7 +2535,7 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
             "actor": {"kind": "user", "id": "owner", "displayName": "本机 Owner"},
             "kind": "validated",
             "actionId": "act_0000000000000001",
-            "evidenceIds": ["ev_0000000000000005"],
+            "evidenceIds": result_evidence_ids,
             "createdAt": "2026-09-02T08:12:00Z",
             "comment": "隔离环境验证达到预设收益阈值。",
         },
@@ -2269,7 +2554,7 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
                 "actionId": "act_0000000000000001",
                 "approvalReviewId": "rev_0000000000000001",
                 "implementationFeedbackId": "fb_0000000000000001",
-                "resultEvidenceIds": ["ev_0000000000000005"],
+                "resultEvidenceIds": result_evidence_ids,
                 "terminalFeedbackId": "fb_0000000000000002",
             },
             "reviewIds": ["rev_0000000000000001"],
@@ -2278,7 +2563,7 @@ def build_validated_case(case: dict[str, Any]) -> dict[str, Any]:
                 "fb_0000000000000002",
             ],
             "actionIds": ["act_0000000000000001"],
-            "evidenceIds": ["ev_0000000000000005"],
+            "evidenceIds": result_evidence_ids,
         }
     )
     return validated
@@ -2291,27 +2576,28 @@ def build_rolled_back_case(case: dict[str, Any]) -> dict[str, Any]:
         item
         for item in rolled_back["evidence"]
         if item["kind"] == "effect_metric_comparison"
+        and item["payload"]["typed"]["metricCode"] == "p95_latency_ms"
     )
-    effect["payload"]["typed"]["passed"] = False
+    effect["payload"]["typed"]["observedValue"] = 800
     effect["payload"]["typedDigest"] = typed_payload_digest(effect["payload"]["typed"])
     effect["summaryZh"] = render_evidence_summary(effect)
 
     rollback = copy.deepcopy(effect)
     rollback.update(
         {
-            "evidenceId": "ev_0000000000000006",
+            "evidenceId": "ev_0000000000000008",
             "kind": "rollback_confirmation",
             "observedAt": "2026-09-02T08:10:30Z",
             "collectedAt": "2026-09-02T08:11:30Z",
             "integrityDigest": (
-                "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+                "sha256:8888888888888888888888888888888888888888888888888888888888888888"
             ),
         }
     )
     rollback["payload"].update(
         {
             "schemaRevision": "rollback-confirmation/v1",
-            "storageRef": "payload_0000000000000006",
+            "storageRef": "payload_0000000000000008",
             "digest": rollback["integrityDigest"],
             "typed": {
                 "kind": "rollback_confirmation",
@@ -2328,7 +2614,11 @@ def build_rolled_back_case(case: dict[str, Any]) -> dict[str, Any]:
 
     terminal = rolled_back["feedback"][-1]
     terminal["kind"] = "rolled_back"
-    terminal["evidenceIds"] = [effect["evidenceId"], rollback["evidenceId"]]
+    terminal["evidenceIds"] = [
+        item["evidenceId"]
+        for item in rolled_back["evidence"]
+        if item["kind"] == "effect_metric_comparison"
+    ] + [rollback["evidenceId"]]
     terminal["comment"] = "隔离环境验证未达阈值，已确认回滚完成。"
     event = rolled_back["transitionEvents"][-1]
     event["toOutcome"] = "rolled_back"
@@ -2350,6 +2640,57 @@ def projected_action(action: dict[str, Any], order: int) -> dict[str, Any]:
         "stepsZh": action["stepsZh"],
         "validation": action["validation"],
         "rollbackZh": action["rollbackZh"],
+    }
+
+
+def build_report_projection(case: dict[str, Any], audience: str) -> dict[str, Any]:
+    decision = case["decision"]
+    rules_by_id = {item["ruleId"]: item for item in case["ruleFindings"]}
+    claims_by_id = {item["claimId"]: item for item in case["aiSynthesis"]["claims"]}
+    actions_by_id = {item["actionId"]: item for item in case["actions"]}
+    return {
+        "schemaVersion": "diagnosis-report/v1",
+        "caseId": case["caseId"],
+        "caseRevision": case["revision"],
+        "audience": audience,
+        "titleZh": decision["titleZh"],
+        "priority": decision["priority"],
+        "configuredMode": case["configuredMode"],
+        "effectiveMode": case["effectiveMode"],
+        "conclusionZh": decision["conclusionZh"],
+        "impact": copy.deepcopy(case["subject"]),
+        "evidenceSummary": copy.deepcopy(decision["evidenceSummary"]),
+        "reasoning": {
+            "ruleFindingsZh": [
+                rules_by_id[item]["conclusionZh"] for item in decision["ruleIds"]
+            ],
+            "aiContributionZh": (
+                "\n".join(claims_by_id[item]["textZh"] for item in decision["claimIds"])
+                if decision["claimIds"]
+                else None
+            ),
+            "aiStatus": case["aiSynthesis"]["status"],
+            "aiCode": case["aiSynthesis"]["code"],
+            "aiReasonZh": case["aiSynthesis"]["messageZh"],
+        },
+        "actions": [
+            projected_action(actions_by_id[action_id], order)
+            for order, action_id in enumerate(decision["actionIds"], start=1)
+        ],
+        "uncertainty": [item["descriptionZh"] for item in case["uncertainty"]],
+        "trace": {
+            "evidenceLevel": case["evidenceLevel"],
+            "evidenceCompleteness": case["evidenceCompleteness"],
+            "evidenceIds": decision["evidenceIds"],
+            "ruleIds": decision["ruleIds"],
+            "claimIds": decision["claimIds"],
+            "sourceRevisions": [
+                f"{item['sourceId']}@{item['revision']}"
+                for item in case["sourceSnapshots"]
+            ],
+            "aiInvocation": case["aiSynthesis"]["invocation"],
+            "pinnedRevisions": copy.deepcopy(case["pinnedRevisions"]),
+        },
     }
 
 
@@ -2497,6 +2838,14 @@ def main() -> None:
     schema_validator("diagnosis-case-v2.schema.json").validate(rolled_back_case)
     validate_case_references(rolled_back_case)
     validate_case_transition(cases[0], rolled_back_case)
+    insufficient_pending, insufficient_terminal = build_evidence_insufficient_cases(
+        cases[0]
+    )
+    case_validator = schema_validator("diagnosis-case-v2.schema.json")
+    for candidate in (insufficient_pending, insufficient_terminal):
+        case_validator.validate(candidate)
+        validate_case_references(candidate)
+    validate_case_transition(insufficient_pending, insufficient_terminal)
     for report in reports:
         key = (report["caseId"], report["caseRevision"])
         if key not in cases_by_revision:
@@ -2520,10 +2869,16 @@ def main() -> None:
     ]
     schema_validator("diagnosis-report-v1.schema.json").validate(rules_only_report)
     validate_report_projection(rules_only_report, rules_only_case)
+    insufficient_report = build_report_projection(
+        insufficient_pending, "incident_owner"
+    )
+    schema_validator("diagnosis-report-v1.schema.json").validate(insufficient_report)
+    validate_report_projection(insufficient_report, insufficient_pending)
     print(
         "vNext contract examples valid: "
         "3 sources, 1 lease-drain chain, 1 standalone evidence, 3 cases, "
-        "1 AI abstention, 1 rules-only projection, 2 terminal transitions, 3 reports"
+        "1 AI abstention, 1 rules-only projection, 3 terminal transitions, "
+        "4 report projections"
     )
 
 

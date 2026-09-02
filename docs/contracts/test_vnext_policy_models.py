@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import math
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from vnext_diagnosis_policy import (
     expected_rule_findings,
     validate_policy_pins,
 )
-from vnext_outcome_policy import validate_outcome_policy
+from vnext_outcome_policy import ACTION_RESULT_POLICY, validate_outcome_policy
 from vnext_source_ledger import replay_source_history
 
 
@@ -38,6 +39,16 @@ class CanonicalJsonTests(unittest.TestCase):
         for value in (math.nan, math.inf, -math.inf, 1.5, 9_007_199_254_740_992):
             with self.subTest(value=value), self.assertRaises((TypeError, ValueError)):
                 canonical_json_bytes({"measurement": value})
+
+    def test_json_ingress_rejects_nested_duplicate_object_members(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate.json"
+            path.write_text(
+                '{"typed":{"kind":"attacker","kind":"slow_query"}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate JSON object member"):
+                contracts.load(path)
 
 
 class DiagnosisPolicyTests(unittest.TestCase):
@@ -141,6 +152,31 @@ class DiagnosisPolicyTests(unittest.TestCase):
                     set(RULE_POLICY_REGISTRY[pack_revision]),
                 )
 
+    def test_incomplete_evidence_has_an_actionless_terminal_representation(
+        self,
+    ) -> None:
+        pending, terminal = contracts.build_evidence_insufficient_cases(self.case)
+        validator = contracts.schema_validator("diagnosis-case-v2.schema.json")
+        for candidate in (pending, terminal):
+            validator.validate(candidate)
+            contracts.validate_case_references(candidate)
+
+        contracts.validate_case_transition(pending, terminal)
+        self.assertEqual(pending["evidenceLevel"], "E2")
+        self.assertEqual(pending["evidenceCompleteness"], 67)
+        self.assertEqual(
+            pending["decision"]["templateId"], "decision.evidence_insufficient"
+        )
+        self.assertEqual(pending["ruleFindings"], [])
+        self.assertEqual(pending["actions"], [])
+        self.assertEqual(terminal["outcome"], "evidence_insufficient")
+
+    def test_evidence_gap_fact_ids_are_an_exact_role_projection(self) -> None:
+        pending, _ = contracts.build_evidence_insufficient_cases(self.case)
+        pending["facts"][0]["evidenceIds"] = pending["facts"][0]["evidenceIds"][:-1]
+        with self.assertRaisesRegex(ValueError, "role projection"):
+            contracts.validate_case_references(pending)
+
 
 class OutcomePolicyTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -148,18 +184,63 @@ class OutcomePolicyTests(unittest.TestCase):
         self.case = contracts.build_validated_case(case)
 
     def test_accepts_one_authorized_causal_tuple(self) -> None:
-        validate_outcome_policy(self.case, contracts.parse_time)
+        validate_outcome_policy(
+            self.case,
+            contracts.parse_time,
+            contracts.resolve_authorization_audit,
+        )
 
-    def test_rejects_failed_effect_for_validated_outcome(self) -> None:
+    def test_each_supported_action_has_a_complete_result_policy(self) -> None:
+        action_templates = {
+            template
+            for diagnosis in DIAGNOSIS_DEPENDENCY_REGISTRY.values()
+            for template in diagnosis["actions"]
+        }
+        self.assertLessEqual(action_templates, set(ACTION_RESULT_POLICY))
+        for template in action_templates:
+            with self.subTest(template=template):
+                policy = ACTION_RESULT_POLICY[template]
+                metric_codes = [item["metricCode"] for item in policy]
+                self.assertTrue(metric_codes)
+                self.assertEqual(len(metric_codes), len(set(metric_codes)))
+
+    def test_recomputes_effect_instead_of_trusting_persisted_claims(self) -> None:
         case = copy.deepcopy(self.case)
         effect = next(
             item
             for item in case["evidence"]
             if item["kind"] == "effect_metric_comparison"
+            and item["payload"]["typed"]["metricCode"] == "p95_latency_ms"
         )
-        effect["payload"]["typed"]["passed"] = False
-        with self.assertRaises(ValueError):
-            validate_outcome_policy(case, contracts.parse_time)
+        effect["payload"]["typed"].update(
+            {"baselineValue": 100, "observedValue": 999_999}
+        )
+        with self.assertRaisesRegex(ValueError, "measurement policy"):
+            validate_outcome_policy(
+                case,
+                contracts.parse_time,
+                contracts.resolve_authorization_audit,
+            )
+
+    def test_rejects_incomplete_action_measurement_set(self) -> None:
+        case = copy.deepcopy(self.case)
+        missing_id = case["transitionEvents"][-1]["evidenceIds"][-1]
+        remaining_ids = [
+            evidence_id
+            for evidence_id in case["transitionEvents"][-1]["evidenceIds"]
+            if evidence_id != missing_id
+        ]
+        case["transitionEvents"][-1]["evidenceIds"] = remaining_ids
+        case["transitionEvents"][-1]["outcomeTuple"]["resultEvidenceIds"] = (
+            remaining_ids
+        )
+        case["feedback"][-1]["evidenceIds"] = remaining_ids
+        with self.assertRaisesRegex(ValueError, "complete Action measurement"):
+            validate_outcome_policy(
+                case,
+                contracts.parse_time,
+                contracts.resolve_authorization_audit,
+            )
 
     def test_rejects_ineligible_terminal_evidence(self) -> None:
         case = copy.deepcopy(self.case)
@@ -170,7 +251,11 @@ class OutcomePolicyTests(unittest.TestCase):
         )
         effect["coverage"] = 0
         with self.assertRaises(ValueError):
-            validate_outcome_policy(case, contracts.parse_time)
+            validate_outcome_policy(
+                case,
+                contracts.parse_time,
+                contracts.resolve_authorization_audit,
+            )
 
     def test_rejects_unattested_terminal_event(self) -> None:
         case = copy.deepcopy(self.case)
@@ -183,13 +268,69 @@ class OutcomePolicyTests(unittest.TestCase):
             "displayName": "Outcome worker",
         }
         with self.assertRaises(ValueError):
-            validate_outcome_policy(case, contracts.parse_time)
+            validate_outcome_policy(
+                case,
+                contracts.parse_time,
+                contracts.resolve_authorization_audit,
+            )
 
     def test_rejects_mutated_authorization_snapshot(self) -> None:
         case = copy.deepcopy(self.case)
-        case["reviews"][0]["authorizationSnapshot"]["role"] = "dba"
-        with self.assertRaises(ValueError):
-            validate_outcome_policy(case, contracts.parse_time)
+        case["reviews"][0]["authorizationSnapshot"]["auditRecordId"] = (
+            "authz_0000000000000999"
+        )
+        with self.assertRaisesRegex(ValueError, "not trusted"):
+            validate_outcome_policy(
+                case,
+                contracts.parse_time,
+                contracts.resolve_authorization_audit,
+            )
+
+    def test_rejects_publicly_rehashed_forged_authorization(self) -> None:
+        case = copy.deepcopy(self.case)
+        review = case["reviews"][0]
+        review["reviewer"]["id"] = "attacker"
+        with self.assertRaisesRegex(ValueError, "authorization audit"):
+            validate_outcome_policy(
+                case,
+                contracts.parse_time,
+                contracts.resolve_authorization_audit,
+            )
+
+    def test_authorization_audit_binds_the_exact_action_snapshot(self) -> None:
+        case = copy.deepcopy(self.case)
+        action = case["actions"][0]
+        action["params"]["maxP95Ms"] = 60_000
+        action.update(contracts.render_action(action))
+        for effect in case["evidence"]:
+            if effect["kind"] != "effect_metric_comparison":
+                continue
+            effect["payload"]["typed"]["validationTargetZh"] = action["validation"][
+                "targetZh"
+            ]
+        with self.assertRaisesRegex(ValueError, "authorization audit"):
+            validate_outcome_policy(
+                case,
+                contracts.parse_time,
+                contracts.resolve_authorization_audit,
+            )
+
+    def test_rejects_terminal_approval_without_trusted_audit_resolver(self) -> None:
+        with self.assertRaisesRegex(ValueError, "trusted authorization audit resolver"):
+            validate_outcome_policy(self.case, contracts.parse_time)
+
+    def test_terminal_tuple_records_must_belong_to_current_case_revision(self) -> None:
+        case = copy.deepcopy(self.case)
+        case["reviews"][0]["caseRevision"] = 1
+        for feedback in case["feedback"]:
+            feedback["caseRevision"] = 1
+        case["transitionEvents"][-1]["caseRevision"] = 1
+        with self.assertRaisesRegex(ValueError, "current Case revision"):
+            validate_outcome_policy(
+                case,
+                contracts.parse_time,
+                contracts.resolve_authorization_audit,
+            )
 
 
 class SourceLedgerTests(unittest.TestCase):
@@ -226,6 +367,32 @@ class SourceLedgerTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             replay_source_history(poisoned, contracts.parse_time)
+
+    def test_rejects_lease_event_at_the_same_time_as_state_snapshot(self) -> None:
+        source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        leased, _, _ = contracts.build_source_lease_drain(source)
+        poisoned = copy.deepcopy(leased)
+        poisoned["leaseEvents"][-1]["createdAt"] = poisoned["transitionEvents"][-1][
+            "createdAt"
+        ]
+        poisoned["activeLeases"][-1]["acquiredAt"] = poisoned["leaseEvents"][-1][
+            "createdAt"
+        ]
+        with self.assertRaisesRegex(ValueError, "must precede"):
+            replay_source_history(poisoned, contracts.parse_time)
+
+    def test_rejects_equal_timestamps_inside_one_lease_revision(self) -> None:
+        source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        _, _, drained = contracts.build_source_lease_drain(source)
+        latest_revision = drained["revision"]
+        revision_events = [
+            item
+            for item in drained["leaseEvents"]
+            if item["sourceRevision"] == latest_revision
+        ]
+        revision_events[1]["createdAt"] = revision_events[0]["createdAt"]
+        with self.assertRaisesRegex(ValueError, "strictly ordered"):
+            replay_source_history(drained, contracts.parse_time)
 
 
 if __name__ == "__main__":

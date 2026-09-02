@@ -9,32 +9,71 @@ from typing import Any
 from vnext_canonical_json import canonical_sha256
 from vnext_diagnosis_policy import require_eligible
 
-AUTHORIZATION_REVISION = "owner-action-approval/v1"
-ACTION_RESULT_METRICS = {
-    ("action.index_candidate_isolated", "v1"): ("p95_latency_ms", "ms"),
-    ("action.statistics_refresh_isolated", "v1"): (
-        "estimation_ratio_basis_points",
-        "basis_points",
-    ),
-    ("action.resource_hotspot_runbook", "v1"): ("tikv_p99_latency_ms", "ms"),
-}
+AUTHORIZATION_REVISION = "owner-action-approval/v2"
+AUTHORIZATION_ATTESTATION_REVISION = "server-authorization-audit/v1"
 
-
-def authorization_snapshot_digest(snapshot: dict[str, Any]) -> str:
-    """Digest the server-owned authorization fields without its digest."""
-
-    return canonical_sha256(
+ACTION_RESULT_POLICY = {
+    ("action.index_candidate_isolated", "v1"): (
         {
-            key: snapshot[key]
-            for key in (
-                "principalId",
-                "role",
-                "permission",
-                "authorizationRevision",
-                "capturedAt",
-            )
-        }
-    )
+            "metricCode": "average_scan_rows",
+            "unit": "rows",
+            "predicate": "reduction_percent_at_least",
+            "parameter": "minScanReductionPct",
+        },
+        {
+            "metricCode": "p95_latency_ms",
+            "unit": "ms",
+            "predicate": "observed_at_most",
+            "parameter": "maxP95Ms",
+        },
+        {
+            "metricCode": "write_regression_basis_points",
+            "unit": "basis_points",
+            "predicate": "regression_at_most",
+            "parameter": "maxWriteRegressionBasisPoints",
+        },
+    ),
+    ("action.statistics_refresh_isolated", "v1"): (
+        {
+            "metricCode": "estimation_ratio_basis_points",
+            "unit": "basis_points",
+            "predicate": "ratio_at_most",
+            "parameter": "maxEstimateRatio",
+        },
+        {
+            "metricCode": "join_order_change_count",
+            "unit": "count",
+            "predicate": "observed_zero",
+            "parameter": None,
+        },
+        {
+            "metricCode": "batch_duration_minutes",
+            "unit": "minutes",
+            "predicate": "observed_at_most",
+            "parameter": "maxDurationMinutes",
+        },
+    ),
+    ("action.resource_hotspot_runbook", "v1"): (
+        {
+            "metricCode": "tikv_p99_latency_ms",
+            "unit": "ms",
+            "predicate": "at_or_below_baseline",
+            "parameter": None,
+        },
+        {
+            "metricCode": "hotspot_score_basis_points",
+            "unit": "basis_points",
+            "predicate": "at_or_below_baseline",
+            "parameter": None,
+        },
+        {
+            "metricCode": "payment_error_rate_basis_points",
+            "unit": "basis_points",
+            "predicate": "at_or_below_baseline",
+            "parameter": None,
+        },
+    ),
+}
 
 
 def _require_record(
@@ -74,10 +113,39 @@ def _exact_event_projection(
         raise ValueError("outcome event evidenceIds are not its singular tuple")
 
 
+def _measurement_passes(
+    typed: dict[str, Any], policy: dict[str, Any], action: dict[str, Any]
+) -> bool:
+    baseline = typed["baselineValue"]
+    observed = typed["observedValue"]
+    predicate = policy["predicate"]
+    parameter = policy["parameter"]
+    threshold = action["params"].get(parameter) if parameter is not None else None
+    if predicate == "reduction_percent_at_least":
+        return (
+            baseline > 0
+            and 0 <= observed <= baseline
+            and (baseline - observed) * 100 >= baseline * threshold
+        )
+    if predicate == "observed_at_most":
+        return baseline >= 0 and observed >= 0 and observed <= threshold
+    if predicate == "regression_at_most":
+        return baseline == 0 and 0 <= observed <= threshold
+    if predicate == "ratio_at_most":
+        return baseline > 0 and 0 < observed <= threshold * 10_000
+    if predicate == "observed_zero":
+        return baseline >= 0 and observed == 0
+    if predicate == "at_or_below_baseline":
+        return baseline > 0 and 0 <= observed <= baseline
+    raise ValueError(f"unknown Action measurement predicate: {predicate}")
+
+
 def _require_human_approval(
     review: dict[str, Any],
     action: dict[str, Any],
+    case: dict[str, Any],
     parse_time: Callable[[str], datetime],
+    resolve_authorization_audit: Callable[[str], dict[str, Any] | None],
     expected_decision: str = "approved",
 ) -> None:
     if review["decision"] != expected_decision or review["actionIds"] != [
@@ -85,25 +153,48 @@ def _require_human_approval(
     ]:
         raise ValueError("outcome approval does not approve its Action")
     reviewer = review["reviewer"]
-    authorization = review.get("authorizationSnapshot")
-    if reviewer["kind"] != "user" or authorization is None:
-        raise ValueError("human-approved Action requires a user authorization snapshot")
-    if authorization["principalId"] != reviewer["id"]:
-        raise ValueError("approval authorization snapshot belongs to another principal")
-    if authorization["permission"] != "approve_diagnosis_action":
-        raise ValueError("approval authorization snapshot lacks Action permission")
-    if authorization["role"] not in {"owner", "dba", "sre"}:
-        raise ValueError("approval authorization role is not permitted")
-    if authorization["authorizationRevision"] != AUTHORIZATION_REVISION:
-        raise ValueError("approval authorization policy revision is not supported")
-    if authorization["identityDigest"] != authorization_snapshot_digest(authorization):
-        raise ValueError("approval authorization snapshot digest is inconsistent")
+    authorization_ref = review.get("authorizationSnapshot")
+    if reviewer["kind"] != "user" or authorization_ref is None:
+        raise ValueError("human-approved Action requires an authorization audit")
+    if authorization_ref["attestationRevision"] != AUTHORIZATION_ATTESTATION_REVISION:
+        raise ValueError("authorization audit attestation revision is not supported")
+    authorization = resolve_authorization_audit(authorization_ref["auditRecordId"])
+    if authorization is None:
+        raise ValueError("authorization audit record is not trusted by the server")
+    expected_binding = {
+        "auditRecordId": authorization_ref["auditRecordId"],
+        "attestationRevision": AUTHORIZATION_ATTESTATION_REVISION,
+        "caseId": case["caseId"],
+        "caseRevision": case["revision"],
+        "actionId": action["actionId"],
+        "actionDigest": canonical_sha256(action),
+        "reviewId": review["reviewId"],
+        "principalId": reviewer["id"],
+        "permission": "approve_diagnosis_action",
+        "authorizationRevision": AUTHORIZATION_REVISION,
+    }
+    if any(authorization.get(key) != value for key, value in expected_binding.items()):
+        raise ValueError("authorization audit does not bind the terminal approval")
+    if authorization.get("role") not in {"owner", "dba", "sre"}:
+        raise ValueError("authorization audit role is not permitted")
     if parse_time(authorization["capturedAt"]) > parse_time(review["createdAt"]):
         raise ValueError("approval authorization snapshot was captured after review")
 
 
+def _required_authorization_resolver(
+    resolver: Callable[[str], dict[str, Any] | None] | None,
+) -> Callable[[str], dict[str, Any] | None]:
+    if resolver is None:
+        raise ValueError(
+            "terminal approval has no trusted authorization audit resolver"
+        )
+    return resolver
+
+
 def validate_outcome_policy(
-    case: dict[str, Any], parse_time: Callable[[str], datetime]
+    case: dict[str, Any],
+    parse_time: Callable[[str], datetime],
+    resolve_authorization_audit: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> None:
     outcome = case["outcome"]
     if outcome == "pending":
@@ -120,6 +211,10 @@ def validate_outcome_policy(
         raise ValueError("terminal outcome requires one pending transition")
     event = terminal_events[0]
     terminal_revision = event["caseRevision"]
+    if terminal_revision != case["revision"]:
+        raise ValueError(
+            "terminal outcome event does not belong to current Case revision"
+        )
     outcome_tuple = event["outcomeTuple"]
     _exact_event_projection(event, outcome_tuple)
 
@@ -166,7 +261,9 @@ def validate_outcome_policy(
         _require_human_approval(
             review,
             action,
+            case,
             parse_time,
+            _required_authorization_resolver(resolve_authorization_audit),
             expected_decision="risk_accepted",
         )
         if (
@@ -194,7 +291,13 @@ def validate_outcome_policy(
         or terminal["caseRevision"] != terminal_revision
     ):
         raise ValueError("outcome feedback is not owned by its terminal Case revision")
-    _require_human_approval(review, action, parse_time)
+    _require_human_approval(
+        review,
+        action,
+        case,
+        parse_time,
+        _required_authorization_resolver(resolve_authorization_audit),
+    )
     if (
         implementation["kind"] != "implemented"
         or implementation["actionId"] != action["actionId"]
@@ -216,39 +319,44 @@ def validate_outcome_policy(
         _require_record(evidence, evidence_id, "result Evidence")
         for evidence_id in result_ids
     ]
-    kinds = {item["kind"] for item in results}
-    required = (
-        {"effect_metric_comparison"}
-        if outcome == "validated_effective"
-        else {"effect_metric_comparison", "rollback_confirmation"}
-    )
-    if kinds != required or len(results) != len(required):
-        raise ValueError(
-            "terminal tuple has an incomplete or extra result evidence set"
-        )
     for result in results:
         require_eligible(result, "terminal outcome")
 
-    effect = next(
-        item for item in results if item["kind"] == "effect_metric_comparison"
-    )
-    effect_typed = effect["payload"]["typed"]
     action_template = (action["templateId"], action["templateRevision"])
-    if action_template not in ACTION_RESULT_METRICS:
+    if action_template not in ACTION_RESULT_POLICY:
         raise ValueError("Action has no terminal result metric policy")
-    if (
-        effect_typed["actionId"] != action["actionId"]
-        or effect_typed["validationTargetZh"] != action["validation"]["targetZh"]
-        or (effect_typed["metricCode"], effect_typed["unit"])
-        != ACTION_RESULT_METRICS[action_template]
-    ):
-        raise ValueError("effect evidence is not bound to the Action result policy")
-    if outcome == "validated_effective" and not effect_typed["passed"]:
-        raise ValueError("validated_effective requires a passed effect comparison")
-    if outcome == "rolled_back":
-        rollback = next(
-            item for item in results if item["kind"] == "rollback_confirmation"
+    measurement_policy = ACTION_RESULT_POLICY[action_template]
+    effects = [item for item in results if item["kind"] == "effect_metric_comparison"]
+    rollbacks = [item for item in results if item["kind"] == "rollback_confirmation"]
+    if len(effects) + len(rollbacks) != len(results):
+        raise ValueError("terminal tuple contains an unsupported result Evidence kind")
+    expected_metric_codes = [item["metricCode"] for item in measurement_policy]
+    actual_metric_codes = [item["payload"]["typed"]["metricCode"] for item in effects]
+    if actual_metric_codes != expected_metric_codes:
+        raise ValueError("terminal tuple lacks the complete Action measurement policy")
+
+    measurement_results: list[bool] = []
+    for effect, policy in zip(effects, measurement_policy, strict=True):
+        typed = effect["payload"]["typed"]
+        if (
+            typed["actionId"] != action["actionId"]
+            or typed["validationTargetZh"] != action["validation"]["targetZh"]
+            or typed["metricCode"] != policy["metricCode"]
+            or typed["unit"] != policy["unit"]
+        ):
+            raise ValueError("effect evidence is not bound to the Action result policy")
+        measurement_results.append(_measurement_passes(typed, policy, action))
+
+    if outcome == "validated_effective" and (rollbacks or not all(measurement_results)):
+        raise ValueError(
+            "validated_effective does not satisfy the Action measurement policy"
         )
+    if outcome == "rolled_back":
+        if len(rollbacks) != 1 or all(measurement_results):
+            raise ValueError(
+                "rolled_back requires one failed Action measurement and one rollback"
+            )
+        rollback = rollbacks[0]
         rollback_typed = rollback["payload"]["typed"]
         if (
             rollback_typed["actionId"] != action["actionId"]

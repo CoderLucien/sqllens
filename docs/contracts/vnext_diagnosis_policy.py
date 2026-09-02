@@ -140,6 +140,23 @@ DIAGNOSIS_DEPENDENCY_REGISTRY = {
             }
         },
     },
+    ("decision.evidence_insufficient", "v1"): {
+        "factTemplate": "fact.evidence_gap_profile",
+        "rules": {},
+        "supportRules": (),
+        "claims": {},
+        "actions": {},
+    },
+}
+
+EVIDENCE_KIND_ZH = {
+    "slow_query": "慢查询运行",
+    "ordinary_plan": "普通执行计划",
+    "index": "索引元数据",
+    "statistics": "统计信息",
+    "statement_summary": "Statement Summary",
+    "runtime_metric": "运行指标",
+    "alert": "告警",
 }
 
 EVIDENCE_ELIGIBILITY = {
@@ -364,6 +381,10 @@ def derive_completeness(
     evidence_by_id: dict[str, dict[str, Any]],
 ) -> int:
     fact = facts_by_id[decision["params"]["profileFactId"]]
+    if fact["templateId"] == "fact.evidence_gap_profile":
+        assessments = validate_gap_fact(fact, evidence_by_id)
+        eligible = sum(item["eligible"] for item in assessments)
+        return round(eligible * 100 / len(assessments))
     roles = FACT_DEPENDENCY_REGISTRY[(fact["templateId"], fact["templateRevision"])]
     eligible = 0
     for role in roles:
@@ -373,6 +394,77 @@ def derive_completeness(
         ):
             eligible += 1
     return round(eligible * 100 / len(roles))
+
+
+def validate_gap_fact(
+    fact: dict[str, Any], evidence_by_id: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Rebuild an incomplete profile from explicit role assessments."""
+
+    params = fact["params"]
+    if set(params) != {
+        "attemptedDecisionTemplateId",
+        "attemptedDecisionTemplateRevision",
+        "roleAssessments",
+    }:
+        raise ValueError("evidence-gap Fact parameters are not closed")
+    attempted_key = (
+        params["attemptedDecisionTemplateId"],
+        params["attemptedDecisionTemplateRevision"],
+    )
+    if attempted_key not in DIAGNOSIS_DEPENDENCY_REGISTRY or attempted_key == (
+        "decision.evidence_insufficient",
+        "v1",
+    ):
+        raise ValueError("evidence-gap Fact references an unknown diagnosis profile")
+    attempted_spec = DIAGNOSIS_DEPENDENCY_REGISTRY[attempted_key]
+    fact_key = (attempted_spec["factTemplate"], "v1")
+    role_spec = FACT_DEPENDENCY_REGISTRY[fact_key]
+    provided = params["roleAssessments"]
+    if len(provided) != len(role_spec):
+        raise ValueError("evidence-gap Fact does not assess every required role")
+    provided_by_role = {item["role"]: item for item in provided}
+    if len(provided_by_role) != len(provided) or set(provided_by_role) != set(
+        role_spec
+    ):
+        raise ValueError("evidence-gap Fact role assessments differ from the profile")
+
+    expected: list[dict[str, Any]] = []
+    seen_evidence_ids: set[str] = set()
+    for role, dependency in role_spec.items():
+        supplied = provided_by_role[role]
+        evidence_id = supplied["evidenceId"]
+        if evidence_id is None:
+            reasons = ["MISSING_EVIDENCE"]
+        else:
+            if evidence_id in seen_evidence_ids:
+                raise ValueError("evidence-gap Fact reuses one Evidence for two roles")
+            seen_evidence_ids.add(evidence_id)
+            if evidence_id not in evidence_by_id:
+                raise ValueError("evidence-gap Fact references missing Evidence")
+            evidence = evidence_by_id[evidence_id]
+            if evidence["kind"] != dependency["kind"]:
+                raise ValueError("evidence-gap Fact role has the wrong Evidence kind")
+            reasons = evidence_eligibility_reasons(evidence)
+        expected.append(
+            {
+                "role": role,
+                "expectedKind": dependency["kind"],
+                "evidenceId": evidence_id,
+                "eligible": not reasons,
+                "reasonCodes": reasons,
+            }
+        )
+    if provided != expected:
+        raise ValueError("evidence-gap Fact is not the derived role assessment")
+    expected_evidence_ids = [
+        item["evidenceId"] for item in expected if item["evidenceId"] is not None
+    ]
+    if fact["evidenceIds"] != expected_evidence_ids:
+        raise ValueError("evidence-gap Fact evidenceIds are not its role projection")
+    if all(item["eligible"] for item in expected):
+        raise ValueError("fully eligible evidence cannot produce an evidence-gap Fact")
+    return expected
 
 
 def _rule_state(rule_id: str, params: dict[str, Any]) -> str:
@@ -437,7 +529,7 @@ def validate_policy_pins(case: dict[str, Any]) -> None:
         raise ValueError("database version family has no deterministic rule pack")
     if case["pinnedRevisions"]["rulePack"] != RULE_PACK_BY_VERSION_FAMILY[family]:
         raise ValueError("Case rulePack pin does not match its database version")
-    if case["pinnedRevisions"]["policy"] != "diagnosis-policy/v3":
+    if case["pinnedRevisions"]["policy"] != "diagnosis-policy/v4":
         raise ValueError("Case does not pin the evidence-quality diagnosis policy")
 
 
@@ -452,6 +544,10 @@ def expected_rule_findings(
     rule_pack_policy = RULE_POLICY_REGISTRY[rule_pack]
     decision_key = (decision["templateId"], decision["templateRevision"])
     spec = DIAGNOSIS_DEPENDENCY_REGISTRY[decision_key]
+    if decision_key == ("decision.evidence_insufficient", "v1"):
+        fact = facts_by_id[decision["params"]["profileFactId"]]
+        validate_gap_fact(fact, evidence_by_id)
+        return []
     fact = facts_by_id[decision["params"]["profileFactId"]]
     role_ids = {
         role: fact["params"][role]
@@ -485,7 +581,28 @@ def expected_rule_findings(
 
 def expected_uncertainty(case: dict[str, Any]) -> list[dict[str, Any]]:
     key = (case["decision"]["templateId"], case["decision"]["templateRevision"])
-    expected = [dict(item) for item in UNCERTAINTY_POLICY[key]]
+    if key == ("decision.evidence_insufficient", "v1"):
+        fact = case["facts"][0]
+        missing_kinds = sorted(
+            {
+                item["expectedKind"]
+                for item in fact["params"]["roleAssessments"]
+                if not item["eligible"]
+            }
+        )
+        missing_zh = "、".join(EVIDENCE_KIND_ZH[item] for item in missing_kinds)
+        expected = [
+            {
+                "code": "EVIDENCE_INSUFFICIENT",
+                "descriptionZh": (
+                    f"缺少符合资格的{missing_zh}证据，当前证据完整度为 "
+                    f"{case['evidenceCompleteness']}%，不能发布根因或动作。"
+                ),
+                "requiredEvidenceKinds": missing_kinds,
+            }
+        ]
+    else:
+        expected = [dict(item) for item in UNCERTAINTY_POLICY[key]]
     if case["aiSynthesis"]["status"] in {"degraded", "abstained"}:
         expected.append(dict(AI_DEGRADED_UNCERTAINTY))
     return expected

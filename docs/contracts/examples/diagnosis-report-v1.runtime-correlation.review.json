@@ -111,7 +111,7 @@
       "rulePack": "tidb-8.5-rules/v2",
       "documentPack": "tidb-sql-tuning@2026-09-02",
       "parser": "sqlglot/mysql@30.17.0",
-      "policy": "diagnosis-policy/v3",
+      "policy": "diagnosis-policy/v4",
       "redaction": "evidence-redaction/v2",
       "provider": "openai-compatible/v1",
       "model": "gpt-5.6-sol",

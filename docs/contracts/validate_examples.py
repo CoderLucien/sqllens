@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -9,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
-
+from vnext_canonical_json import strict_json_loads
 
 ROOT = Path(__file__).parent
 EXAMPLES = ROOT / "examples"
@@ -127,7 +126,10 @@ def parse_rfc3339_datetime(value: str) -> datetime:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    loaded = strict_json_loads(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise TypeError(f"JSON contract document must be an object: {path}")
+    return loaded
 
 
 def migrate_legacy_draft_outcome(

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import validate_vnext_examples as contracts
@@ -45,6 +47,17 @@ def main() -> None:
     report = load(EXAMPLES / "diagnosis-report-v1.index-access.review.json")
     source = load(EXAMPLES / "source-v1.valid.json")
     evidence = load(EXAMPLES / "evidence-v2.valid.json")
+
+    with tempfile.TemporaryDirectory() as directory:
+        duplicate_json = Path(directory) / "duplicate.json"
+        duplicate_json.write_text(
+            '{"typed":{"kind":"attacker","kind":"slow_query"}}',
+            encoding="utf-8",
+        )
+        expect_error(
+            lambda: load(duplicate_json),
+            "JSON ingress collapses a nested duplicate object member",
+        )
 
     invalid_evidence = copy.deepcopy(evidence)
     invalid_evidence["payload"].pop("canonicalRevision")
@@ -602,6 +615,20 @@ def main() -> None:
     contracts.validate_source_transition(leased_draining, drained_source)
 
     invalid = copy.deepcopy(leased_source)
+    snapshot_at = invalid["transitionEvents"][-1]["createdAt"]
+    latest_revision = invalid["revision"]
+    for lease_event in invalid["leaseEvents"]:
+        if lease_event["sourceRevision"] == latest_revision:
+            lease_event["createdAt"] = snapshot_at
+    for active_lease in invalid["activeLeases"]:
+        if active_lease["acquiredRevision"] == latest_revision:
+            active_lease["acquiredAt"] = snapshot_at
+    expect_error(
+        lambda: validate_source(invalid),
+        "same-time lease acquisition cannot establish order before state snapshot",
+    )
+
+    invalid = copy.deepcopy(leased_source)
     invalid["leaseEvents"][0]["actor"] = {
         "kind": "user",
         "role": "owner",
@@ -1058,18 +1085,69 @@ def main() -> None:
         "Case self-reports E4 without the required eligible evidence classes",
     )
 
+    insufficient, _ = contracts.build_evidence_insufficient_cases(case)
+    invalid = copy.deepcopy(insufficient)
+    invalid["actions"] = copy.deepcopy(case["actions"])
+    invalid["decision"]["actionIds"] = [invalid["actions"][0]["actionId"]]
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "evidence-insufficient diagnosis injects an Action",
+    )
+
+    invalid = copy.deepcopy(insufficient)
+    rejected_role = next(
+        item
+        for item in invalid["facts"][0]["params"]["roleAssessments"]
+        if not item["eligible"]
+    )
+    rejected_role["eligible"] = True
+    rejected_role["reasonCodes"] = []
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "evidence-gap Fact self-asserts an ineligible role as eligible",
+    )
+
     invalid = copy.deepcopy(terminal)
     effect = next(
         item
         for item in invalid["evidence"]
         if item["kind"] == "effect_metric_comparison"
+        and item["payload"]["typed"]["metricCode"] == "p95_latency_ms"
     )
-    effect["payload"]["typed"]["passed"] = False
+    effect["payload"]["schemaRevision"] = "effect-metric-comparison/v1"
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "effect result uses the superseded writable-pass payload revision",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    effect = next(
+        item
+        for item in invalid["evidence"]
+        if item["kind"] == "effect_metric_comparison"
+        and item["payload"]["typed"]["metricCode"] == "p95_latency_ms"
+    )
+    effect["payload"]["typed"]["observedValue"] = 999_999
     effect["payload"]["typedDigest"] = typed_digest(effect["payload"]["typed"])
     effect["summaryZh"] = contracts.render_evidence_summary(effect)
     expect_error(
         lambda: validate_case_references(invalid),
         "validated_effective cites an effect comparison that failed its threshold",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    missing_id = invalid["transitionEvents"][-1]["evidenceIds"][-1]
+    remaining_ids = [
+        evidence_id
+        for evidence_id in invalid["transitionEvents"][-1]["evidenceIds"]
+        if evidence_id != missing_id
+    ]
+    invalid["transitionEvents"][-1]["evidenceIds"] = remaining_ids
+    invalid["transitionEvents"][-1]["outcomeTuple"]["resultEvidenceIds"] = remaining_ids
+    invalid["feedback"][-1]["evidenceIds"] = remaining_ids
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "validated_effective omits one required Action measurement",
     )
 
     invalid = copy.deepcopy(terminal)
@@ -1115,10 +1193,29 @@ def main() -> None:
     )
 
     invalid = copy.deepcopy(terminal)
-    invalid["reviews"][0]["authorizationSnapshot"]["role"] = "dba"
+    invalid["reviews"][0]["authorizationSnapshot"]["auditRecordId"] = (
+        "authz_0000000000000999"
+    )
     expect_error(
         lambda: validate_case_references(invalid),
-        "an approval authorization snapshot is mutated without its server digest",
+        "an approval cites an authorization record outside the server audit ledger",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    action = invalid["actions"][0]
+    action["params"]["maxP95Ms"] = 60_000
+    action.update(contracts.render_action(action))
+    for effect in invalid["evidence"]:
+        if effect["kind"] != "effect_metric_comparison":
+            continue
+        effect["payload"]["typed"]["validationTargetZh"] = action["validation"][
+            "targetZh"
+        ]
+        effect["payload"]["typedDigest"] = typed_digest(effect["payload"]["typed"])
+        effect["summaryZh"] = contracts.render_evidence_summary(effect)
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "trusted authorization audit does not bind a rewritten Action threshold",
     )
 
     invalid = copy.deepcopy(terminal)
@@ -1150,6 +1247,16 @@ def main() -> None:
     expect_error(
         lambda: contracts.validate_case_transition(case, invalid),
         "new outcome approval and implementation records claim an older Case revision",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    invalid["reviews"][0]["caseRevision"] = 1
+    for feedback in invalid["feedback"]:
+        feedback["caseRevision"] = 1
+    invalid["transitionEvents"][-1]["caseRevision"] = 1
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "standalone terminal Case assigns its complete outcome tuple to an old revision",
     )
 
     invalid = copy.deepcopy(terminal)

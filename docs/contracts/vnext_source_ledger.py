@@ -74,12 +74,14 @@ def replay_source_history(
         if operation in DRAIN_START_OPERATIONS and revision_leases:
             raise ValueError("drain admission revision cannot mutate active leases")
 
+        prior_lease_at = prior_state_at
         for lease_event in revision_leases:
             lease_at = parse_time(lease_event["createdAt"])
-            if prior_state_at is not None and lease_at <= prior_state_at:
-                raise ValueError("lease event predates its Source revision")
-            if lease_at > state_at:
-                raise ValueError("Source state snapshot precedes its lease events")
+            if prior_lease_at is not None and lease_at <= prior_lease_at:
+                raise ValueError("Source lease events must be strictly ordered")
+            if lease_at >= state_at:
+                raise ValueError("Source lease event must precede its state snapshot")
+            prior_lease_at = lease_at
             if lease_event["fromLeaseCount"] != len(active):
                 raise ValueError("Source lease ledger count is discontinuous")
             lease_operation = lease_event["operation"]

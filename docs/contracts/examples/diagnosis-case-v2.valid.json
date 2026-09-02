@@ -373,7 +373,8 @@
       "templateRevision": "v1",
       "params": {
         "minScanReductionPct": 90,
-        "maxP95Ms": 500
+        "maxP95Ms": 500,
+        "maxWriteRegressionBasisPoints": 500
       },
       "family": "index_candidate",
       "titleZh": "在隔离环境验证复合索引候选",
@@ -390,7 +391,7 @@
       ],
       "validation": {
         "metricZh": "扫描行数、P95 延迟和写入开销",
-        "targetZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归在审批阈值内"
+        "targetZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归不超过 5%"
       },
       "rollbackZh": [
         "若收益或写入开销不达标，删除隔离环境候选索引并停止灰度",
@@ -481,7 +482,7 @@
     "rulePack": "pingkaidb-7.1-rules/v2",
     "documentPack": "pingkaidb-sql-tuning@2026-09-02",
     "parser": "sqlglot/mysql@30.17.0",
-    "policy": "diagnosis-policy/v3",
+    "policy": "diagnosis-policy/v4",
     "redaction": "evidence-redaction/v2",
     "provider": "openai-compatible/v1",
     "model": "gpt-5.6-sol",

@@ -45,9 +45,12 @@ A Source snapshot is trusted only after one full-history replay combines state
 and lease ledgers by `sourceRevision` and timestamp. The replay starts at
 revision 1, requires exactly one state snapshot per revision, and derives the
 active lease set after each event. Acquisition is legal only in an enabled
-`leases_updated` revision and must precede that revision's state snapshot;
-release/cancel is legal only in its declared lease revision and must also
-precede the snapshot. Prior/proposed validation never accepts an already
+`leases_updated` revision and must be strictly earlier than that revision's
+state snapshot; release/cancel is legal only in its declared lease revision and
+must also be strictly earlier than the snapshot. Equal timestamps across the
+two arrays are ambiguous and fail closed; lease events within one revision are
+strictly ordered as well. Prior/proposed validation never
+accepts an already
 poisoned prior merely because the newest transition is locally valid.
 
 Disable and delete use the same admission barrier. A normal operation enters

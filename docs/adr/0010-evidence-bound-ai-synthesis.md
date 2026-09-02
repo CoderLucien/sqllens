@@ -67,8 +67,15 @@ or oversized output degrades to a deterministic Chinese rules report.
 Typed Evidence digests pin `rfc8785-safe-integer/v1`, a restricted RFC
 8785-compatible canonical JSON profile: keys use JCS ordering and measurements
 use integer base units in the IEEE-754 safe range. Non-finite or fractional
-typed measurements are rejected. This revision is part of the Evidence
+typed measurements are rejected. JSON ingress rejects duplicate object members
+before any parser can collapse them. This revision is part of the Evidence
 envelope, not an implementation-specific JSON encoder default.
+
+Evidence eligibility and diagnostic publication are separate. A missing,
+stale, truncated, or zero-coverage role remains representable as a typed gap
+Fact with deterministic per-role reasons, derived completeness, and an
+actionless `evidence_insufficient` decision. Such a Fact cannot be converted
+into a rule hit, AI claim, or Action.
 
 AI state is explicit. `applied` means a validated invocation contributed at
 least one claim. `degraded` means an invocation was attempted and failed and

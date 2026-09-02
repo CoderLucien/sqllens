@@ -147,6 +147,24 @@
       "then": { "properties": { "workflowState": { "const": "ready" } } }
     },
     {
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": { "templateId": { "const": "decision.evidence_insufficient" } },
+            "required": ["templateId"]
+          }
+        },
+        "required": ["decision"]
+      },
+      "then": {
+        "properties": {
+          "actions": { "maxItems": 0 },
+          "ruleFindings": { "maxItems": 0 },
+          "aiSynthesis": { "properties": { "claims": { "maxItems": 0 } } }
+        }
+      }
+    },
+    {
       "if": { "properties": { "outcome": { "const": "validated_effective" } }, "required": ["outcome"] },
       "then": {
         "properties": {
@@ -181,6 +199,13 @@
       "then": {
         "properties": {
           "actions": { "maxItems": 0 },
+          "ruleFindings": { "maxItems": 0 },
+          "decision": {
+            "allOf": [
+              { "$ref": "#/$defs/decision" },
+              { "properties": { "templateId": { "const": "decision.evidence_insufficient" } } }
+            ]
+          },
           "uncertainty": { "minItems": 1 },
           "feedback": { "contains": { "properties": { "kind": { "const": "evidence_insufficient" } }, "required": ["kind"] } },
           "transitionEvents": { "contains": { "properties": { "type": { "const": "outcome" }, "toOutcome": { "const": "evidence_insufficient" } }, "required": ["type", "toOutcome"] } }
@@ -215,7 +240,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["templateId", "templateRevision", "params", "titleZh", "priority", "conclusionZh", "evidenceSummary", "evidenceIds", "ruleIds", "claimIds", "actionIds"],
       "properties": {
-        "templateId": { "enum": ["decision.index_scan_priority", "decision.statistics_estimation", "decision.runtime_hotspot"] },
+        "templateId": { "enum": ["decision.index_scan_priority", "decision.statistics_estimation", "decision.runtime_hotspot", "decision.evidence_insufficient"] },
         "templateRevision": { "const": "v1" },
         "params": { "type": "object" },
         "titleZh": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -226,7 +251,7 @@
           "items": { "$ref": "#/$defs/evidenceSummary" }
         },
         "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" },
-        "ruleIds": { "$ref": "#/$defs/ruleIdsNonEmpty" },
+        "ruleIds": { "$ref": "#/$defs/ruleIds" },
         "claimIds": {
           "type": "array", "uniqueItems": true, "maxItems": 32,
           "items": { "type": "string", "pattern": "^claim_[a-z0-9]{16,64}$" }
@@ -239,15 +264,26 @@
       "allOf": [
         {
           "if": { "properties": { "templateId": { "const": "decision.index_scan_priority" } }, "required": ["templateId"] },
-          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" } } }
+          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" }, "ruleIds": { "minItems": 1 } } }
         },
         {
           "if": { "properties": { "templateId": { "const": "decision.statistics_estimation" } }, "required": ["templateId"] },
-          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" } } }
+          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" }, "ruleIds": { "minItems": 1 } } }
         },
         {
           "if": { "properties": { "templateId": { "const": "decision.runtime_hotspot" } }, "required": ["templateId"] },
-          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" } } }
+          "then": { "properties": { "params": { "$ref": "#/$defs/profileFactDecisionParams" }, "ruleIds": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "decision.evidence_insufficient" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "params": { "$ref": "#/$defs/profileFactDecisionParams" },
+              "ruleIds": { "maxItems": 0 },
+              "claimIds": { "maxItems": 0 },
+              "actionIds": { "maxItems": 0 }
+            }
+          }
         }
       ]
     },
@@ -257,7 +293,7 @@
       "properties": {
         "labelZh": { "type": "string", "minLength": 1, "maxLength": 128 },
         "valueZh": { "type": "string", "minLength": 1, "maxLength": 1024 },
-        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" }
+        "evidenceIds": { "$ref": "#/$defs/evidenceIds" }
       }
     },
     "sourceSnapshot": {
@@ -276,13 +312,13 @@
       "required": ["factId", "templateId", "templateRevision", "params", "kind", "statementZh", "valueText", "evidenceIds"],
       "properties": {
         "factId": { "type": "string", "pattern": "^fact_[a-z0-9]{16,64}$" },
-        "templateId": { "enum": ["fact.index_scan_profile", "fact.statistics_estimation_profile", "fact.runtime_hotspot_profile"] },
+        "templateId": { "enum": ["fact.index_scan_profile", "fact.statistics_estimation_profile", "fact.runtime_hotspot_profile", "fact.evidence_gap_profile"] },
         "templateRevision": { "const": "v1" },
         "params": { "type": "object" },
-        "kind": { "enum": ["scan_amplification", "estimation_error", "time_window_correlation"] },
+        "kind": { "enum": ["scan_amplification", "estimation_error", "time_window_correlation", "evidence_gap"] },
         "statementZh": { "type": "string", "minLength": 1, "maxLength": 2048 },
         "valueText": { "type": ["string", "null"], "maxLength": 512 },
-        "evidenceIds": { "$ref": "#/$defs/evidenceIdsNonEmpty" }
+        "evidenceIds": { "$ref": "#/$defs/evidenceIds" }
       },
       "allOf": [
         {
@@ -290,7 +326,8 @@
           "then": {
             "properties": {
               "kind": { "const": "scan_amplification" },
-              "params": { "$ref": "#/$defs/indexScanFactParams" }
+              "params": { "$ref": "#/$defs/indexScanFactParams" },
+              "evidenceIds": { "minItems": 1 }
             }
           }
         },
@@ -299,7 +336,8 @@
           "then": {
             "properties": {
               "kind": { "const": "estimation_error" },
-              "params": { "$ref": "#/$defs/statisticsFactParams" }
+              "params": { "$ref": "#/$defs/statisticsFactParams" },
+              "evidenceIds": { "minItems": 1 }
             }
           }
         },
@@ -308,7 +346,17 @@
           "then": {
             "properties": {
               "kind": { "const": "time_window_correlation" },
-              "params": { "$ref": "#/$defs/runtimeHotspotFactParams" }
+              "params": { "$ref": "#/$defs/runtimeHotspotFactParams" },
+              "evidenceIds": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "templateId": { "const": "fact.evidence_gap_profile" } }, "required": ["templateId"] },
+          "then": {
+            "properties": {
+              "kind": { "const": "evidence_gap" },
+              "params": { "$ref": "#/$defs/evidenceGapFactParams" }
             }
           }
         }
@@ -596,14 +644,10 @@
     },
     "authorizationSnapshot": {
       "type": "object", "additionalProperties": false,
-      "required": ["principalId", "role", "permission", "authorizationRevision", "capturedAt", "identityDigest"],
+      "required": ["auditRecordId", "attestationRevision"],
       "properties": {
-        "principalId": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "role": { "enum": ["owner", "dba", "sre"] },
-        "permission": { "const": "approve_diagnosis_action" },
-        "authorizationRevision": { "const": "owner-action-approval/v1" },
-        "capturedAt": { "type": "string", "format": "date-time" },
-        "identityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+        "auditRecordId": { "type": "string", "pattern": "^authz_[a-z0-9]{16,64}$" },
+        "attestationRevision": { "const": "server-authorization-audit/v1" }
       }
     },
     "outcomeTuple": {
@@ -706,6 +750,32 @@
         "alertEvidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
       }
     },
+    "evidenceGapFactParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attemptedDecisionTemplateId", "attemptedDecisionTemplateRevision", "roleAssessments"],
+      "properties": {
+        "attemptedDecisionTemplateId": { "enum": ["decision.index_scan_priority", "decision.statistics_estimation", "decision.runtime_hotspot"] },
+        "attemptedDecisionTemplateRevision": { "const": "v1" },
+        "roleAssessments": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": { "$ref": "#/$defs/evidenceRoleAssessment" }
+        }
+      }
+    },
+    "evidenceRoleAssessment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "expectedKind", "evidenceId", "eligible", "reasonCodes"],
+      "properties": {
+        "role": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{1,63}$" },
+        "expectedKind": { "enum": ["slow_query", "ordinary_plan", "index", "statistics", "statement_summary", "runtime_metric", "alert"] },
+        "evidenceId": { "type": ["string", "null"], "pattern": "^ev_[a-z0-9]{16,64}$" },
+        "eligible": { "type": "boolean" },
+        "reasonCodes": {
+          "type": "array", "uniqueItems": true, "maxItems": 8,
+          "items": { "enum": ["MISSING_EVIDENCE", "NOT_FRESH", "COVERAGE_BELOW_POLICY", "NO_RECORDS", "TRUNCATED", "COLLECTION_INCOMPLETE", "NO_ROWS_READ"] }
+        }
+      }
+    },
     "aiResourceHotspotParams": {
       "type": "object", "additionalProperties": false,
       "required": ["preferredActionFamily", "causality"],
@@ -716,10 +786,11 @@
     },
     "indexCandidateActionParams": {
       "type": "object", "additionalProperties": false,
-      "required": ["minScanReductionPct", "maxP95Ms"],
+      "required": ["minScanReductionPct", "maxP95Ms", "maxWriteRegressionBasisPoints"],
       "properties": {
         "minScanReductionPct": { "type": "integer", "minimum": 50, "maximum": 99 },
-        "maxP95Ms": { "type": "integer", "minimum": 10, "maximum": 60000 }
+        "maxP95Ms": { "type": "integer", "minimum": 10, "maximum": 60000 },
+        "maxWriteRegressionBasisPoints": { "type": "integer", "minimum": 0, "maximum": 5000 }
       }
     },
     "statisticsRefreshActionParams": {
@@ -740,6 +811,14 @@
     "evidenceIdsNonEmpty": {
       "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 512,
       "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+    },
+    "evidenceIds": {
+      "type": "array", "uniqueItems": true, "maxItems": 512,
+      "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+    },
+    "ruleIds": {
+      "type": "array", "uniqueItems": true, "maxItems": 128,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,63}$" }
     },
     "ruleIdsNonEmpty": {
       "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 128,

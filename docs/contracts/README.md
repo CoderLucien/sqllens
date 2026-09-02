@@ -35,8 +35,9 @@ python3 docs/contracts/validate_vnext_negative_examples.py
 ```
 
 The positive validator checks all three Case/Report pairs, an explicit
-non-invoked AI abstention, one complete Source lease-drain chain, and complete
-`validated_effective` and `rolled_back` transitions. A report must be an exact
+non-invoked AI abstention, one complete Source lease-drain chain, complete
+`validated_effective` and `rolled_back` transitions, and a separately rendered
+actionless `evidence_insufficient` Case/Report path. A report must be an exact
 projection of one Case revision for mode, conclusion, priority, business
 impact, evidence summary, rule/AI reasoning, ordered actions, uncertainty, and
 complete provenance. It cannot add an evidence ID, action, measurement, or
@@ -48,7 +49,7 @@ models instead of accumulating conditions in the fixture runner:
 - `vnext_canonical_json.py` owns the restricted RFC 8785/JCS digest profile;
 - `vnext_diagnosis_policy.py` owns versioned Evidence eligibility, typed
   Evidence -> Fact extraction, rule predicates/templates, and derived level,
-  completeness, and uncertainty;
+  completeness, and uncertainty (`diagnosis-policy/v4`);
 - `vnext_outcome_policy.py` owns the singular authorized outcome tuple and its
   causal/effect semantics;
 - `vnext_source_ledger.py` performs one full-history replay of Source state and
@@ -62,12 +63,18 @@ claims require an ordered approval -> implementation -> result-evidence ->
 terminal feedback -> outcome-event chain. The terminal event contains one
 structured tuple and its legacy ID arrays must be its exact projection; records
 from another tuple cannot collectively satisfy an outcome. Human approval is a
-user actor bound to a server-owned, digest-checked authorization snapshot.
-`validated_effective` requires a passed comparison whose server-owned metric
-code/unit and validation target are bound to the Action template; `rolled_back`
-additionally requires confirmed rollback for
-that same Action. Result Evidence must itself pass the Evidence eligibility
-policy. The global event replay requires the
+user actor bound through an opaque ID to a trusted, server-owned authorization
+audit ledger; the public Case cannot manufacture or rehash this attestation.
+The audit record binds the exact canonical Action snapshot as well as the Case,
+revision, review, principal, permission, and policy revision.
+Each Action template owns an ordered set of required metric codes, units,
+thresholds, and comparison predicates. The outcome policy recomputes every
+predicate from numeric result Evidence and rejects a missing measurement; no
+persisted `passed` Boolean is authoritative. `validated_effective` requires
+every predicate to hold; `rolled_back` requires a failed predicate plus
+confirmed rollback for that same Action. Result Evidence must itself pass the
+Evidence eligibility policy. These comparisons use
+`effect-metric-comparison/v2`. The global event replay requires the
 workflow to be ready, rejects records created after the event, and requires all
 evidence used by the frozen diagnosis to have been collected no later than the
 ready event and that Case revision's `updatedAt`. Prior/proposed Case validation
@@ -83,8 +90,10 @@ runtime-emitted acquisition event and exposes an exact active `leaseId`/`jobId`
 snapshot; the numeric count is only a derived cross-check. Every loaded snapshot
 is replayed from revision 1 by one combined state/lease model before it may be
 used as a prior revision. Admission may occur only in an enabled
-`leases_updated` revision before its state snapshot; release/cancel events must
-belong to an allowed lease revision and also precede its state snapshot.
+`leases_updated` revision strictly before its state snapshot; release/cancel
+events must belong to an allowed lease revision and also be strictly earlier
+than its state snapshot. Equal timestamps do not establish causal order and are
+rejected; multiple lease events in one revision are also strictly ordered.
 Entering drain preserves the active set. Each later normal release or forced
 cancellation names an acquired lease and job, removes exactly that identity,
 and appends an immutable lease event;
@@ -124,9 +133,10 @@ binding, digest, truncation, and budget semantics as Evidence embedded in a Case
 Typed payload digests pin `rfc8785-safe-integer/v1`, a restricted RFC
 8785-compatible canonical form:
 object keys use UTF-16 ordering and measurements use integer base units within
-the IEEE-754 safe range. NaN, Infinity, fractional typed measurements, and
-language-dependent number rendering are rejected; strict JSON serialization
-uses `allow_nan=False`.
+the IEEE-754 safe range. Every JSON ingress rejects duplicate object members
+before parsing can collapse them. NaN, Infinity, fractional typed
+measurements, and language-dependent number rendering are rejected; strict
+JSON serialization uses `allow_nan=False`.
 
 Evidence qualification is not inferred from a valid digest alone. The pinned
 policy checks kind-specific freshness, coverage, collection completion,
@@ -134,7 +144,10 @@ truncation, record count, and rows read for every required Fact/rule role.
 `evidenceLevel` is computed only from those supporting roles, so unrelated
 Evidence cannot raise the ceiling. `evidenceCompleteness` is the percentage of
 eligible required roles, and uncertainty text is a server-owned code/template
-projection rather than caller-authored prose.
+projection rather than caller-authored prose. Incomplete Evidence is retained
+as an explicit typed gap Fact with per-role eligibility and reasons. It may
+produce an actionless `evidence_insufficient` decision and terminal outcome,
+but it cannot support a ready rule hit or Action.
 
 These fixtures are product-review baselines, not claims that the current
 runtime can generate them.
@@ -224,9 +237,9 @@ Outcome prerequisites are cumulative:
 | Outcome | Required records in the case |
 | --- | --- |
 | `pending` | None |
-| `validated_effective` | An `approved` review, `implemented` feedback, and linked `validated` feedback citing `effect_metric_comparison` evidence |
-| `rolled_back` | An `approved` review, `implemented` feedback, and linked `rolled_back` feedback citing both `effect_metric_comparison` and `rollback_confirmation` evidence |
-| `evidence_insufficient` | `insufficient` completeness, non-empty missing-evidence details, no recommendations, and `evidence_insufficient` feedback |
+| `validated_effective` | An `approved` review, `implemented` feedback, and linked `validated` feedback citing the complete Action-owned metric set whose predicates are recomputed as satisfied |
+| `rolled_back` | An `approved` review, `implemented` feedback, and linked `rolled_back` feedback citing the complete Action-owned metric set with at least one failed predicate plus `rollback_confirmation` evidence |
+| `evidence_insufficient` | A typed gap Fact, derived sub-100 completeness and evidence ceiling, no rule hit/Action/Claim, and `evidence_insufficient` feedback |
 | `risk_accepted` | A `risk_accepted` review linked to at least one recommendation |
 
 The four business outcomes are terminal; re-analysis creates a new case rather
@@ -241,8 +254,9 @@ state machines.
 Effect outcomes cannot be grounded only by a comment or recommendation ID.
 Their terminal feedback has a non-empty `evidenceIds` binding; domain validation
 rejects empty, dangling, or policy-inappropriate evidence kinds. The P0 policy
-requires a metric comparison for both effect outcomes and separate rollback
-confirmation for `rolled_back`.
+requires the complete versioned Action measurement set for both effect outcomes
+and separate rollback confirmation for `rolled_back`. It derives the result
+from the measurements rather than accepting a writable success flag.
 
 Each effect result must form one causal chain for the same recommendation:
 

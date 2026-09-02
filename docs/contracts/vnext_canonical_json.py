@@ -17,6 +17,32 @@ from typing import Any
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
 
+def _reject_duplicate_object_members(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object member: {key}")
+        result[key] = value
+    return result
+
+
+def strict_json_loads(source: str) -> Any:
+    """Parse standard JSON while rejecting duplicate keys and non-finite numbers."""
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON constant: {value}")
+
+    loaded = json.loads(
+        source,
+        parse_constant=reject_constant,
+        object_pairs_hook=_reject_duplicate_object_members,
+    )
+    reject_non_finite_json(loaded)
+    return loaded
+
+
 def reject_non_finite_json(value: Any, path: str = "$") -> None:
     """Reject NaN/Infinity recursively before schema or semantic processing."""
 

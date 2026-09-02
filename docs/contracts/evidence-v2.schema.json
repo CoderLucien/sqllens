@@ -227,16 +227,27 @@
     },
     "effectMetricComparisonPayload": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "actionId", "metricCode", "validationTargetZh", "baselineValue", "observedValue", "unit", "passed"],
+      "required": ["kind", "actionId", "metricCode", "validationTargetZh", "baselineValue", "observedValue", "unit"],
       "properties": {
         "kind": { "const": "effect_metric_comparison" },
         "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
-        "metricCode": { "enum": ["p95_latency_ms", "estimation_ratio_basis_points", "tikv_p99_latency_ms"] },
+        "metricCode": {
+          "enum": [
+            "average_scan_rows",
+            "p95_latency_ms",
+            "write_regression_basis_points",
+            "estimation_ratio_basis_points",
+            "join_order_change_count",
+            "batch_duration_minutes",
+            "tikv_p99_latency_ms",
+            "hotspot_score_basis_points",
+            "payment_error_rate_basis_points"
+          ]
+        },
         "validationTargetZh": { "type": "string", "minLength": 1, "maxLength": 1024 },
-        "baselineValue": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
-        "observedValue": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
-        "unit": { "enum": ["ms", "basis_points"] },
-        "passed": { "type": "boolean" }
+        "baselineValue": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "observedValue": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "unit": { "enum": ["ms", "rows", "basis_points", "count", "minutes"] }
       }
     },
     "rollbackConfirmationPayload": {

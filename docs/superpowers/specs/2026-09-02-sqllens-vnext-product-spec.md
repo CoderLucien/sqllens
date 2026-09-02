@@ -265,6 +265,10 @@ typed Fact; unrelated Evidence cannot raise it. `evidenceCompleteness` is the
 percentage of that Fact's required roles that are eligible, and uncertainty is
 rendered from server-owned codes for missing or degraded roles.
 
+An incomplete role set remains a legal typed gap Fact. It renders a bounded,
+actionless `evidence_insufficient` decision with per-role reasons and derived
+level/completeness; it cannot support a ready rule hit, AI claim, or Action.
+
 Rules declare minimum evidence level, supported product/version range, required
 fields, incompatible conditions, confidence ceiling, recommended action
 template, validation, rollback, and official references.
@@ -323,7 +327,8 @@ Large or sensitive payloads remain behind a storage reference.
 Typed payload digests pin `rfc8785-safe-integer/v1`, a restricted RFC 8785/JCS
 profile with integer base-unit measurements in the IEEE-754 safe range; NaN, Infinity,
 fractional typed measurements, and implementation-dependent number rendering
-fail closed.
+fail closed. Every JSON ingress rejects duplicate object members before
+canonicalization.
 
 ### DiagnosisCase/v2
 
@@ -338,9 +343,14 @@ later than the ready event and Case revision `updatedAt`. The first
 `pending -> terminal` event carries one singular
 Action/approval/implementation/result/terminal-feedback tuple; its legacy ID
 arrays are an exact projection and a later self-transition cannot backfill it.
-Approval is a user actor bound to a server-owned, digest-checked authorization
-snapshot. Effect and rollback Evidence must pass eligibility; its server-owned
-metric code/unit and validation target are bound to the same Action template.
+Approval is a user actor bound by an opaque audit ID to a trusted server-owned
+authorization ledger, including the exact canonical Action digest; all terminal
+tuple records belong to the current Case revision. Effect and rollback Evidence
+must pass eligibility. Each Action
+template owns a complete metric/unit/predicate set, and the service recomputes
+the outcome from numeric measurements rather than accepting a writable
+`passed` flag. `validated_effective` requires every predicate; `rolled_back`
+requires a failed predicate and confirmed rollback.
 Provider, model, prompt,
 redacted-payload, payload digest, rule pack, parser, redaction, source, and
 document revisions are pinned with field labels.
