@@ -766,6 +766,32 @@ def test_extreme_slow_query_numbers_fail_at_the_evidence_boundary(
         )
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "parse_time",
+        "compile_time",
+        "cop_time",
+        "process_time",
+        "wait_time",
+        "backoff_time",
+    ],
+)
+def test_extreme_slow_query_auxiliary_times_fail_at_the_evidence_boundary(
+    field: str,
+) -> None:
+    query, result, context, _ = slow_query_collection("tidb-8.5")
+    row = dict(result.rows[0])
+    row[field] = 10**1000
+
+    with pytest.raises(EvidenceBuildError, match="out of range"):
+        build_managed_evidence(
+            query=query,
+            result=replace(result, rows=(row,)),
+            context=context,
+        )
+
+
 def test_slow_query_uses_nearest_rank_p95_and_half_up_integer_averages() -> None:
     query, result, context, _ = slow_query_collection("tidb-8.5")
     rows = []

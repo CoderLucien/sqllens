@@ -14,6 +14,7 @@ from enum import StrEnum
 from typing import cast
 
 from sqllens_api.evidence_connector.canonical import (
+    MAX_SAFE_INTEGER,
     JsonValue,
     canonical_sha256,
     strict_json_bytes,
@@ -582,13 +583,14 @@ def _require_positive_integer(value: object, label: str) -> int:
 
 
 def _require_nonnegative_number(value: object, label: str) -> int | float:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value < 0
-    ):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise EvidenceBuildError(f"{label} must be a non-negative finite number")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise EvidenceBuildError(f"{label} must be a non-negative finite number")
+    if value < 0:
+        raise EvidenceBuildError(f"{label} must be a non-negative finite number")
+    if value > MAX_SAFE_INTEGER:
+        raise EvidenceBuildError(f"{label} is out of range")
     return value
 
 
