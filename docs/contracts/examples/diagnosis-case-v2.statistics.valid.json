@@ -17,6 +17,12 @@
     "businessEvidenceIds": ["ev_0000000000000014"]
   },
   "decision": {
+    "templateId": "decision.statistics_estimation",
+    "templateRevision": "v1",
+    "params": {
+      "estimatedRows": 120,
+      "actualRows": 180000
+    },
     "titleZh": "统计信息偏差导致 Join 顺序失真，先验证统计而不是直接加索引",
     "priority": "P1",
     "conclusionZh": "执行计划对核心表估算 120 行，实际运行证据为 18 万行；估算偏差足以改变 Join 顺序，应先在隔离环境刷新并验证统计。",
@@ -156,11 +162,25 @@
     "status": "degraded",
     "code": "MODEL_TIMEOUT",
     "messageZh": "外部模型超时，本报告使用确定性规则生成；事实、动作和证据不受影响。",
+    "invocation": {
+      "providerRevision": "openai-compatible/v1",
+      "modelRevision": "gpt-5.6-sol",
+      "promptRevision": "evidence-bound-synthesis/v1",
+      "payloadRevision": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "redactionRevision": "evidence-redaction/v2"
+    },
     "claims": []
   },
   "actions": [
     {
       "actionId": "act_0000000000000011",
+      "templateId": "action.statistics_refresh_isolated",
+      "templateRevision": "v1",
+      "params": {
+        "maxEstimateRatio": 10,
+        "maxDurationMinutes": 6
+      },
       "family": "statistics_refresh",
       "titleZh": "在隔离环境验证统计刷新后的计划",
       "rationaleZh": "估算偏差和统计时效性共同支持先验证统计，而不是直接增加索引。",
@@ -249,9 +269,11 @@
     "parser": "sqlglot/mysql@30.17.0",
     "policy": "diagnosis-policy/v2",
     "redaction": "evidence-redaction/v2",
-    "provider": null,
-    "model": null,
-    "prompt": null
+    "provider": "openai-compatible/v1",
+    "model": "gpt-5.6-sol",
+    "prompt": "evidence-bound-synthesis/v1",
+    "payload": "diagnosis-ai-payload/v1",
+    "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   },
   "createdAt": "2026-09-02T07:35:00Z",
   "updatedAt": "2026-09-02T07:35:01Z"

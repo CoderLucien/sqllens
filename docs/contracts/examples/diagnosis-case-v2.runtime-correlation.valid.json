@@ -17,6 +17,9 @@
     "businessEvidenceIds": ["ev_0000000000000026"]
   },
   "decision": {
+    "templateId": "decision.runtime_hotspot",
+    "templateRevision": "v1",
+    "params": {},
     "titleZh": "SQL 延迟与 TiKV 热点时间窗一致，优先处置热点而不是改写 SQL",
     "priority": "P0",
     "conclusionZh": "告警窗口内 SQL 计划和扫描量稳定，但目标 Region 的 TiKV 延迟与热点指标同步升高；当前更支持资源热点，而不是 SQL 结构退化。",
@@ -233,10 +236,24 @@
     "status": "applied",
     "code": null,
     "messageZh": null,
+    "invocation": {
+      "providerRevision": "openai-compatible/v1",
+      "modelRevision": "gpt-5.6-sol",
+      "promptRevision": "evidence-bound-synthesis/v1",
+      "payloadRevision": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "redactionRevision": "evidence-redaction/v2"
+    },
     "claims": [
       {
         "claimId": "claim_0000000000000021",
         "audience": "all",
+        "templateId": "ai.resource_hotspot_priority",
+        "templateRevision": "v1",
+        "params": {
+          "preferredActionFamily": "resource_investigation",
+          "causality": "correlated_not_proven"
+        },
         "textZh": "SQL、Prometheus 和 TEM 的时间窗关系支持优先调查 TiKV 热点，但相关性不等于已证明物理因果。",
         "evidenceIds": ["ev_0000000000000021", "ev_0000000000000023", "ev_0000000000000025"],
         "ruleIds": ["RUNTIME_HOTSPOT_001", "SQL_REGRESSION_001"]
@@ -246,6 +263,11 @@
   "actions": [
     {
       "actionId": "act_0000000000000021",
+      "templateId": "action.resource_hotspot_runbook",
+      "templateRevision": "v1",
+      "params": {
+        "observationMinutes": 15
+      },
       "family": "resource_investigation",
       "titleZh": "由 SRE/DBA 先验证并缓解 TiKV 热点",
       "rationaleZh": "SQL 计划稳定，资源指标和告警在相同时间窗异常，应先验证热点。",
@@ -334,9 +356,11 @@
     "parser": "sqlglot/mysql@30.17.0",
     "policy": "diagnosis-policy/v2",
     "redaction": "evidence-redaction/v2",
-    "provider": "openai-compatible",
+    "provider": "openai-compatible/v1",
     "model": "gpt-5.6-sol",
-    "prompt": "evidence-bound-synthesis/v1"
+    "prompt": "evidence-bound-synthesis/v1",
+    "payload": "diagnosis-ai-payload/v1",
+    "payloadDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
   "createdAt": "2026-09-02T06:16:00Z",
   "updatedAt": "2026-09-02T06:16:02Z"

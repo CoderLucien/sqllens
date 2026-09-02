@@ -57,6 +57,68 @@
     "identityDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
     "errorCode": null
   },
+  "transitionEvents": [
+    {
+      "eventId": "sevt_0000000000000091",
+      "sourceRevision": 1,
+      "type": "source_state",
+      "operation": "registered",
+      "fromState": null,
+      "toState": "draft",
+      "credentialRevision": null,
+      "actor": { "kind": "user", "id": "owner", "displayName": "本机 Owner" },
+      "createdAt": "2026-09-02T09:00:00Z",
+      "reason": "登记内网 Prometheus"
+    },
+    {
+      "eventId": "sevt_0000000000000092",
+      "sourceRevision": 2,
+      "type": "source_state",
+      "operation": "enabled",
+      "fromState": "draft",
+      "toState": "enabled",
+      "credentialRevision": null,
+      "actor": { "kind": "user", "id": "owner", "displayName": "本机 Owner" },
+      "createdAt": "2026-09-02T09:10:00Z",
+      "reason": "启用已验证的数据源"
+    },
+    {
+      "eventId": "sevt_0000000000000093",
+      "sourceRevision": 3,
+      "type": "source_state",
+      "operation": "edited",
+      "fromState": "enabled",
+      "toState": "enabled",
+      "credentialRevision": null,
+      "actor": { "kind": "user", "id": "owner", "displayName": "本机 Owner" },
+      "createdAt": "2026-09-02T09:30:00Z",
+      "reason": "更新负责人和使用说明"
+    },
+    {
+      "eventId": "sevt_0000000000000094",
+      "sourceRevision": 4,
+      "type": "source_state",
+      "operation": "edited",
+      "fromState": "enabled",
+      "toState": "enabled",
+      "credentialRevision": null,
+      "actor": { "kind": "user", "id": "owner", "displayName": "本机 Owner" },
+      "createdAt": "2026-09-02T09:45:00Z",
+      "reason": "更新查询预算"
+    },
+    {
+      "eventId": "sevt_0000000000000095",
+      "sourceRevision": 5,
+      "type": "source_state",
+      "operation": "delete_started",
+      "fromState": "enabled",
+      "toState": "draining",
+      "credentialRevision": null,
+      "actor": { "kind": "user", "id": "owner", "displayName": "本机 Owner" },
+      "createdAt": "2026-09-02T10:00:00Z",
+      "reason": "停止新任务并等待活动租约排空"
+    }
+  ],
   "createdAt": "2026-09-02T09:00:00Z",
   "updatedAt": "2026-09-02T10:00:00Z"
 }

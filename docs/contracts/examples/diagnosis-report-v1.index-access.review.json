@@ -81,15 +81,25 @@
     "ruleIds": ["IDX_ACCESS_001"],
     "claimIds": ["claim_0000000000000001"],
     "sourceRevisions": ["src_0000000000000001@3"],
-    "pinnedRevisions": [
-      "pingkaidb-7.1-rules/v1",
-      "pingkaidb-sql-tuning@2026-09-02",
-      "sqlglot/mysql@30.17.0",
-      "diagnosis-policy/v2",
-      "evidence-redaction/v2",
-      "openai-compatible",
-      "gpt-5.6-sol",
-      "evidence-bound-synthesis/v1"
-    ]
+    "aiInvocation": {
+      "providerRevision": "openai-compatible/v1",
+      "modelRevision": "gpt-5.6-sol",
+      "promptRevision": "evidence-bound-synthesis/v1",
+      "payloadRevision": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "redactionRevision": "evidence-redaction/v2"
+    },
+    "pinnedRevisions": {
+      "rulePack": "pingkaidb-7.1-rules/v1",
+      "documentPack": "pingkaidb-sql-tuning@2026-09-02",
+      "parser": "sqlglot/mysql@30.17.0",
+      "policy": "diagnosis-policy/v2",
+      "redaction": "evidence-redaction/v2",
+      "provider": "openai-compatible/v1",
+      "model": "gpt-5.6-sol",
+      "prompt": "evidence-bound-synthesis/v1",
+      "payload": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
   }
 }

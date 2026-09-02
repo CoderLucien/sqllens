@@ -290,9 +290,10 @@ Large or sensitive payloads remain behind a storage reference.
 
 Raw evidence, derived facts, rule findings, AI contribution, actions,
 review/feedback, workflow/outcome transition events, and validation results are
-separate typed collections. Every reference resolves within the Case. Provider,
-model, prompt, rule pack, parser, redaction, source, and document revisions are
-pinned.
+separate typed collections. Every reference resolves within the Case. AI claims
+and actions are deterministic renderings of server-owned templates with typed
+parameters. Provider, model, prompt, redacted-payload, payload digest, rule pack,
+parser, redaction, source, and document revisions are pinned with field labels.
 
 ### DiagnosisReport/v1
 

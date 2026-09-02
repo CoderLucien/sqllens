@@ -75,6 +75,44 @@
     "identityDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "errorCode": null
   },
+  "transitionEvents": [
+    {
+      "eventId": "sevt_0000000000000001",
+      "sourceRevision": 1,
+      "type": "source_state",
+      "operation": "registered",
+      "fromState": null,
+      "toState": "draft",
+      "credentialRevision": 1,
+      "actor": { "kind": "user", "id": "owner", "displayName": "本机 Owner" },
+      "createdAt": "2026-09-02T09:00:00Z",
+      "reason": "登记只读数据库连接"
+    },
+    {
+      "eventId": "sevt_0000000000000002",
+      "sourceRevision": 2,
+      "type": "source_state",
+      "operation": "verified",
+      "fromState": "draft",
+      "toState": "draft",
+      "credentialRevision": 2,
+      "actor": { "kind": "system", "id": "source-verifier", "displayName": "连接校验器" },
+      "createdAt": "2026-09-02T09:15:00Z",
+      "reason": "版本、身份和只读能力校验通过"
+    },
+    {
+      "eventId": "sevt_0000000000000003",
+      "sourceRevision": 3,
+      "type": "source_state",
+      "operation": "enabled",
+      "fromState": "draft",
+      "toState": "enabled",
+      "credentialRevision": 2,
+      "actor": { "kind": "user", "id": "owner", "displayName": "本机 Owner" },
+      "createdAt": "2026-09-02T09:20:00Z",
+      "reason": "启用已验证的数据源"
+    }
+  ],
   "createdAt": "2026-09-02T09:00:00Z",
   "updatedAt": "2026-09-02T09:20:00Z"
 }

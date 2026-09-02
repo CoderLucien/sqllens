@@ -75,12 +75,25 @@
     "ruleIds": ["STATS_ESTIMATION_001"],
     "claimIds": [],
     "sourceRevisions": ["src_0000000000000011@2"],
-    "pinnedRevisions": [
-      "tidb-8.5-rules/v1",
-      "tidb-sql-tuning@2026-09-02",
-      "sqlglot/mysql@30.17.0",
-      "diagnosis-policy/v2",
-      "evidence-redaction/v2"
-    ]
+    "aiInvocation": {
+      "providerRevision": "openai-compatible/v1",
+      "modelRevision": "gpt-5.6-sol",
+      "promptRevision": "evidence-bound-synthesis/v1",
+      "payloadRevision": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "redactionRevision": "evidence-redaction/v2"
+    },
+    "pinnedRevisions": {
+      "rulePack": "tidb-8.5-rules/v1",
+      "documentPack": "tidb-sql-tuning@2026-09-02",
+      "parser": "sqlglot/mysql@30.17.0",
+      "policy": "diagnosis-policy/v2",
+      "redaction": "evidence-redaction/v2",
+      "provider": "openai-compatible/v1",
+      "model": "gpt-5.6-sol",
+      "prompt": "evidence-bound-synthesis/v1",
+      "payload": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
   }
 }

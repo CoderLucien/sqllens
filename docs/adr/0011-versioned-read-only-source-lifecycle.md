@@ -51,9 +51,12 @@ The lifecycle transitions are:
 - Source `enabled/disabled -> draining -> tombstoned` while its credential moves
   `active -> retiring -> tombstoned` for delete.
 
-Each transition uses optimistic revision checks and is idempotent. Crash
-recovery resumes the recorded pending operation; it never guesses whether a
-secret was retired.
+Each transition uses optimistic revision checks and is idempotent. Every Source
+revision appends a typed, chronological state event; prior events are immutable.
+Revision and credentialRevision are monotonic, and the prior/proposed validator
+rejects old-event rewrites, skipped revisions, lease growth while draining, and
+completion inconsistent with the pending operation. Crash recovery resumes the
+recorded pending operation; it never guesses whether a secret was retired.
 
 Every connector supplies an in-product acquisition guide:
 

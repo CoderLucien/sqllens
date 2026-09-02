@@ -17,6 +17,13 @@
     "businessEvidenceIds": ["ev_0000000000000004"]
   },
   "decision": {
+    "templateId": "decision.index_scan_priority",
+    "templateRevision": "v1",
+    "params": {
+      "windowMinutes": 10,
+      "callCount": 842,
+      "averageScanRowsTenThousands": 126
+    },
     "titleZh": "订单查询存在高频全表扫描，优先验证复合索引候选",
     "priority": "P1",
     "conclusionZh": "该 SQL 是当前 10 分钟窗口的主要可行动瓶颈：842 次调用平均扫描 126 万行，普通计划为全表扫描，建议先在隔离环境验证索引候选。",
@@ -217,10 +224,24 @@
     "status": "applied",
     "code": null,
     "messageZh": null,
+    "invocation": {
+      "providerRevision": "openai-compatible/v1",
+      "modelRevision": "gpt-5.6-sol",
+      "promptRevision": "evidence-bound-synthesis/v1",
+      "payloadRevision": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "redactionRevision": "evidence-redaction/v2"
+    },
     "claims": [
       {
         "claimId": "claim_0000000000000001",
         "audience": "all",
+        "templateId": "ai.index_candidate_priority",
+        "templateRevision": "v1",
+        "params": {
+          "preferredActionFamily": "index_candidate",
+          "deprioritizedActionFamily": "resource_investigation"
+        },
         "textZh": "该 SQL 是当前窗口的主要可行动瓶颈；应先在隔离环境验证复合索引候选，而不是调整集群资源。",
         "evidenceIds": [
           "ev_0000000000000001",
@@ -234,6 +255,12 @@
   "actions": [
     {
       "actionId": "act_0000000000000001",
+      "templateId": "action.index_candidate_isolated",
+      "templateRevision": "v1",
+      "params": {
+        "minScanReductionPct": 90,
+        "maxP95Ms": 500
+      },
       "family": "index_candidate",
       "titleZh": "在隔离环境验证复合索引候选",
       "rationaleZh": "现有计划为全表扫描，过滤列组合没有匹配的访问路径。",
@@ -321,9 +348,11 @@
     "parser": "sqlglot/mysql@30.17.0",
     "policy": "diagnosis-policy/v2",
     "redaction": "evidence-redaction/v2",
-    "provider": "openai-compatible",
+    "provider": "openai-compatible/v1",
     "model": "gpt-5.6-sol",
-    "prompt": "evidence-bound-synthesis/v1"
+    "prompt": "evidence-bound-synthesis/v1",
+    "payload": "diagnosis-ai-payload/v1",
+    "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   },
   "createdAt": "2026-09-02T08:05:00Z",
   "updatedAt": "2026-09-02T08:05:02Z"

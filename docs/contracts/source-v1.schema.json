@@ -8,7 +8,7 @@
     "schemaVersion", "sourceId", "revision", "type", "name", "state",
     "product", "version", "endpoint", "auth", "credentialLifecycle",
     "associatedSourceIds", "allowedSchemas", "capabilities", "budgets",
-    "owner", "verification", "createdAt", "updatedAt"
+    "owner", "verification", "transitionEvents", "createdAt", "updatedAt"
   ],
   "properties": {
     "schemaVersion": { "const": "source/v1" },
@@ -99,6 +99,10 @@
         "errorCode": { "type": ["string", "null"], "maxLength": 128 }
       }
     },
+    "transitionEvents": {
+      "type": "array", "minItems": 1, "maxItems": 256,
+      "items": { "$ref": "#/$defs/sourceTransitionEvent" }
+    },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" }
   },
@@ -144,6 +148,91 @@
       }
     },
     {
+      "if": { "properties": { "product": { "const": "tidb" } }, "required": ["product"] },
+      "then": {
+        "properties": {
+          "type": { "const": "tidb" },
+          "version": { "properties": { "family": { "enum": ["tidb-8.5", "unknown"] } } }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "state": { "const": "tombstoned" } }, "required": ["state"] },
+            "then": {
+              "properties": {
+                "auth": { "properties": { "kind": { "const": "none" } } }
+              }
+            },
+            "else": {
+              "properties": {
+                "auth": { "properties": { "kind": { "const": "password" } } }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "product": { "const": "pingkaidb" } }, "required": ["product"] },
+      "then": {
+        "properties": {
+          "type": { "const": "tidb" },
+          "version": { "properties": { "family": { "enum": ["pingkaidb-7.1", "unknown"] } } }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "state": { "const": "tombstoned" } }, "required": ["state"] },
+            "then": {
+              "properties": {
+                "auth": { "properties": { "kind": { "const": "none" } } }
+              }
+            },
+            "else": {
+              "properties": {
+                "auth": { "properties": { "kind": { "const": "password" } } }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "product": { "const": "prometheus" } }, "required": ["product"] },
+      "then": {
+        "properties": {
+          "type": { "const": "prometheus" },
+          "version": { "properties": { "family": { "enum": ["prometheus", "unknown"] } } },
+          "auth": { "properties": { "kind": { "enum": ["none", "basic", "bearer", "mtls"] } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "product": { "const": "tem" } }, "required": ["product"] },
+      "then": {
+        "properties": {
+          "type": { "const": "tem" },
+          "version": { "properties": { "family": { "enum": ["tem", "unknown"] } } },
+          "auth": { "properties": { "kind": { "enum": ["api_key", "bearer", "mtls", "none"] } } }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "state": { "const": "tombstoned" } }, "required": ["state"] },
+            "then": { "properties": { "auth": { "properties": { "kind": { "const": "none" } } } } },
+            "else": { "properties": { "auth": { "properties": { "kind": { "enum": ["api_key", "bearer", "mtls"] } } } } }
+          }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "product": { "const": "alertmanager" } }, "required": ["product"] },
+      "then": {
+        "properties": {
+          "type": { "const": "alertmanager" },
+          "version": { "properties": { "family": { "enum": ["alertmanager", "unknown"] } } },
+          "auth": { "properties": { "kind": { "enum": ["none", "basic", "bearer", "mtls"] } } }
+        }
+      }
+    },
+    {
       "if": { "properties": { "auth": { "properties": { "kind": { "const": "none" } }, "required": ["kind"] } }, "required": ["auth"] },
       "then": {
         "properties": {
@@ -178,6 +267,14 @@
       "then": {
         "properties": {
           "credentialLifecycle": { "properties": { "state": { "enum": ["rotating", "retiring"] }, "pendingOperation": { "enum": ["rotate", "disable", "delete"] } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "state": { "enum": ["draft", "disabled", "verification_failed"] } }, "required": ["state"] },
+      "then": {
+        "properties": {
+          "credentialLifecycle": { "properties": { "activeLeaseCount": { "const": 0 } } }
         }
       }
     },
@@ -235,6 +332,31 @@
     }
   ],
   "$defs": {
+    "actor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "displayName"],
+      "properties": {
+        "kind": { "enum": ["system", "user"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "sourceTransitionEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventId", "sourceRevision", "type", "operation", "fromState", "toState", "credentialRevision", "actor", "createdAt", "reason"],
+      "properties": {
+        "eventId": { "type": "string", "pattern": "^sevt_[a-z0-9]{16,64}$" },
+        "sourceRevision": { "type": "integer", "minimum": 1 },
+        "type": { "const": "source_state" },
+        "operation": { "enum": ["registered", "verified", "enabled", "edited", "rotation_started", "rotation_completed", "disable_started", "disabled", "delete_started", "tombstoned", "verification_failed"] },
+        "fromState": { "enum": [null, "draft", "enabled", "disabled", "draining", "verification_failed", "tombstoned"] },
+        "toState": { "enum": ["draft", "enabled", "disabled", "draining", "verification_failed", "tombstoned"] },
+        "credentialRevision": { "type": ["integer", "null"], "minimum": 1 },
+        "actor": { "$ref": "#/$defs/actor" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
     "capability": {
       "type": "object", "additionalProperties": false,
       "required": ["name", "status", "required", "detail"],

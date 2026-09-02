@@ -5,13 +5,14 @@
 The vNext product baseline adds:
 
 - `source-v1.schema.json`: revisioned database/Prometheus/TEM/Alertmanager
-  metadata and capability state; credentials are references, never values.
+  metadata, exact product/version/auth matrix, and append-only lifecycle audit;
+  credentials are references, never values.
 - `evidence-v2.schema.json`: standalone immutable evidence envelope with Case
   and Source revision bindings, payload digest, freshness, redaction revision,
   collector/query revision, and collection budgets.
 - `diagnosis-case-v2.schema.json`: separates evidence, facts, rule findings,
-  validated AI claims, actions, uncertainty, transition audit, review/feedback,
-  and pinned revisions.
+  server-template-rendered AI claims/actions, uncertainty, transition audit,
+  review/feedback, and labeled provider/model/prompt/payload/redaction pins.
 - `diagnosis-report-v1.schema.json`: Chinese audience projection backed by one
   immutable Case revision.
 
@@ -42,15 +43,30 @@ DiagnosisCase/v2 records both workflow and business-outcome transition events.
 A non-pending outcome requires `workflowState=ready`, a same-revision outcome
 event, and linked review/feedback/action/evidence prerequisites. Effect claims
 require an ordered approval -> implementation -> result-evidence -> terminal
-feedback chain. `risk_accepted` and `evidence_insufficient` have separate,
-explicit audit records and cannot be inferred from status text.
+feedback -> outcome-event chain. The global event replay requires the workflow
+to be ready and rejects records created after the event. Prior/proposed Case
+validation keeps old collections append-only and freezes the ready diagnosis.
+`risk_accepted` and `evidence_insufficient` have separate, explicit audit
+records and cannot be inferred from status text.
 
 Source/v1 lifecycle validation treats a Source revision and credential revision
 as separate immutable identities. Admission pins both and acquires a lease.
 Rotation, disable, and delete stop new admission and enter `draining`; normal
 retirement waits for zero leases. Delete removes the usable credential and
-retains only a non-queryable metadata tombstone. Pending operations outside
-`draining`, mismatched operation states, and tombstones with leases fail.
+retains only a non-queryable metadata tombstone. Every Source revision appends a
+chronological transition event. Prior/proposed validation rejects audit rewrite,
+revision or credentialRevision rollback, lease growth while draining, and a
+drain completion that does not match its pending operation.
+
+AI text, the customer-facing decision, and customer actions are not free-form
+persistence fields. The model may select only an allowlisted template and typed
+parameters. The validator re-renders every Chinese decision/claim/action and
+rejects any mismatch. An applied or degraded invocation carries labeled
+provider, model, prompt, redacted-payload, payload digest, and redaction
+revisions; reports project those labels exactly.
+
+Standalone Evidence fixtures run the same observation/collection time, Source
+binding, digest, truncation, and budget semantics as Evidence embedded in a Case.
 
 These fixtures are product-review baselines, not claims that the current
 runtime can generate them.
