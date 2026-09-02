@@ -1980,11 +1980,20 @@ def validate_transition_events(case: dict[str, Any]) -> None:
             raise ValueError("ready Case uses evidence collected after its revision")
 
 
-def validate_outcome_semantics(case: dict[str, Any]) -> None:
-    validate_outcome_policy(case, parse_time, resolve_authorization_audit)
+def validate_outcome_semantics(
+    case: dict[str, Any], authorization_not_before: datetime | None = None
+) -> None:
+    validate_outcome_policy(
+        case,
+        parse_time,
+        resolve_authorization_audit,
+        authorization_not_before,
+    )
 
 
-def validate_case_references(case: dict[str, Any]) -> None:
+def validate_case_references(
+    case: dict[str, Any], authorization_not_before: datetime | None = None
+) -> None:
     reject_non_finite_json(case)
     validate_policy_pins(case)
     source_ids = require_unique(case["sourceSnapshots"], "sourceId")
@@ -2216,7 +2225,7 @@ def validate_case_references(case: dict[str, Any]) -> None:
     if not source_ids and case["inputMode"] == "managed_source":
         raise ValueError("managed-source Case requires a Source snapshot")
     validate_transition_events(case)
-    validate_outcome_semantics(case)
+    validate_outcome_semantics(case, authorization_not_before)
 
 
 def require_append_only(
@@ -2302,7 +2311,7 @@ def validate_case_transition(prior: dict[str, Any], proposed: dict[str, Any]) ->
                 )
 
     validate_case_references(prior)
-    validate_case_references(proposed)
+    validate_case_references(proposed, prior_updated)
 
 
 def build_evidence_insufficient_cases(

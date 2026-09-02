@@ -23,7 +23,7 @@ ACTION_RESULT_POLICY = {
         {
             "metricCode": "p95_latency_ms",
             "unit": "ms",
-            "predicate": "observed_at_most",
+            "predicate": "observed_below",
             "parameter": "maxP95Ms",
         },
         {
@@ -37,7 +37,7 @@ ACTION_RESULT_POLICY = {
         {
             "metricCode": "estimation_ratio_basis_points",
             "unit": "basis_points",
-            "predicate": "ratio_at_most",
+            "predicate": "ratio_below",
             "parameter": "maxEstimateRatio",
         },
         {
@@ -129,10 +129,14 @@ def _measurement_passes(
         )
     if predicate == "observed_at_most":
         return baseline >= 0 and observed >= 0 and observed <= threshold
+    if predicate == "observed_below":
+        return baseline >= 0 and observed >= 0 and observed < threshold
     if predicate == "regression_at_most":
         return baseline == 0 and 0 <= observed <= threshold
     if predicate == "ratio_at_most":
         return baseline > 0 and 0 < observed <= threshold * 10_000
+    if predicate == "ratio_below":
+        return baseline > 0 and 0 < observed < threshold * 10_000
     if predicate == "observed_zero":
         return baseline >= 0 and observed == 0
     if predicate == "at_or_below_baseline":
@@ -146,6 +150,7 @@ def _require_human_approval(
     case: dict[str, Any],
     parse_time: Callable[[str], datetime],
     resolve_authorization_audit: Callable[[str], dict[str, Any] | None],
+    authorization_not_before: datetime | None = None,
     expected_decision: str = "approved",
 ) -> None:
     if review["decision"] != expected_decision or review["actionIds"] != [
@@ -177,7 +182,16 @@ def _require_human_approval(
         raise ValueError("authorization audit does not bind the terminal approval")
     if authorization.get("role") not in {"owner", "dba", "sre"}:
         raise ValueError("authorization audit role is not permitted")
-    if parse_time(authorization["capturedAt"]) > parse_time(review["createdAt"]):
+    captured_at = parse_time(authorization["capturedAt"])
+    if captured_at < parse_time(case["createdAt"]):
+        raise ValueError(
+            "approval authorization snapshot was captured before Case creation"
+        )
+    if authorization_not_before is not None and captured_at <= authorization_not_before:
+        raise ValueError(
+            "approval authorization snapshot was captured at or before the prior Case revision"
+        )
+    if captured_at > parse_time(review["createdAt"]):
         raise ValueError("approval authorization snapshot was captured after review")
 
 
@@ -195,6 +209,7 @@ def validate_outcome_policy(
     case: dict[str, Any],
     parse_time: Callable[[str], datetime],
     resolve_authorization_audit: Callable[[str], dict[str, Any] | None] | None = None,
+    authorization_not_before: datetime | None = None,
 ) -> None:
     outcome = case["outcome"]
     if outcome == "pending":
@@ -264,6 +279,7 @@ def validate_outcome_policy(
             case,
             parse_time,
             _required_authorization_resolver(resolve_authorization_audit),
+            authorization_not_before,
             expected_decision="risk_accepted",
         )
         if (
@@ -297,6 +313,7 @@ def validate_outcome_policy(
         case,
         parse_time,
         _required_authorization_resolver(resolve_authorization_audit),
+        authorization_not_before,
     )
     if (
         implementation["kind"] != "implemented"

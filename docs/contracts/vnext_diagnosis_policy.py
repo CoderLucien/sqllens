@@ -434,7 +434,21 @@ def validate_gap_fact(
     for role, dependency in role_spec.items():
         supplied = provided_by_role[role]
         evidence_id = supplied["evidenceId"]
+        matching_candidates = [
+            evidence
+            for evidence in evidence_by_id.values()
+            if evidence["kind"] == dependency["kind"]
+        ]
+        eligible_candidate_ids = {
+            evidence["evidenceId"]
+            for evidence in matching_candidates
+            if not evidence_eligibility_reasons(evidence)
+        }
         if evidence_id is None:
+            if matching_candidates:
+                raise ValueError(
+                    "evidence-gap Fact ignores a matching Evidence candidate"
+                )
             reasons = ["MISSING_EVIDENCE"]
         else:
             if evidence_id in seen_evidence_ids:
@@ -445,6 +459,10 @@ def validate_gap_fact(
             evidence = evidence_by_id[evidence_id]
             if evidence["kind"] != dependency["kind"]:
                 raise ValueError("evidence-gap Fact role has the wrong Evidence kind")
+            if eligible_candidate_ids and evidence_id not in eligible_candidate_ids:
+                raise ValueError(
+                    "evidence-gap Fact ignores an eligible matching Evidence candidate"
+                )
             reasons = evidence_eligibility_reasons(evidence)
         expected.append(
             {

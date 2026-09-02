@@ -66,14 +66,19 @@ from another tuple cannot collectively satisfy an outcome. Human approval is a
 user actor bound through an opaque ID to a trusted, server-owned authorization
 audit ledger; the public Case cannot manufacture or rehash this attestation.
 The audit record binds the exact canonical Action snapshot as well as the Case,
-revision, review, principal, permission, and policy revision.
+revision, review, principal, permission, and policy revision. Its capture time
+must fall between Case creation and the review; when a terminal revision is
+validated against its prior revision, the capture must also be strictly later
+than the prior revision's `updatedAt`, so an old role snapshot cannot be replayed.
 Each Action template owns an ordered set of required metric codes, units,
 thresholds, and comparison predicates. The outcome policy recomputes every
 predicate from numeric result Evidence and rejects a missing measurement; no
 persisted `passed` Boolean is authoritative. `validated_effective` requires
 every predicate to hold; `rolled_back` requires a failed predicate plus
 confirmed rollback for that same Action. Result Evidence must itself pass the
-Evidence eligibility policy. These comparisons use
+Evidence eligibility policy. Predicate names freeze boundary semantics:
+`*_below` is strict and rejects equality, while `*_at_most` is inclusive. These
+comparisons use
 `effect-metric-comparison/v2`. The global event replay requires the
 workflow to be ready, rejects records created after the event, and requires all
 evidence used by the frozen diagnosis to have been collected no later than the
@@ -147,7 +152,10 @@ eligible required roles, and uncertainty text is a server-owned code/template
 projection rather than caller-authored prose. Incomplete Evidence is retained
 as an explicit typed gap Fact with per-role eligibility and reasons. It may
 produce an actionless `evidence_insufficient` decision and terminal outcome,
-but it cannot support a ready rule hit or Action.
+but it cannot support a ready rule hit or Action. Role selection is also
+server-owned: a role cannot be marked `MISSING_EVIDENCE` while a matching Case
+Evidence candidate exists, and an ineligible candidate cannot be selected when
+an eligible candidate for that role is available.
 
 These fixtures are product-review baselines, not claims that the current
 runtime can generate them.

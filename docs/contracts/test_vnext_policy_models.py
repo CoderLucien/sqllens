@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 CONTRACTS = Path(__file__).parent
 sys.path.insert(0, str(CONTRACTS))
@@ -19,9 +20,14 @@ from vnext_diagnosis_policy import (
     derive_completeness,
     derive_evidence_level,
     expected_rule_findings,
+    validate_gap_fact,
     validate_policy_pins,
 )
-from vnext_outcome_policy import ACTION_RESULT_POLICY, validate_outcome_policy
+from vnext_outcome_policy import (
+    ACTION_RESULT_POLICY,
+    _measurement_passes,
+    validate_outcome_policy,
+)
 from vnext_source_ledger import replay_source_history
 
 
@@ -177,6 +183,28 @@ class DiagnosisPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "role projection"):
             contracts.validate_case_references(pending)
 
+    def test_evidence_gap_cannot_ignore_a_matching_case_candidate(self) -> None:
+        pending, _ = contracts.build_evidence_insufficient_cases(self.case)
+        fact = pending["facts"][0]
+        plan_role = next(
+            item
+            for item in fact["params"]["roleAssessments"]
+            if item["role"] == "planEvidenceId"
+        )
+        plan_evidence_id = plan_role["evidenceId"]
+        plan_role.update(
+            {
+                "evidenceId": None,
+                "eligible": False,
+                "reasonCodes": ["MISSING_EVIDENCE"],
+            }
+        )
+        fact["evidenceIds"].remove(plan_evidence_id)
+        evidence = {item["evidenceId"]: item for item in pending["evidence"]}
+
+        with self.assertRaisesRegex(ValueError, "matching Evidence candidate"):
+            validate_gap_fact(fact, evidence)
+
 
 class OutcomePolicyTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -221,6 +249,33 @@ class OutcomePolicyTests(unittest.TestCase):
                 contracts.parse_time,
                 contracts.resolve_authorization_audit,
             )
+
+    def test_strict_below_action_targets_reject_equal_measurements(self) -> None:
+        index_policy = ACTION_RESULT_POLICY[("action.index_candidate_isolated", "v1")]
+        statistics_policy = ACTION_RESULT_POLICY[
+            ("action.statistics_refresh_isolated", "v1")
+        ]
+        action = {
+            "params": {
+                "maxP95Ms": 500,
+                "maxEstimateRatio": 10,
+            }
+        }
+
+        self.assertFalse(
+            _measurement_passes(
+                {"baselineValue": 2_800, "observedValue": 500},
+                index_policy[1],
+                action,
+            )
+        )
+        self.assertFalse(
+            _measurement_passes(
+                {"baselineValue": 200_000, "observedValue": 100_000},
+                statistics_policy[0],
+                action,
+            )
+        )
 
     def test_rejects_incomplete_action_measurement_set(self) -> None:
         case = copy.deepcopy(self.case)
@@ -314,6 +369,33 @@ class OutcomePolicyTests(unittest.TestCase):
                 contracts.parse_time,
                 contracts.resolve_authorization_audit,
             )
+
+    def test_authorization_audit_cannot_predate_case_creation(self) -> None:
+        authorization = contracts.resolve_authorization_audit("authz_0000000000000001")
+        assert authorization is not None
+        authorization["capturedAt"] = "2020-01-01T00:00:00Z"
+
+        with self.assertRaisesRegex(ValueError, "before Case creation"):
+            validate_outcome_policy(
+                self.case,
+                contracts.parse_time,
+                lambda _record_id: copy.deepcopy(authorization),
+            )
+
+    def test_authorization_audit_cannot_predate_terminal_revision(self) -> None:
+        prior = contracts.load(contracts.EXAMPLES / "diagnosis-case-v2.valid.json")
+        authorization = contracts.resolve_authorization_audit("authz_0000000000000001")
+        assert authorization is not None
+        authorization["capturedAt"] = prior["updatedAt"]
+
+        with (
+            patch.dict(
+                contracts.SERVER_AUTHORIZATION_AUDIT_FIXTURES,
+                {authorization["auditRecordId"]: authorization},
+            ),
+            self.assertRaisesRegex(ValueError, "prior Case revision"),
+        ):
+            contracts.validate_case_transition(prior, self.case)
 
     def test_rejects_terminal_approval_without_trusted_audit_resolver(self) -> None:
         with self.assertRaisesRegex(ValueError, "trusted authorization audit resolver"):

@@ -75,7 +75,10 @@ Evidence eligibility and diagnostic publication are separate. A missing,
 stale, truncated, or zero-coverage role remains representable as a typed gap
 Fact with deterministic per-role reasons, derived completeness, and an
 actionless `evidence_insufficient` decision. Such a Fact cannot be converted
-into a rule hit, AI claim, or Action.
+into a rule hit, AI claim, or Action. The service, not the Case caller, selects
+role candidates: `MISSING_EVIDENCE` is legal only when the Case contains no
+matching Evidence candidate, and a role cannot select an ineligible candidate
+when an eligible one exists.
 
 AI state is explicit. `applied` means a validated invocation contributed at
 least one claim. `degraded` means an invocation was attempted and failed and

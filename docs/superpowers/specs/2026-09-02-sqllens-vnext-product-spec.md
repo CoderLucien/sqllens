@@ -268,6 +268,9 @@ rendered from server-owned codes for missing or degraded roles.
 An incomplete role set remains a legal typed gap Fact. It renders a bounded,
 actionless `evidence_insufficient` decision with per-role reasons and derived
 level/completeness; it cannot support a ready rule hit, AI claim, or Action.
+The service selects role candidates: a matching Case Evidence candidate cannot
+be hidden behind `MISSING_EVIDENCE`, and an eligible candidate takes precedence
+over an ineligible one for the same role.
 
 Rules declare minimum evidence level, supported product/version range, required
 fields, incompatible conditions, confidence ceiling, recommended action
@@ -344,13 +347,16 @@ later than the ready event and Case revision `updatedAt`. The first
 Action/approval/implementation/result/terminal-feedback tuple; its legacy ID
 arrays are an exact projection and a later self-transition cannot backfill it.
 Approval is a user actor bound by an opaque audit ID to a trusted server-owned
-authorization ledger, including the exact canonical Action digest; all terminal
-tuple records belong to the current Case revision. Effect and rollback Evidence
-must pass eligibility. Each Action
+authorization ledger, including the exact canonical Action digest. The audit
+snapshot is no older than Case creation and, for a new terminal revision,
+strictly newer than the prior revision; all terminal tuple records belong to the
+current Case revision. Effect and rollback Evidence must pass eligibility. Each Action
 template owns a complete metric/unit/predicate set, and the service recomputes
 the outcome from numeric measurements rather than accepting a writable
 `passed` flag. `validated_effective` requires every predicate; `rolled_back`
-requires a failed predicate and confirmed rollback.
+requires a failed predicate and confirmed rollback. Strict `below` predicates
+reject equality; inclusive `at_most` predicates accept it, matching the approved
+Action copy exactly.
 Provider, model, prompt,
 redacted-payload, payload digest, rule pack, parser, redaction, source, and
 document revisions are pinned with field labels.

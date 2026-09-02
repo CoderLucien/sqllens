@@ -1107,6 +1107,42 @@ def main() -> None:
         "evidence-gap Fact self-asserts an ineligible role as eligible",
     )
 
+    invalid = copy.deepcopy(insufficient)
+    ignored_role = next(
+        item
+        for item in invalid["facts"][0]["params"]["roleAssessments"]
+        if item["role"] == "planEvidenceId"
+    )
+    ignored_id = ignored_role["evidenceId"]
+    ignored_role.update(
+        {
+            "evidenceId": None,
+            "eligible": False,
+            "reasonCodes": ["MISSING_EVIDENCE"],
+        }
+    )
+    invalid["facts"][0]["evidenceIds"].remove(ignored_id)
+    invalid["facts"][0].update(contracts.render_fact(invalid["facts"][0]))
+    invalid["decision"]["evidenceIds"] = [
+        *invalid["facts"][0]["evidenceIds"],
+        *invalid["subject"]["businessEvidenceIds"],
+    ]
+    invalid["decision"].update(
+        contracts.render_decision(
+            invalid["decision"],
+            {invalid["facts"][0]["factId"]: invalid["facts"][0]},
+        )
+    )
+    invalid["evidenceLevel"] = contracts.derive_evidence_level(
+        invalid["evidence"], set(invalid["facts"][0]["evidenceIds"])
+    )
+    invalid["evidenceCompleteness"] = 33
+    invalid["uncertainty"] = contracts.expected_uncertainty(invalid)
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "evidence-gap Fact marks a role missing while a matching eligible candidate exists",
+    )
+
     invalid = copy.deepcopy(terminal)
     effect = next(
         item
@@ -1133,6 +1169,23 @@ def main() -> None:
     expect_error(
         lambda: validate_case_references(invalid),
         "validated_effective cites an effect comparison that failed its threshold",
+    )
+
+    invalid = copy.deepcopy(terminal)
+    effect = next(
+        item
+        for item in invalid["evidence"]
+        if item["kind"] == "effect_metric_comparison"
+        and item["payload"]["typed"]["metricCode"] == "p95_latency_ms"
+    )
+    effect["payload"]["typed"]["observedValue"] = invalid["actions"][0]["params"][
+        "maxP95Ms"
+    ]
+    effect["payload"]["typedDigest"] = typed_digest(effect["payload"]["typed"])
+    effect["summaryZh"] = contracts.render_evidence_summary(effect)
+    expect_error(
+        lambda: validate_case_references(invalid),
+        "validated_effective treats equality as satisfying a strict-below Action target",
     )
 
     invalid = copy.deepcopy(terminal)
@@ -1199,6 +1252,37 @@ def main() -> None:
     expect_error(
         lambda: validate_case_references(invalid),
         "an approval cites an authorization record outside the server audit ledger",
+    )
+
+    stale_authorization = contracts.resolve_authorization_audit(
+        "authz_0000000000000001"
+    )
+    if stale_authorization is None:
+        raise AssertionError("authorization fixture is missing")
+    stale_authorization["capturedAt"] = "2020-01-01T00:00:00Z"
+    expect_error(
+        lambda: contracts.validate_outcome_policy(
+            terminal,
+            contracts.parse_time,
+            lambda _record_id: copy.deepcopy(stale_authorization),
+        ),
+        "trusted authorization audit predates Case creation",
+    )
+
+    prior_authorization = contracts.resolve_authorization_audit(
+        "authz_0000000000000001"
+    )
+    if prior_authorization is None:
+        raise AssertionError("authorization fixture is missing")
+    prior_authorization["capturedAt"] = case["updatedAt"]
+    expect_error(
+        lambda: contracts.validate_outcome_policy(
+            terminal,
+            contracts.parse_time,
+            lambda _record_id: copy.deepcopy(prior_authorization),
+            contracts.parse_time(case["updatedAt"]),
+        ),
+        "trusted authorization audit is replayed from the prior Case revision",
     )
 
     invalid = copy.deepcopy(terminal)
