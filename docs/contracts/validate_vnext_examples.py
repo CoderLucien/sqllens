@@ -33,21 +33,27 @@ from vnext_diagnosis_policy import (
 )
 from vnext_outcome_policy import validate_outcome_policy
 from vnext_source_audit import (
+    SOURCE_STATE_TRANSITIONS,
     SourceAuditResolver,
     build_fixture_source_audit_resolver,
     canonical_string_set,
     register_fixture_source_snapshot,
     register_fixture_source_state_history,
     source_verification_binding_digest,
+    validate_source_state_event_transition,
     validate_trusted_source_audit,
 )
-from vnext_source_ledger import replay_source_history
+from vnext_source_ledger import (
+    _replay_prevalidated_source_history,
+    replay_source_ledger_structure,
+)
 
 ROOT = Path(__file__).parent
 EXAMPLES = ROOT / "examples"
 FORMAT_CHECKER = FormatChecker()
 SCHEMA_NAMES = (
     "source-v1.schema.json",
+    "source-write-result-v1.schema.json",
     "evidence-v2.schema.json",
     "diagnosis-case-v2.schema.json",
     "diagnosis-report-v1.schema.json",
@@ -82,78 +88,6 @@ OUTCOME_TRANSITIONS = {
     "rolled_back": set(),
     "evidence_insufficient": set(),
     "risk_accepted": set(),
-}
-SOURCE_STATE_TRANSITIONS = {
-    "draft": {"draft", "enabled", "verification_failed", "draining"},
-    "enabled": {"enabled", "draining"},
-    "draining": {
-        "draining",
-        "enabled",
-        "disabled",
-        "verification_failed",
-        "tombstoned",
-    },
-    "disabled": {"disabled", "enabled", "draining", "verification_failed"},
-    "verification_failed": {"verification_failed", "draft", "draining"},
-    "tombstoned": {"tombstoned"},
-}
-SOURCE_AUDIT_TRANSITIONS = {
-    "registered": {(None, "draft")},
-    "verified": {
-        ("draft", "draft"),
-        ("enabled", "enabled"),
-        ("disabled", "disabled"),
-        ("verification_failed", "draft"),
-    },
-    "enabled": {("draft", "enabled"), ("disabled", "enabled")},
-    "edited": {
-        ("draft", "draft"),
-        ("enabled", "enabled"),
-        ("disabled", "disabled"),
-        ("verification_failed", "draft"),
-        ("verification_failed", "verification_failed"),
-    },
-    "leases_updated": {
-        ("draft", "draft"),
-        ("enabled", "enabled"),
-        ("disabled", "disabled"),
-        ("verification_failed", "verification_failed"),
-    },
-    "rotation_started": {("enabled", "draining")},
-    "rotation_completed": {("draining", "disabled")},
-    "disable_started": {("enabled", "draining")},
-    "disabled": {("draining", "disabled")},
-    "delete_started": {
-        ("draft", "draining"),
-        ("enabled", "draining"),
-        ("disabled", "draining"),
-        ("verification_failed", "draining"),
-    },
-    "leases_drained": {("draining", "draining")},
-    "tombstoned": {("draining", "tombstoned")},
-    "verification_failure_started": {("enabled", "draining")},
-    "verification_failed": {
-        ("draft", "verification_failed"),
-        ("disabled", "verification_failed"),
-        ("verification_failed", "verification_failed"),
-        ("draining", "verification_failed"),
-    },
-}
-SOURCE_OPERATION_ACTORS = {
-    "registered": "user",
-    "verified": "system",
-    "enabled": "user",
-    "edited": "user",
-    "leases_updated": "system",
-    "rotation_started": "user",
-    "rotation_completed": "system",
-    "disable_started": "user",
-    "disabled": "system",
-    "delete_started": "user",
-    "leases_drained": "system",
-    "tombstoned": "system",
-    "verification_failure_started": "system",
-    "verification_failed": "system",
 }
 SOURCE_OPERATION_MUTABLE_FIELDS = {
     "verified": {
@@ -379,11 +313,7 @@ def validate_source_audit(source: dict[str, Any]) -> None:
             raise ValueError("Source createdAt must match its registration audit event")
         if event["fromState"] != previous_state:
             raise ValueError("Source transition audit is discontinuous")
-        transition = (event["fromState"], event["toState"])
-        if transition not in SOURCE_AUDIT_TRANSITIONS[event["operation"]]:
-            raise ValueError("Source operation does not match audited state transition")
-        if event["actor"]["kind"] != SOURCE_OPERATION_ACTORS[event["operation"]]:
-            raise ValueError("Source operation actor is not authoritative")
+        validate_source_state_event_transition(event)
 
         credential_revision = event["credentialRevision"]
         if credential_revision is not None:
@@ -1291,14 +1221,12 @@ def validate_diagnosis_dependency_closure(
         raise ValueError("decision actions are not the closed dependency projection")
 
 
-def validate_source_semantics(
-    source: dict[str, Any],
-    resolve_source_audit: SourceAuditResolver | None = None,
-) -> None:
+def _validate_source_projection_semantics(source: dict[str, Any]) -> None:
+    """Validate one complete Source projection without recursive trust lookup."""
+
     reject_non_finite_json(source)
     validate_source_audit(source)
     validate_source_lease_audit(source)
-    replay_source_history(source, parse_time)
     capability_names = [item["name"] for item in source["capabilities"]]
     if len(capability_names) != len(set(capability_names)):
         raise ValueError("duplicate Source capability name")
@@ -1465,6 +1393,15 @@ def validate_source_semantics(
         if source["auth"]["credentialRef"] is not None:
             raise ValueError("tombstoned Source cannot retain a credential reference")
 
+
+def validate_source_semantics(
+    source: dict[str, Any],
+    resolve_source_audit: SourceAuditResolver | None = None,
+) -> None:
+    _validate_source_projection_semantics(source)
+    # Fail fast on ledger structure before resolving the authorization-grade
+    # snapshots below. This helper never grants authorization by itself.
+    replay_source_ledger_structure(source, parse_time)
     trusted_snapshots = validate_trusted_source_audit(source, resolve_source_audit)
     source_validator = schema_validator("source-v1.schema.json")
     historical_projections: list[dict[str, Any]] = []
@@ -1488,10 +1425,11 @@ def validate_source_semantics(
             raise ValueError(
                 "trusted Source revision snapshot violates Source/v1 schema"
             ) from error
+        _validate_source_projection_semantics(historical_projection)
         historical_projections.append(historical_projection)
     for prior, proposed in pairwise(historical_projections):
         _validate_source_transition_delta(prior, proposed)
-    replay_source_history(source, parse_time, trusted_snapshots)
+    _replay_prevalidated_source_history(source, parse_time, trusted_snapshots)
 
 
 def validate_source_verification_revision(

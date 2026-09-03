@@ -29,6 +29,39 @@ def replay_source_history(
     parse_time: Callable[[str], datetime],
     trusted_snapshots: Mapping[int, dict[str, Any]] | None = None,
 ) -> None:
+    """Reject the legacy raw replay entry point; it cannot establish trust."""
+
+    raise ValueError(
+        "Direct Source history replay is non-authorizing; "
+        "use the canonical Source validator"
+    )
+
+
+def _replay_prevalidated_source_history(
+    source: dict[str, Any],
+    parse_time: Callable[[str], datetime],
+    trusted_snapshots: Mapping[int, dict[str, Any]],
+) -> None:
+    """Replay snapshots already validated by the canonical Source validator."""
+
+    if not isinstance(trusted_snapshots, Mapping):
+        raise TypeError("Source replay requires prevalidated revision snapshots")
+    _replay_source_history(source, parse_time, trusted_snapshots)
+
+
+def replay_source_ledger_structure(
+    source: dict[str, Any], parse_time: Callable[[str], datetime]
+) -> None:
+    """Check ledger structure only; never use this result for authorization."""
+
+    _replay_source_history(source, parse_time, None)
+
+
+def _replay_source_history(
+    source: dict[str, Any],
+    parse_time: Callable[[str], datetime],
+    trusted_snapshots: Mapping[int, dict[str, Any]] | None,
+) -> None:
     """Replay both ledgers by revision and reject any poisoned snapshot."""
 
     state_events = source["transitionEvents"]

@@ -7,6 +7,10 @@ The vNext product baseline adds:
 - `source-v1.schema.json`: revisioned database/Prometheus/TEM/Alertmanager
   metadata, exact product/version/auth matrix, and append-only lifecycle audit;
   credentials are references, never values.
+- `source-write-result-v1.schema.json`: minimal Source HTTP-write result used
+  for idempotent replay; it contains only a service-generated opaque identity,
+  numeric revision, lifecycle state, pending operation, and latest state
+  operation.
 - `evidence-v2.schema.json`: standalone immutable evidence envelope with Case
   and Source revision bindings, payload digest, freshness, redaction revision,
   collector/query revision, and collection budgets.
@@ -53,8 +57,9 @@ models instead of accumulating conditions in the fixture runner:
   completeness, and uncertainty (`diagnosis-policy/v4`);
 - `vnext_outcome_policy.py` owns the singular authorized outcome tuple and its
   causal/effect semantics;
-- `vnext_source_ledger.py` performs one full-history replay of Source state and
-  lease events;
+- `vnext_source_ledger.py` exposes a non-authorizing structural ledger check
+  and an internal replay primitive for snapshots already validated by the
+  canonical `validate_source_semantics` entry point;
 - `vnext_source_audit.py` resolves Source projections against server-owned
   event attestations and a complete immutable state snapshot for every
   revision (`source-v1.audit-state-history.json` is the test-only private-store
@@ -143,8 +148,15 @@ timestamp, while every state record binds that revision's complete immutable
 Source state snapshot and digest. The ledgers remain separately attested; full
 replay resolves all snapshots and requires the final one to equal the current
 projection, while every adjacent pair is rechecked with the same closed
-transition/mutation rules used at commit time. The test-only fixture resolver in
-`vnext_source_audit.py` and
+transition/mutation rules used at commit time. Every historical projection is
+also independently rechecked with the complete non-recursive Source semantic
+validator, so a later revision cannot hide an invalid intermediate snapshot.
+`validate_source_semantics` is the only authorization-grade replay entry point:
+it resolves the complete trusted snapshot map, validates every projection and
+adjacent mutation, then invokes the internal prevalidated ledger replay.
+Direct `replay_source_history` calls fail closed even if a caller supplies a
+map; `replay_source_ledger_structure` checks only ledger shape and must not be
+used for admission. The test-only fixture resolver in `vnext_source_audit.py` and
 `examples/source-v1.audit-state-history.json` must never be built from caller
 input in runtime code.
 An Owner-authored record also requires a committed Source-write idempotency
@@ -177,16 +189,21 @@ lifecycle work and preserves the original verifier result timestamp.
 Source HTTP writes use the executable receipt model in
 `vnext_source_idempotency.py`. Raw Idempotency-Key and request secrets are never
 persisted: the server stores a public scope digest, a keyed HMAC-SHA-256 intent
-digest under a dedicated server-held key, and the redacted committed response
-plus its integrity digest. This prevents a stored request digest from becoming
-an offline oracle for a low-entropy credential. The key is stored outside the
-receipt database and remains available for every unexpired receipt; the replay
-body comes only from the closed public Source response serializer, never from a
-request or connector object. Receipt commit obtains the digest through
-`source_idempotency_response_digest`, which validates method, canonical route,
-status, route Source identity, and the closed Source/v1 DTO; replay invokes the
-same validator again. Undeclared fields are rejected regardless of value or key
-name, and the recursive sensitive-key scan is only an additional guard.
+digest under a dedicated server-held key, and a minimal committed
+`SourceWriteResult/v1` plus its integrity digest. This prevents a stored request
+digest from becoming an offline oracle for a low-entropy credential. The key is
+stored outside the receipt database and remains available for every unexpired
+receipt. The receipt body is produced only by the controlled
+`source_idempotency_public_response` projection, never copied from a full
+Source/v1, request, connector, event reason, name, or external error; clients
+fetch the full Source separately. Receipt commit obtains the integrity value
+through `source_idempotency_response_digest`, which validates method, canonical
+route, status, route Source identity, operation/state/pending-operation tuple,
+and the closed result DTO. The digest covers canonical `{responseRevision,
+method, canonicalRoute, httpStatus, resultSourceId, resultRevision, body}` and
+replay recomputes the same complete context. Undeclared and free-form fields are
+absent from the result schema, and the recursive sensitive-key scan is only an
+additional guard.
 Same-key/same-intent retries replay without side
 effects; same-key/different-intent and concurrent
 in-progress retries fail with stable conflicts. Every Source HTTP-write

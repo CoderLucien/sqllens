@@ -64,8 +64,16 @@ and lease ledgers by `sourceRevision` and timestamp. The replay starts at
 revision 1, requires exactly one trusted state snapshot per revision, and
 derives the active lease set after each event. At every revision it compares
 that set and the concurrency budget with the trusted immutable snapshot, and
-reapplies the same closed transition/mutation policy used for a live commit to
-every adjacent historical pair.
+reapplies both the complete non-recursive Source snapshot semantics and the
+same closed transition/mutation policy used for a live commit. Thus every
+historical projection is checked independently and every adjacent pair is
+checked as a transition; a later repair cannot make an invalid intermediate
+revision trustworthy. `validate_source_semantics` is the only
+authorization-grade replay entry point: it resolves the complete trusted
+snapshot map, validates every snapshot and pairwise mutation, and only then
+invokes the internal ledger replay primitive. Direct raw replay fails closed;
+the separately named structural replay helper checks ledger shape only and
+must never authorize a Source or reservation.
 Diagnosis acquisition is legal only when that exact historical revision is
 enabled and its credential revision plus verification-input digest equal a
 prior trusted PASS. Released reservations remain subject to the same historical
@@ -138,8 +146,13 @@ an unkeyed offline-guessing oracle. That key lives in the secrets volume rather
 than the receipt database or logs and remains resolvable for at least the full
 lifetime of every receipt it signed (a rotating implementation retains the old
 key in a bounded keyring). The receipt stores only the closed, server-generated
-public response DTO plus its integrity digest—never a request body or connector
-object—so an exact retry can actually be replayed without persisting secrets.
+`SourceWriteResult/v1` response DTO plus its integrity digest—never a full
+Source/v1 projection, request body, connector object, or free-form connector,
+event-reason, name, or error text—so an exact retry can actually be replayed
+without persisting secrets. The six-field result contains only schema revision,
+service-generated opaque Source ID, numeric revision, lifecycle state, pending
+operation, and latest state operation; clients fetch the complete Source
+separately after a successful write.
 Every Source HTTP-write transaction atomically commits its Source, reservation,
 or credential mutation with the matching receipt state and audit record.
 Background diagnosis/lifecycle events retain their own unique trusted ledger
@@ -160,12 +173,16 @@ unique in the transactional receipt store, not merely within one Source
 projection. A runtime Source-audit resolver may return a record only after
 joining that record to the matching committed receipt and enforcing this
 global uniqueness constraint. The receipt writer computes its response digest
-only through `source_idempotency_response_digest`, which validates the exact
-HTTP method, canonical route, status, route Source identity, and closed
-Source/v1 public DTO before persistence. Replay invokes the same validator
-before returning the stored body. Undeclared fields are rejected even when
-their key names look benign; the recursive sensitive-key scan is defense in
-depth, not the response schema.
+only after `source_idempotency_public_response` has projected the committed
+Source into `SourceWriteResult/v1`. `source_idempotency_response_digest`
+validates the exact HTTP method, canonical route, status, route Source identity,
+operation/state/pending-operation tuple, and closed result DTO before
+persistence. Its canonical integrity input binds `{responseRevision, method,
+canonicalRoute, httpStatus, resultSourceId, resultRevision, body}`; replay
+invokes the same validator and recomputes that complete context before returning
+the stored body. Undeclared or free-form fields are not part of the result
+schema; the recursive sensitive-key scan is defense in depth, not the response
+schema or serializer.
 
 An `in_progress` receipt is never deleted or treated as permission to rerun the
 connector after a crash. Recovery first proves the original process/isolated

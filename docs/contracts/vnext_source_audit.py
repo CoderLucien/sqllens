@@ -57,6 +57,78 @@ SOURCE_STATE_SNAPSHOT_FIELDS = frozenset(
 _FIXTURE_STATE_SNAPSHOTS: dict[tuple[str, str], dict[str, Any]] = {}
 _FIXTURE_PINNED_STATE_KEYS: set[tuple[str, str]] = set()
 
+SOURCE_STATE_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"draft", "enabled", "verification_failed", "draining"},
+    "enabled": {"enabled", "draining"},
+    "draining": {
+        "draining",
+        "enabled",
+        "disabled",
+        "verification_failed",
+        "tombstoned",
+    },
+    "disabled": {"disabled", "enabled", "draining", "verification_failed"},
+    "verification_failed": {"verification_failed", "draft", "draining"},
+    "tombstoned": {"tombstoned"},
+}
+SOURCE_AUDIT_TRANSITIONS: dict[str, set[tuple[str | None, str]]] = {
+    "registered": {(None, "draft")},
+    "verified": {
+        ("draft", "draft"),
+        ("enabled", "enabled"),
+        ("disabled", "disabled"),
+        ("verification_failed", "draft"),
+    },
+    "enabled": {("draft", "enabled"), ("disabled", "enabled")},
+    "edited": {
+        ("draft", "draft"),
+        ("enabled", "enabled"),
+        ("disabled", "disabled"),
+        ("verification_failed", "draft"),
+        ("verification_failed", "verification_failed"),
+    },
+    "leases_updated": {
+        ("draft", "draft"),
+        ("enabled", "enabled"),
+        ("disabled", "disabled"),
+        ("verification_failed", "verification_failed"),
+    },
+    "rotation_started": {("enabled", "draining")},
+    "rotation_completed": {("draining", "disabled")},
+    "disable_started": {("enabled", "draining")},
+    "disabled": {("draining", "disabled")},
+    "delete_started": {
+        ("draft", "draining"),
+        ("enabled", "draining"),
+        ("disabled", "draining"),
+        ("verification_failed", "draining"),
+    },
+    "leases_drained": {("draining", "draining")},
+    "tombstoned": {("draining", "tombstoned")},
+    "verification_failure_started": {("enabled", "draining")},
+    "verification_failed": {
+        ("draft", "verification_failed"),
+        ("disabled", "verification_failed"),
+        ("verification_failed", "verification_failed"),
+        ("draining", "verification_failed"),
+    },
+}
+SOURCE_OPERATION_ACTORS: dict[str, str] = {
+    "registered": "user",
+    "verified": "system",
+    "enabled": "user",
+    "edited": "user",
+    "leases_updated": "system",
+    "rotation_started": "user",
+    "rotation_completed": "system",
+    "disable_started": "user",
+    "disabled": "system",
+    "delete_started": "user",
+    "leases_drained": "system",
+    "tombstoned": "system",
+    "verification_failure_started": "system",
+    "verification_failed": "system",
+}
 SOURCE_EVENT_PERMISSIONS = {
     "registered": "register_source",
     "verified": "publish_source_verification",
@@ -93,6 +165,23 @@ SYSTEM_OPERATION_PRINCIPALS = {
     "lease_released": {"diagnosis-job", "source-verifier"},
     "lease_force_cancelled": {"source-lifecycle"},
 }
+
+
+def validate_source_state_event_transition(event: dict[str, Any]) -> None:
+    """Apply the canonical operation, state-transition, and actor-kind policy."""
+
+    try:
+        operation = event["operation"]
+        transition = (event["fromState"], event["toState"])
+        actor_kind = event["actor"]["kind"]
+        allowed_transitions = SOURCE_AUDIT_TRANSITIONS[operation]
+        expected_actor = SOURCE_OPERATION_ACTORS[operation]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("invalid Source state event") from exc
+    if transition not in allowed_transitions:
+        raise ValueError("Source operation does not match audited state transition")
+    if actor_kind != expected_actor:
+        raise ValueError("Source operation actor is not authoritative")
 
 
 def canonical_string_set(values: list[str]) -> list[str]:

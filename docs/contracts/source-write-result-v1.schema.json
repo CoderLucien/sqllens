@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/sqllens/contracts/source-write-result-v1.schema.json",
+  "title": "SourceWriteResultV1",
+  "description": "Receipt-safe Source write result with no free-form fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sourceId",
+    "revision",
+    "state",
+    "pendingOperation",
+    "stateOperation"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "source-write-result/v1" },
+    "sourceId": {
+      "description": "Service-generated opaque Source identity.",
+      "type": "string",
+      "pattern": "^src_[a-z0-9]{16,64}$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "state": {
+      "enum": [
+        "draft",
+        "enabled",
+        "disabled",
+        "draining",
+        "verification_failed",
+        "tombstoned"
+      ]
+    },
+    "pendingOperation": {
+      "enum": [null, "rotate", "disable", "delete", "verification_failure"]
+    },
+    "stateOperation": {
+      "enum": [
+        "registered",
+        "verified",
+        "enabled",
+        "edited",
+        "leases_updated",
+        "rotation_started",
+        "rotation_completed",
+        "disable_started",
+        "disabled",
+        "delete_started",
+        "leases_drained",
+        "tombstoned",
+        "verification_failure_started",
+        "verification_failed"
+      ]
+    }
+  }
+}

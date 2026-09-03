@@ -36,11 +36,12 @@ from vnext_outcome_policy import (
 from vnext_source_audit import source_verification_binding
 from vnext_source_idempotency import (
     evaluate_source_idempotency_receipt,
+    source_idempotency_public_response,
     source_idempotency_response_digest,
     source_write_intent_digest,
     source_write_scope_digest,
 )
-from vnext_source_ledger import replay_source_history
+from vnext_source_ledger import replay_source_history, replay_source_ledger_structure
 
 
 class CanonicalJsonTests(unittest.TestCase):
@@ -760,7 +761,14 @@ class SourceIdempotencyTests(unittest.TestCase):
     def _receipt(self, *, state: str = "committed") -> dict[str, Any]:
         committed = state == "committed"
         response_body = (
-            contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+            {
+                "schemaVersion": "source-write-result/v1",
+                "sourceId": "src_0000000000000001",
+                "revision": 4,
+                "state": "enabled",
+                "pendingOperation": None,
+                "stateOperation": "edited",
+            }
             if committed
             else None
         )
@@ -771,7 +779,16 @@ class SourceIdempotencyTests(unittest.TestCase):
             "intentDigest": self.intent_digest,
             "state": state,
             "httpStatus": 200 if committed else None,
-            "responseDigest": (canonical_sha256(response_body) if committed else None),
+            "responseDigest": (
+                source_idempotency_response_digest(
+                    method=self.method,
+                    canonical_route=self.canonical_route,
+                    http_status=200,
+                    response_body=response_body,
+                )
+                if committed
+                else None
+            ),
             "responseBody": response_body,
             "resultSourceId": "src_0000000000000001" if committed else None,
             "resultRevision": response_body["revision"] if committed else None,
@@ -1035,7 +1052,7 @@ class SourceIdempotencyTests(unittest.TestCase):
             receipt["responseDigest"] = canonical_sha256(receipt["responseBody"])
             with (
                 self.subTest(boundary="writer", leak=leak),
-                self.assertRaisesRegex(ValueError, "closed Source response DTO"),
+                self.assertRaisesRegex(ValueError, "closed Source write result DTO"),
             ):
                 source_idempotency_response_digest(
                     method=self.method,
@@ -1045,7 +1062,7 @@ class SourceIdempotencyTests(unittest.TestCase):
                 )
             with (
                 self.subTest(boundary="replay", leak=leak),
-                self.assertRaisesRegex(ValueError, "closed Source response DTO"),
+                self.assertRaisesRegex(ValueError, "closed Source write result DTO"),
             ):
                 self._evaluate(
                     receipt,
@@ -1054,7 +1071,14 @@ class SourceIdempotencyTests(unittest.TestCase):
                 )
 
     def test_response_dto_is_bound_to_route_status_and_source(self) -> None:
-        body = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        body = {
+            "schemaVersion": "source-write-result/v1",
+            "sourceId": "src_0000000000000001",
+            "revision": 4,
+            "state": "enabled",
+            "pendingOperation": None,
+            "stateOperation": "enabled",
+        }
         cases = (
             {
                 "method": "PATCH",
@@ -1075,12 +1099,301 @@ class SourceIdempotencyTests(unittest.TestCase):
         for case in cases:
             with (
                 self.subTest(case=case),
-                self.assertRaisesRegex(ValueError, "closed Source response DTO"),
+                self.assertRaisesRegex(ValueError, "closed Source write result DTO"),
             ):
                 source_idempotency_response_digest(
                     **case,
                     response_body=body,
                 )
+
+        source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            source_idempotency_public_response(
+                method="POST",
+                canonical_route=(f"/api/v1/sources/{source['sourceId']}/enablements"),
+                http_status=200.0,  # type: ignore[arg-type]
+                source=source,
+            )
+
+        oversized_revision = copy.deepcopy(source)
+        oversized_revision["revision"] = 10**100
+        oversized_revision["transitionEvents"][-1]["sourceRevision"] = 10**100
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            source_idempotency_public_response(
+                method="POST",
+                canonical_route=(f"/api/v1/sources/{source['sourceId']}/enablements"),
+                http_status=200,
+                source=oversized_revision,
+            )
+
+        impossible_event = copy.deepcopy(source)
+        impossible_event["transitionEvents"][-1]["fromState"] = "enabled"
+        with self.assertRaisesRegex(ValueError, "audited state transition"):
+            source_idempotency_public_response(
+                method="POST",
+                canonical_route=(f"/api/v1/sources/{source['sourceId']}/enablements"),
+                http_status=200,
+                source=impossible_event,
+            )
+
+        impossible_revision = {
+            "schemaVersion": "source-write-result/v1",
+            "sourceId": source["sourceId"],
+            "revision": 1,
+            "state": "enabled",
+            "pendingOperation": None,
+            "stateOperation": "enabled",
+        }
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            source_idempotency_response_digest(
+                method="POST",
+                canonical_route=(f"/api/v1/sources/{source['sourceId']}/enablements"),
+                http_status=200,
+                response_body=impossible_revision,
+            )
+
+    def test_response_receipt_rejects_secret_bearing_allowed_string_values(
+        self,
+    ) -> None:
+        body = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        body["transitionEvents"][-1]["reason"] = (
+            "connector failed: Authorization: Bearer supersecret"
+        )
+
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            source_idempotency_response_digest(
+                method="POST",
+                canonical_route=(f"/api/v1/sources/{body['sourceId']}/enablements"),
+                http_status=200,
+                response_body=body,
+            )
+
+        legacy_receipt = self._receipt()
+        legacy_receipt["responseBody"] = body
+        legacy_receipt["responseDigest"] = canonical_sha256(body)
+        legacy_receipt["resultSourceId"] = body["sourceId"]
+        legacy_receipt["resultRevision"] = body["revision"]
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            self._evaluate(
+                legacy_receipt,
+                scope_digest=self.scope_digest,
+                intent_digest=self.intent_digest,
+            )
+
+    def test_response_integrity_binds_status_and_route_semantics(self) -> None:
+        source = contracts.load(
+            contracts.EXAMPLES / "source-v1.no-auth-draining.valid.json"
+        )
+        body = {
+            "schemaVersion": "source-write-result/v1",
+            "sourceId": source["sourceId"],
+            "revision": source["revision"] + 1,
+            "state": "draining",
+            "pendingOperation": "delete",
+            "stateOperation": "leases_drained",
+        }
+        route = f"/api/v1/sources/{body['sourceId']}/lease-cancellations"
+        digest_202 = source_idempotency_response_digest(
+            method="POST",
+            canonical_route=route,
+            http_status=202,
+            response_body=body,
+        )
+        self.assertEqual(
+            digest_202,
+            canonical_sha256(
+                {
+                    "responseRevision": "source-write-result/v1",
+                    "method": "POST",
+                    "canonicalRoute": route,
+                    "httpStatus": 202,
+                    "resultSourceId": body["sourceId"],
+                    "resultRevision": body["revision"],
+                    "body": body,
+                }
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            source_idempotency_response_digest(
+                method="POST",
+                canonical_route=route,
+                http_status=200,
+                response_body=body,
+            )
+        self.assertNotEqual(digest_202, canonical_sha256(body))
+
+        completed_body = {
+            **body,
+            "state": "disabled",
+            "pendingOperation": None,
+            "stateOperation": "disabled",
+        }
+        disable_route = f"/api/v1/sources/{body['sourceId']}/disablements"
+        disable_digest = source_idempotency_response_digest(
+            method="POST",
+            canonical_route=disable_route,
+            http_status=200,
+            response_body=completed_body,
+        )
+        cancellation_digest = source_idempotency_response_digest(
+            method="POST",
+            canonical_route=route,
+            http_status=200,
+            response_body=completed_body,
+        )
+        self.assertNotEqual(disable_digest, cancellation_digest)
+
+    def test_replay_rejects_committed_status_and_result_context_tampering(
+        self,
+    ) -> None:
+        body = {
+            "schemaVersion": "source-write-result/v1",
+            "sourceId": "src_0000000000000001",
+            "revision": 4,
+            "state": "draining",
+            "pendingOperation": "delete",
+            "stateOperation": "leases_drained",
+        }
+        route = f"/api/v1/sources/{body['sourceId']}/lease-cancellations"
+        method = "POST"
+        key = "force-cancel-key-0001"
+        scope_digest = source_write_scope_digest(
+            owner_principal_id="owner",
+            method=method,
+            canonical_route=route,
+            idempotency_key=key,
+        )
+        intent_digest = source_write_intent_digest(
+            source_id=body["sourceId"],
+            expected_revision=3,
+            request_body={"leaseId": "lease_0000000000000001"},
+            digest_key=self.digest_key,
+        )
+        receipt = {
+            "receiptRevision": "source-idempotency-receipt/v1",
+            "receiptId": "idem_0000000000000011",
+            "scopeDigest": scope_digest,
+            "intentDigest": intent_digest,
+            "state": "committed",
+            "httpStatus": 202,
+            "responseDigest": source_idempotency_response_digest(
+                method=method,
+                canonical_route=route,
+                http_status=202,
+                response_body=body,
+            ),
+            "responseBody": body,
+            "resultSourceId": body["sourceId"],
+            "resultRevision": body["revision"],
+            "createdAt": "2026-09-03T00:00:00Z",
+            "expiresAt": "2026-09-04T00:00:00Z",
+        }
+        self.assertEqual(
+            evaluate_source_idempotency_receipt(
+                receipt,
+                scope_digest=scope_digest,
+                intent_digest=intent_digest,
+                method=method,
+                canonical_route=route,
+            ),
+            "replay",
+        )
+
+        tampered_status = copy.deepcopy(receipt)
+        tampered_status["httpStatus"] = 200
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            evaluate_source_idempotency_receipt(
+                tampered_status,
+                scope_digest=scope_digest,
+                intent_digest=intent_digest,
+                method=method,
+                canonical_route=route,
+            )
+
+        tampered_result = copy.deepcopy(receipt)
+        tampered_result["resultRevision"] += 1
+        with self.assertRaisesRegex(ValueError, "differs from response body"):
+            evaluate_source_idempotency_receipt(
+                tampered_result,
+                scope_digest=scope_digest,
+                intent_digest=intent_digest,
+                method=method,
+                canonical_route=route,
+            )
+
+    def test_route_operation_rejects_impossible_source_result(self) -> None:
+        tombstoned_source = contracts.load(
+            contracts.EXAMPLES / "source-v1.tombstoned.valid.json"
+        )
+        tombstoned = {
+            "schemaVersion": "source-write-result/v1",
+            "sourceId": tombstoned_source["sourceId"],
+            "revision": tombstoned_source["revision"],
+            "state": "tombstoned",
+            "pendingOperation": None,
+            "stateOperation": "tombstoned",
+        }
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            source_idempotency_response_digest(
+                method="POST",
+                canonical_route=(f"/api/v1/sources/{tombstoned['sourceId']}/tests"),
+                http_status=200,
+                response_body=tombstoned,
+            )
+
+        wrong_drain = {
+            **tombstoned,
+            "state": "draining",
+            "pendingOperation": "delete",
+            "stateOperation": "delete_started",
+        }
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            source_idempotency_response_digest(
+                method="POST",
+                canonical_route=(
+                    f"/api/v1/sources/{wrong_drain['sourceId']}/disablements"
+                ),
+                http_status=202,
+                response_body=wrong_drain,
+            )
+
+        mismatched_event = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        mismatched_event["transitionEvents"][-1]["operation"] = "edited"
+        with self.assertRaisesRegex(ValueError, "closed Source write result DTO"):
+            source_idempotency_public_response(
+                method="POST",
+                canonical_route=(
+                    f"/api/v1/sources/{mismatched_event['sourceId']}/enablements"
+                ),
+                http_status=200,
+                source=mismatched_event,
+            )
+
+    def test_public_response_serializer_drops_all_free_text(self) -> None:
+        source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        source["transitionEvents"][-1]["reason"] = (
+            "connector failed: password=supersecret"
+        )
+        body = source_idempotency_public_response(
+            method="POST",
+            canonical_route=f"/api/v1/sources/{source['sourceId']}/enablements",
+            http_status=200,
+            source=source,
+        )
+
+        self.assertEqual(
+            set(body),
+            {
+                "schemaVersion",
+                "sourceId",
+                "revision",
+                "state",
+                "pendingOperation",
+                "stateOperation",
+            },
+        )
+        self.assertNotIn("supersecret", repr(body))
 
 
 class SourceLedgerTests(unittest.TestCase):
@@ -2433,13 +2746,35 @@ class SourceLedgerTests(unittest.TestCase):
         source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
         source["revision"] = 10**12
         with self.assertRaises(ValueError):
-            replay_source_history(source, contracts.parse_time)
+            replay_source_ledger_structure(source, contracts.parse_time)
+
+    def test_authorizing_history_replay_requires_trusted_snapshots(self) -> None:
+        source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        _, _, released = contracts.build_source_lease_drain(source)
+        for event in released["leaseEvents"]:
+            if event["purpose"] == "diagnosis":
+                event["bindingDigest"] = "sha256:" + "f" * 64
+
+        with self.assertRaisesRegex(ValueError, "canonical Source validator"):
+            replay_source_history(released, contracts.parse_time)
+
+        trusted_snapshots = contracts.validate_trusted_source_audit(
+            source,
+            self._audit_resolver(source),
+        )
+        trusted_snapshots[1]["associatedSourceIds"] = [source["sourceId"]]
+        with self.assertRaisesRegex(ValueError, "canonical Source validator"):
+            replay_source_history(
+                source,
+                contracts.parse_time,
+                trusted_snapshots,
+            )
 
     def test_replays_valid_enabled_drain_history(self) -> None:
         source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
         leased, draining, drained = contracts.build_source_lease_drain(source)
         for snapshot in (leased, draining, drained):
-            replay_source_history(snapshot, contracts.parse_time)
+            replay_source_ledger_structure(snapshot, contracts.parse_time)
 
     def test_rejects_acquisition_after_drain_snapshot(self) -> None:
         source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
@@ -2461,7 +2796,7 @@ class SourceLedgerTests(unittest.TestCase):
             }
         )
         with self.assertRaises(ValueError):
-            replay_source_history(poisoned, contracts.parse_time)
+            replay_source_ledger_structure(poisoned, contracts.parse_time)
 
     def test_rejects_lease_event_at_the_same_time_as_state_snapshot(self) -> None:
         source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
@@ -2474,7 +2809,7 @@ class SourceLedgerTests(unittest.TestCase):
             "createdAt"
         ]
         with self.assertRaisesRegex(ValueError, "must precede"):
-            replay_source_history(poisoned, contracts.parse_time)
+            replay_source_ledger_structure(poisoned, contracts.parse_time)
 
     def test_reservation_revision_cannot_mix_acquisition_and_release(self) -> None:
         source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
@@ -2494,7 +2829,7 @@ class SourceLedgerTests(unittest.TestCase):
         poisoned["activeLeases"] = poisoned["activeLeases"][:1]
         poisoned["credentialLifecycle"]["activeLeaseCount"] = 1
         with self.assertRaisesRegex(ValueError, "cannot mix acquisition and release"):
-            replay_source_history(poisoned, contracts.parse_time)
+            replay_source_ledger_structure(poisoned, contracts.parse_time)
 
     def test_rejects_equal_timestamps_inside_one_lease_revision(self) -> None:
         source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
@@ -2507,7 +2842,7 @@ class SourceLedgerTests(unittest.TestCase):
         ]
         revision_events[1]["createdAt"] = revision_events[0]["createdAt"]
         with self.assertRaisesRegex(ValueError, "strictly ordered"):
-            replay_source_history(drained, contracts.parse_time)
+            replay_source_ledger_structure(drained, contracts.parse_time)
 
     def test_full_history_rejects_diagnosis_before_first_verification(self) -> None:
         draft = self._draft()
@@ -2714,7 +3049,9 @@ class SourceLedgerTests(unittest.TestCase):
         resolver = self._audit_resolver(source, diagnosed, released)
 
         with self.assertRaisesRegex(
-            ValueError, "diagnosis reservation differs from its trusted Source revision"
+            ValueError,
+            "active Source reservation binds another credential|"
+            "diagnosis reservation differs from its trusted Source revision",
         ):
             contracts.validate_source_semantics(released, resolver)
 
@@ -2837,6 +3174,57 @@ class SourceLedgerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "enabled operation rewrites"):
             contracts.validate_source_semantics(source, poisoned_history)
+
+    def test_full_history_rechecks_every_snapshot_semantic_invariant(self) -> None:
+        source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        self_associated = self._edit_source(
+            source,
+            event_id="sevt_0000000000004141",
+            event_at="2026-09-02T09:22:00Z",
+        )
+        self_associated["associatedSourceIds"] = [self_associated["sourceId"]]
+        repaired = self._edit_source(
+            self_associated,
+            event_id="sevt_0000000000004142",
+            event_at="2026-09-02T09:23:00Z",
+        )
+        repaired["associatedSourceIds"] = []
+
+        with self.assertRaisesRegex(ValueError, "cannot associate itself"):
+            contracts.validate_source_semantics(
+                repaired,
+                self._audit_resolver(source, self_associated, repaired),
+            )
+
+        reserved = self._verification_reserved(
+            source,
+            event_id="sevt_0000000000004151",
+            event_at="2026-09-02T09:22:00Z",
+            lease_id="lease_0000000000004151",
+            job_id="job_0000000000004151",
+        )
+        verified = self._verification_result(
+            reserved,
+            passed=True,
+            event_id="sevt_0000000000004152",
+            event_at="2026-09-02T09:24:00Z",
+        )
+        duplicate = copy.deepcopy(verified["capabilities"][0])
+        duplicate.update(status="denied", required=False)
+        verified["capabilities"].append(duplicate)
+        draining, completed = contracts.build_source_rotation(verified)
+
+        with self.assertRaisesRegex(ValueError, "duplicate Source capability name"):
+            contracts.validate_source_semantics(
+                completed,
+                self._audit_resolver(
+                    source,
+                    reserved,
+                    verified,
+                    draining,
+                    completed,
+                ),
+            )
 
 
 if __name__ == "__main__":

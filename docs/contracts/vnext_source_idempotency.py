@@ -21,8 +21,10 @@ from vnext_canonical_json import (
     canonical_sha256,
     strict_json_loads,
 )
+from vnext_source_audit import validate_source_state_event_transition
 
 SOURCE_IDEMPOTENCY_RECEIPT_REVISION = "source-idempotency-receipt/v1"
+SOURCE_WRITE_RESULT_REVISION = "source-write-result/v1"
 SOURCE_IDEMPOTENCY_RETENTION = timedelta(hours=24)
 IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 RECEIPT_ID = re.compile(r"^idem_[a-z0-9]{16,64}$")
@@ -42,6 +44,15 @@ Draft202012Validator.check_schema(SOURCE_SCHEMA)
 SOURCE_RESPONSE_VALIDATOR = Draft202012Validator(
     SOURCE_SCHEMA, format_checker=FormatChecker()
 )
+SOURCE_WRITE_RESULT_SCHEMA = strict_json_loads(
+    Path(__file__)
+    .with_name("source-write-result-v1.schema.json")
+    .read_text(encoding="utf-8")
+)
+if not isinstance(SOURCE_WRITE_RESULT_SCHEMA, dict):
+    raise TypeError("Source write result schema must be a JSON object")
+Draft202012Validator.check_schema(SOURCE_WRITE_RESULT_SCHEMA)
+SOURCE_WRITE_RESULT_VALIDATOR = Draft202012Validator(SOURCE_WRITE_RESULT_SCHEMA)
 SENSITIVE_RESPONSE_MARKERS = {
     "apikey",
     "authorization",
@@ -52,6 +63,104 @@ SENSITIVE_RESPONSE_MARKERS = {
     "secret",
     "setcookie",
     "token",
+}
+SOURCE_WRITE_RESULT_FIELDS = {
+    "schemaVersion",
+    "sourceId",
+    "revision",
+    "state",
+    "pendingOperation",
+    "stateOperation",
+}
+SOURCE_STATES = {
+    "draft",
+    "enabled",
+    "disabled",
+    "draining",
+    "verification_failed",
+    "tombstoned",
+}
+SOURCE_PENDING_OPERATIONS = {
+    None,
+    "rotate",
+    "disable",
+    "delete",
+    "verification_failure",
+}
+SOURCE_STATE_OPERATIONS = {
+    "registered",
+    "verified",
+    "enabled",
+    "edited",
+    "leases_updated",
+    "rotation_started",
+    "rotation_completed",
+    "disable_started",
+    "disabled",
+    "delete_started",
+    "leases_drained",
+    "tombstoned",
+    "verification_failure_started",
+    "verification_failed",
+}
+SOURCE_WRITE_OPERATION_SIGNATURES: dict[
+    str, frozenset[tuple[int, str, str | None, str]]
+] = {
+    "create": frozenset({(201, "draft", None, "registered")}),
+    "edit": frozenset(
+        (200, state, None, "edited")
+        for state in ("draft", "enabled", "disabled", "verification_failed")
+    ),
+    "tests": frozenset(
+        {
+            (200, "draft", None, "verified"),
+            (200, "enabled", None, "verified"),
+            (200, "disabled", None, "verified"),
+            (200, "verification_failed", None, "verification_failed"),
+            (
+                202,
+                "draining",
+                "verification_failure",
+                "verification_failure_started",
+            ),
+        }
+    ),
+    "enablements": frozenset({(200, "enabled", None, "enabled")}),
+    "disablements": frozenset(
+        {
+            (202, "draining", "disable", "disable_started"),
+            (200, "disabled", None, "disabled"),
+        }
+    ),
+    "credential-rotations": frozenset(
+        {
+            (202, "draining", "rotate", "rotation_started"),
+            (200, "disabled", None, "rotation_completed"),
+        }
+    ),
+    "lease-cancellations": frozenset(
+        {
+            *(
+                (202, "draining", pending, "leases_drained")
+                for pending in (
+                    "rotate",
+                    "disable",
+                    "delete",
+                    "verification_failure",
+                )
+            ),
+            (200, "disabled", None, "disabled"),
+            (200, "disabled", None, "rotation_completed"),
+            (200, "tombstoned", None, "tombstoned"),
+            (200, "verification_failed", None, "verification_failed"),
+        }
+    ),
+    "delete": frozenset(
+        {
+            (202, "draining", "delete", "delete_started"),
+            (200, "tombstoned", None, "tombstoned"),
+        }
+    ),
 }
 
 
@@ -85,60 +194,89 @@ def _validate_closed_source_response(
     *, method: str, canonical_route: str, http_status: int, body: dict[str, Any]
 ) -> None:
     source_id, operation = _source_write_route(method, canonical_route)
-    allowed_statuses = {
-        "create": {201},
-        "edit": {200},
-        "tests": {200},
-        "enablements": {200},
-        "disablements": {200, 202},
-        "credential-rotations": {200, 202},
-        "lease-cancellations": {200, 202},
-        "delete": {200, 202},
-    }
-    if http_status not in allowed_statuses[operation]:
-        raise ValueError(
-            "invalid Source idempotency receipt response body: "
-            "status is outside the closed Source response DTO"
-        )
-    try:
-        SOURCE_RESPONSE_VALIDATOR.validate(body)
-    except ValidationError as exc:
-        raise ValueError(
-            "invalid Source idempotency receipt response body: "
-            "not the closed Source response DTO"
-        ) from exc
-    if source_id is not None and body["sourceId"] != source_id:
-        raise ValueError(
-            "invalid Source idempotency receipt response body: "
-            "route and closed Source response DTO differ"
-        )
-    if operation == "create" and not (
-        body["revision"] == 1 and body["state"] == "draft"
-    ):
-        raise ValueError(
-            "invalid Source idempotency receipt response body: "
-            "create requires a new draft Source DTO"
-        )
-    if http_status == 202 and body["state"] != "draining":
-        raise ValueError(
-            "invalid Source idempotency receipt response body: "
-            "202 requires a draining Source DTO"
-        )
-    required_200_states = {
-        "enablements": {"enabled"},
-        "disablements": {"disabled"},
-        "credential-rotations": {"disabled"},
-        "delete": {"tombstoned"},
-    }
+    error = (
+        "invalid Source idempotency receipt response body: "
+        "not the closed Source write result DTO"
+    )
     if (
-        http_status == 200
-        and operation in required_200_states
-        and body["state"] not in required_200_states[operation]
+        not isinstance(http_status, int)
+        or isinstance(http_status, bool)
+        or set(body) != SOURCE_WRITE_RESULT_FIELDS
     ):
+        raise ValueError(error)
+    try:
+        SOURCE_WRITE_RESULT_VALIDATOR.validate(body)
+    except ValidationError as exc:
+        raise ValueError(error) from exc
+    if not (
+        isinstance(body["sourceId"], str)
+        and SOURCE_ID.fullmatch(body["sourceId"])
+        and body["state"] in SOURCE_STATES
+        and body["pendingOperation"] in SOURCE_PENDING_OPERATIONS
+        and body["stateOperation"] in SOURCE_STATE_OPERATIONS
+    ):
+        raise ValueError(error)
+    if source_id is not None and body["sourceId"] != source_id:
+        raise ValueError(error)
+
+    signature = (
+        http_status,
+        body["state"],
+        body["pendingOperation"],
+        body["stateOperation"],
+    )
+    if signature not in SOURCE_WRITE_OPERATION_SIGNATURES[operation]:
+        raise ValueError(error)
+    if (operation == "create") != (body["revision"] == 1):
+        raise ValueError(error)
+
+
+def source_idempotency_public_response(
+    *,
+    method: str,
+    canonical_route: str,
+    http_status: int,
+    source: dict[str, Any],
+) -> dict[str, Any]:
+    """Project a committed Source into the only receipt-safe public result DTO."""
+
+    try:
+        SOURCE_RESPONSE_VALIDATOR.validate(source)
+        latest_event = source["transitionEvents"][-1]
+        if not (
+            latest_event["sourceRevision"] == source["revision"]
+            and latest_event["toState"] == source["state"]
+            and source["credentialLifecycle"]["pendingOperation"]
+            in SOURCE_PENDING_OPERATIONS
+        ):
+            raise ValueError
+        result = {
+            "schemaVersion": SOURCE_WRITE_RESULT_REVISION,
+            "sourceId": source["sourceId"],
+            "revision": source["revision"],
+            "state": source["state"],
+            "pendingOperation": source["credentialLifecycle"]["pendingOperation"],
+            "stateOperation": latest_event["operation"],
+        }
+    except (IndexError, KeyError, TypeError, ValidationError, ValueError) as exc:
         raise ValueError(
             "invalid Source idempotency receipt response body: "
-            "operation and closed Source response DTO differ"
-        )
+            "cannot project the closed Source write result DTO"
+        ) from exc
+    try:
+        validate_source_state_event_transition(latest_event)
+    except ValueError as exc:
+        raise ValueError(
+            "invalid Source idempotency receipt response body: "
+            f"cannot project the closed Source write result DTO: {exc}"
+        ) from exc
+    _validate_closed_source_response(
+        method=method,
+        canonical_route=canonical_route,
+        http_status=http_status,
+        body=result,
+    )
+    return result
 
 
 def source_idempotency_response_digest(
@@ -150,9 +288,9 @@ def source_idempotency_response_digest(
 ) -> str:
     """Validate and hash the exact public DTO stored in a committed receipt.
 
-    Receipt writers call this before persistence; replay validation calls the
-    same function again. This makes the route/status-specific closed DTO the
-    primary boundary and leaves the sensitive-key scan as defense in depth.
+    Receipt writers call this after ``source_idempotency_public_response``;
+    replay validation calls this function again. The integrity value binds the
+    complete method/route/status/result context, not only the body.
     """
 
     if not isinstance(response_body, dict):
@@ -165,7 +303,17 @@ def source_idempotency_response_digest(
         body=response_body,
     )
     try:
-        return canonical_sha256(response_body)
+        return canonical_sha256(
+            {
+                "responseRevision": SOURCE_WRITE_RESULT_REVISION,
+                "method": method.upper(),
+                "canonicalRoute": canonical_route,
+                "httpStatus": http_status,
+                "resultSourceId": response_body["sourceId"],
+                "resultRevision": response_body["revision"],
+                "body": response_body,
+            }
+        )
     except (OverflowError, TypeError, ValueError) as exc:
         raise ValueError("invalid Source idempotency receipt response body") from exc
 

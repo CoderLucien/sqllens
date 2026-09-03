@@ -203,6 +203,14 @@ snapshot digest. The audit record, rather than caller-provided actor or role
 text, binds the authenticated principal/service permission and the exact
 committed revision. Missing audit state, an untrusted current snapshot, or a
 caller-replayed verification result fails closed.
+Full-history authorization replay requires a trusted immutable projection for
+every Source revision. Each historical projection is checked against the
+complete non-recursive Source semantics, and every adjacent pair is checked
+with the live closed transition/mutation policy; a later repair cannot
+legitimize an invalid intermediate revision. The separately named structural
+ledger helper never authorizes a Source or reservation. The canonical Source
+semantic validator is the only authorization-grade entry point; direct raw
+history replay fails closed even when handed a caller-supplied snapshot map.
 The resolver returns an audit record only after a transactional join to a
 committed receipt whose ID is globally unique to one Owner intent or verifier
 job across all Sources. Source revisions use a closed per-operation field
@@ -239,13 +247,20 @@ route, Source/expected revision, and canonical intent. Because that intent can
 contain a low-entropy credential, it is persisted only as HMAC-SHA-256 under a
 dedicated server-held key. The key remains in the secrets volume and is kept
 resolvable for the lifetime of every receipt it signed. The receipt keeps only
-the closed, server-generated public response DTO and its integrity digest for
-exact replay, never a request or connector object. Receipt state, credential
-metadata, each Source mutation, and its audit record commit together. A
-route-specific response schema is validated before the receipt is committed;
-sensitive-key scanning is defense in depth rather than a substitute for that
-closed DTO. Each Source HTTP-write transaction atomically commits its mutation,
-receipt state, and audit record. Background diagnosis/lifecycle events use
+the closed six-field `SourceWriteResult/v1` and its integrity digest for exact
+replay, never a full Source/v1, request, connector object, free-form event
+reason/name, or external error text. The controlled serializer projects only
+schema revision, service-generated opaque Source ID, numeric revision, state,
+pending operation, and latest state operation; clients fetch the complete
+Source separately.
+Receipt state, credential metadata, each Source mutation, and its audit record
+commit together. The route/status validator closes the allowed lifecycle
+result tuples, and the integrity digest binds canonical `{responseRevision,
+method, canonicalRoute, httpStatus, resultSourceId, resultRevision, body}`
+before commit and again before replay. Sensitive-key scanning is defense in
+depth rather than a substitute for the closed DTO and serializer. Each Source
+HTTP-write transaction atomically commits its mutation, receipt state, and
+audit record. Background diagnosis/lifecycle events use
 their own unique trusted ledger records rather than fabricating an HTTP
 receipt. A verifier request first commits its in-progress receipt plus reservation before
 external execution, then atomically commits result, reservation release, and

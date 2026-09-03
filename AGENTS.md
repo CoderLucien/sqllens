@@ -32,6 +32,7 @@ Read only the sections relevant to your task:
   `docs/adr/0011-versioned-read-only-source-lifecycle.md`
 - Security abuse cases: `docs/threat-model.md`
 - vNext draft contracts: `docs/contracts/source-v1.schema.json`,
+  `docs/contracts/source-write-result-v1.schema.json`,
   `docs/contracts/evidence-v2.schema.json`,
   `docs/contracts/diagnosis-case-v2.schema.json`, and
   `docs/contracts/diagnosis-report-v1.schema.json`
