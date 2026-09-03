@@ -13,11 +13,12 @@
   },
   "recordings": {
     "server.identity": {
-      "columns": ["version", "version_comment", "tidb_version"],
+      "columns": ["version", "version_comment", "tidb_version", "autocommit"],
       "rows": [{
         "version": "5.7.25-TiDB-v8.5.4",
         "version_comment": "PingKaiDB Server, MySQL 5.7 compatible",
-        "tidb_version": "Release Version: v7.1.8-5.4\nOpen-Core Version: v8.5.4\nEdition: PingKaiDB Enterprise\nGit Commit Hash: <redacted>"
+        "tidb_version": "Release Version: v7.1.8-5.4\nOpen-Core Version: v8.5.4\nEdition: PingKaiDB Enterprise\nGit Commit Hash: <redacted>",
+        "autocommit": 1
       }]
     },
     "slow_query.current_user": {

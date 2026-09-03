@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Evidence-first TiDB diagnosis runtime"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "asyncmy==0.2.14",
   "cryptography==50.0.1",
   "fastapi==0.141.1",
   "httpx==0.28.1",

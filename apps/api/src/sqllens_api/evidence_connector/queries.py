@@ -323,10 +323,11 @@ def _build_query_pack(pack_id: str) -> Mapping[str, ServerQuery]:
 SELECT
     @@version AS version,
     @@version_comment AS version_comment,
-    TIDB_VERSION() AS tidb_version
+    TIDB_VERSION() AS tidb_version,
+    @@autocommit AS autocommit
 """,
             parameters=(),
-            result_columns=("version", "version_comment", "tidb_version"),
+            result_columns=("version", "version_comment", "tidb_version", "autocommit"),
             required_capability=None,
             cardinality=QueryCardinality.SINGLE_ROW,
             budget=_budget(timeout_ms=2_000, max_rows=1, max_bytes=16_384),
