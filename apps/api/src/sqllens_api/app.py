@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,8 @@ from starlette.responses import Response
 
 from sqllens_api.config import Settings
 from sqllens_api.errors import ApiError, error_response
+from sqllens_api.m0_connection import M0ConnectionStore
+from sqllens_api.m0_routes import register_m0_connection_routes
 from sqllens_api.setup import (
     OWNER_COOKIE_NAME,
     SETUP_COOKIE_NAME,
@@ -59,26 +62,34 @@ def create_app(
     *,
     settings: Settings | None = None,
     clock: Clock = _utc_now,
+    m0_connection_store: M0ConnectionStore | None = None,
 ) -> FastAPI:
     """Create the bounded M0 private-preview application."""
 
     runtime_settings = settings or Settings()
     store = SetupStore(runtime_settings)
+    connection_store = m0_connection_store or M0ConnectionStore(clock=clock)
     signer = SetupSessionSigner(runtime_settings)
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await application.state.clear_m0_connection()
+
     app = FastAPI(
         title="SQLLens M0 Private Preview API",
         version="0.1.0-m0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
     app.state.settings = runtime_settings
     app.state.setup_store = store
-
-    async def clear_m0_connection() -> None:
-        return None
-
-    app.state.clear_m0_connection = clear_m0_connection
+    app.state.m0_connection_store = connection_store
+    app.state.clear_m0_connection = connection_store.force_close
 
     def current_owner_token(request: Request) -> str | None:
         snapshot = store.snapshot()
@@ -92,13 +103,14 @@ def create_app(
             expected_session_epoch=snapshot.owner_session_epoch,
         )
 
-    def require_owner_session(
-        request: Request,
-        x_csrf_token: Annotated[str | None, Header()] = None,
-    ) -> str:
+    def require_owner_authenticated(request: Request) -> str:
         token = current_owner_token(request)
         if token is None:
             raise ApiError(401, "AUTH_REQUIRED", "Owner authentication is required.")
+        return token
+
+    def require_owner_session(request: Request, x_csrf_token: str | None = None) -> str:
+        token = require_owner_authenticated(request)
         if not signer.verify_csrf(token, x_csrf_token):
             raise ApiError(403, "CSRF_INVALID", "The owner request could not be verified.")
         return token
@@ -300,17 +312,25 @@ def create_app(
         x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
     ) -> Response:
         require_owner_session(request, x_csrf_token)
-        await app.state.clear_m0_connection()
         snapshot = store.snapshot()
-        if not store.revoke_owner_sessions(
+        revoked = store.revoke_owner_sessions(
             setup_epoch=snapshot.setup_epoch,
             session_epoch=snapshot.owner_session_epoch,
             now=clock(),
-        ):
+        )
+        await app.state.clear_m0_connection()
+        if not revoked:
             raise ApiError(409, "SESSION_STATE_CHANGED", "The owner session already changed.")
         response = JSONResponse(content={"authenticated": False})
         response.delete_cookie(OWNER_COOKIE_NAME, path="/api/v1")
         return response
+
+    register_m0_connection_routes(
+        app,
+        store=connection_store,
+        require_owner=require_owner_authenticated,
+        require_owner_csrf=require_owner_session,
+    )
 
     web_dist = runtime_settings.web_dist_dir
     if isinstance(web_dist, Path) and (web_dist / "index.html").is_file():

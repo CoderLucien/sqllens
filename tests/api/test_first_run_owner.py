@@ -354,9 +354,10 @@ def test_owner_creation_replay_cannot_replace_password_or_session_epoch(
     assert SetupStore(settings).authenticate_owner(OWNER_PASSWORD, clock()).status == (
         "authenticated"
     )
-    assert SetupStore(settings).authenticate_owner(
-        "replacement-password-123", clock()
-    ).status == "invalid"
+    assert (
+        SetupStore(settings).authenticate_owner("replacement-password-123", clock()).status
+        == "invalid"
+    )
 
 
 def test_owner_login_and_session_survive_restart_but_expire(
@@ -411,14 +412,23 @@ def test_owner_login_is_rate_limited_without_leaking_credential_state(
 def test_logout_requires_csrf_closes_connection_and_revokes_owner_sessions(
     settings: Settings,
     clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = create_app(settings=settings, clock=clock)
     cleanup_calls = 0
+    lifecycle_events: list[str] = []
+    original_revoke = app.state.setup_store.revoke_owner_sessions
+
+    def revoke_owner_sessions(**kwargs: object) -> bool:
+        lifecycle_events.append("revoke")
+        return bool(original_revoke(**kwargs))
 
     async def clear_connection() -> None:
         nonlocal cleanup_calls
+        lifecycle_events.append("cleanup")
         cleanup_calls += 1
 
+    monkeypatch.setattr(app.state.setup_store, "revoke_owner_sessions", revoke_owner_sessions)
     app.state.clear_m0_connection = clear_connection
     client = local_client(app)
     created = create_owner(client)
@@ -437,6 +447,7 @@ def test_logout_requires_csrf_closes_connection_and_revokes_owner_sessions(
     assert logged_out.status_code == 200
     assert logged_out.json() == {"authenticated": False}
     assert cleanup_calls == 1
+    assert lifecycle_events == ["revoke", "cleanup"]
     assert client.get("/api/v1/auth/session").json() == {
         "authenticated": False,
         "csrf_token": None,

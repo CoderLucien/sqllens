@@ -51,13 +51,16 @@ DEFERRED_HTTP_OPERATIONS = (
     ("GET", "/api/v1/pingkaidb"),
 )
 
-M0_OWNER_API_ROUTES = {
+M0_API_ROUTES = {
     ("GET", "/healthz"),
     ("GET", "/api/v1/setup/status"),
     ("POST", "/api/v1/setup/owner"),
     ("GET", "/api/v1/auth/session"),
     ("POST", "/api/v1/auth/login"),
     ("POST", "/api/v1/auth/logout"),
+    ("GET", "/api/v1/m0/connection"),
+    ("PUT", "/api/v1/m0/connection"),
+    ("DELETE", "/api/v1/m0/connection"),
 }
 
 
@@ -107,4 +110,4 @@ def test_m0_registers_only_the_required_owner_session_routes(tmp_path: Path) -> 
         if route.path == "/healthz" or route.path.startswith("/api/")
     }
 
-    assert registered == M0_OWNER_API_ROUTES
+    assert registered == M0_API_ROUTES
