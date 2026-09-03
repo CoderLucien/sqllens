@@ -8,12 +8,6 @@ case "${1:-web-api}" in
     export SQLLENS_PORT=${SQLLENS_PORT:-8080}
     exec python -m sqllens_api.main web-api
     ;;
-  migrate)
-    exec python -m sqllens_api.main migrate
-    ;;
-  bootstrap-ingest|bootstrap-reissue)
-    exec python -m sqllens_api.main "$1"
-    ;;
   *)
     printf 'unsupported runtime command: %s\n' "$1" >&2
     exit 64
