@@ -19,6 +19,10 @@ from sqllens_api.errors import ApiError, error_response
 from sqllens_api.m0_connection import M0ConnectionStore
 from sqllens_api.m0_diagnosis import M0DiagnosisService
 from sqllens_api.m0_routes import register_m0_connection_routes
+from sqllens_api.plan_replayer_routes import (
+    PlanReplayerStore,
+    register_plan_replayer_routes,
+)
 from sqllens_api.setup import (
     OWNER_COOKIE_NAME,
     SETUP_COOKIE_NAME,
@@ -337,6 +341,14 @@ def create_app(
         diagnosis_service=diagnosis_service,
         require_owner=require_owner_authenticated,
         require_owner_csrf=require_owner_session,
+    )
+
+    plan_replayer_store = PlanReplayerStore()
+    app.state.plan_replayer_store = plan_replayer_store
+    register_plan_replayer_routes(
+        app,
+        store=plan_replayer_store,
+        require_owner_session=require_owner_session,
     )
 
     web_dist = runtime_settings.web_dist_dir
