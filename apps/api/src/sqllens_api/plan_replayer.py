@@ -156,26 +156,182 @@ def _parse_meta(bundle: PlanReplayerBundle) -> None:
                 break
 
 
-def bundle_to_evidence_payload(bundle: PlanReplayerBundle) -> dict:
-    """将解析产物映射为契约 Evidence 的载荷视图（origin=plan_replayer）。
+def bundle_to_evidence_v3(bundle: PlanReplayerBundle) -> dict:
+    """将解析产物投影为冻结契约 ``evidence/v3``（#t27↔#t25 汇合点）。
 
-    仅做结构投影，不生成诊断结论；诊断内核据此构造完整 Evidence。
+    契约见 ``docs/contracts/v4-diagnosis-input.schema.json``。只做类型化投影，
+    不生成诊断结论；无法可靠解析的字段不填充（保持可选缺省），由诊断内核
+    按证据不足降级处理。数字一律为安全整数，禁止 NaN/Infinity。
     """
-    now = datetime.now(timezone.utc).isoformat()
+    sql_text = _first_sql(bundle)
     return {
-        "origin": "plan_replayer",
-        "integrityDigest": bundle.digest_sha256,
-        "observedAt": bundle.captured_at or now,
-        "collectedAt": now,
-        "tidbVersion": bundle.tidb_version,
-        "sqlCount": bundle.sql_count,
-        "sqlTexts": bundle.sql_texts,
-        "hasSchema": bundle.schema_text is not None,
-        "hasStats": bundle.stats_text is not None,
-        "hasExplain": bundle.explain_text is not None,
-        "errors": bundle.errors_text or "",
-        "meta": bundle.meta_text or "",
+        "schema_version": "evidence/v3",
+        "sql": {
+            "sql_digest": _sql_digest(sql_text),
+            "sql_text": sql_text,
+            "database": _database_from_meta(bundle.meta_text),
+            "table_name": _table_from_sql(sql_text),
+        },
+        "runtime": _parse_runtime(bundle),
+        "plan": _parse_plan(bundle.explain_text),
+        "stats": _parse_stats(bundle.stats_text),
+        "schema": _parse_schema(bundle.schema_text, sql_text),
+        "optional": {},
     }
+
+
+def _first_sql(bundle: PlanReplayerBundle) -> str:
+    return bundle.sql_texts[0] if bundle.sql_texts else ""
+
+
+def _sql_digest(sql_text: str) -> str:
+    """TiDB SQL digest 语义的 64 位十六进制（sha256 原文）。"""
+    if not sql_text:
+        return ""
+    return hashlib.sha256(sql_text.encode("utf-8")).hexdigest()
+
+
+def _database_from_meta(meta_text: str | None) -> str:
+    if not meta_text:
+        return ""
+    for line in meta_text.splitlines():
+        if ":" in line:
+            key, _, value = line.partition(":")
+            if key.strip().lower() in ("database", "db", "schema"):
+                value = value.strip()
+                if value:
+                    return value
+    return ""
+
+
+_TABLE_RE = re.compile(r"\bFROM\s+([`\w.]+)", re.IGNORECASE)
+
+
+def _table_from_sql(sql_text: str) -> str:
+    match = _TABLE_RE.search(sql_text or "")
+    return match.group(1) if match else ""
+
+
+def _parse_runtime(bundle: PlanReplayerBundle) -> dict:
+    # 离线 Plan Replayer 通常不含运行时指标；exec_count/window 取保守缺省，
+    # 诊断内核据此判定为「无运行时证据」而非伪造数字。
+    return {
+        "exec_count": 0,
+        "window_minutes": 1,
+    }
+
+
+_PLAN_OP_RE = re.compile(
+    r"(?P<op>[A-Za-z][A-Za-z0-9_]+)\s*(?:\(\s*)?(?P<table>[`\w.]+)?"
+    r"(?:[^\n]*?estRows[: ]?\s*(?P<est>\d+))?",
+    re.IGNORECASE,
+)
+
+
+def _parse_plan(explain_text: str | None) -> dict:
+    """从 explain 文本尽力提取算子行（operator/table/est_rows）。
+
+    保持确定性：仅取前若干行，失败时返回空 operator_rows。
+    """
+    if not explain_text:
+        return {"operator_rows": []}
+    rows: list[dict] = []
+    for line in explain_text.splitlines():
+        match = _PLAN_OP_RE.search(line)
+        if not match:
+            continue
+        operator = match.group("op")
+        if operator.lower() in ("explain", "id", "estrows", "task", "access", "object"):
+            continue
+        row: dict = {"operator": operator}
+        if match.group("table"):
+            row["table"] = match.group("table")
+        if match.group("est"):
+            row["est_rows"] = _safe_int(match.group("est"))
+        rows.append(row)
+        if len(rows) >= 128:
+            break
+    return {"operator_rows": rows}
+
+
+def _parse_stats(stats_text: str | None) -> dict:
+    if not stats_text:
+        return {}
+    stats: dict = {}
+    try:
+        data = json.loads(stats_text)
+    except json.JSONDecodeError:
+        data = None
+    if isinstance(data, dict):
+        _collect_stat_fields(data, stats)
+        if not stats:
+            # 表级嵌套：{"orders": {...}} → 取第一个表对象数值字段。
+            for value in data.values():
+                if isinstance(value, dict):
+                    _collect_stat_fields(value, stats)
+                    if stats:
+                        break
+        return stats
+    # 非 JSON：正则兜底提取 key=value / key: value。
+    for key in ("est_rows", "actual_rows", "row_count", "healthy"):
+        m = re.search(rf"\b{key}\b\s*[:=]\s*(\d+)", stats_text, re.IGNORECASE)
+        if m:
+            stats[key] = _safe_int(m.group(1))
+    return stats
+
+
+def _collect_stat_fields(data: dict, stats: dict) -> None:
+    for key in ("est_rows", "actual_rows", "row_count", "healthy"):
+        if isinstance(data.get(key), (int, float)):
+            stats[key] = _safe_int(data[key])
+
+
+_INDEX_INLINE_RE = re.compile(r"\b(?:KEY|INDEX)\s+([`\w]+)\s*\(([^)]+)\)", re.IGNORECASE)
+_INDEX_CREATE_RE = re.compile(
+    r"\b(?:CREATE\s+)?INDEX\s+([`\w]+)\s+ON\s+[`\w.]+\s*\(([^)]+)\)", re.IGNORECASE
+)
+
+
+def _parse_schema(schema_text: str | None, sql_text: str) -> dict:
+    result: dict = {}
+    if schema_text:
+        indexes: list[dict] = []
+        seen: set[str] = set()
+        for pattern in (_INDEX_CREATE_RE, _INDEX_INLINE_RE):
+            for m in pattern.finditer(schema_text):
+                name = m.group(1).strip("` ")
+                if name in seen:
+                    continue
+                seen.add(name)
+                columns = [c.strip("` ") for c in m.group(2).split(",") if c.strip()]
+                indexes.append({"name": name, "columns": columns})
+        if indexes:
+            result["indexes"] = indexes
+    filter_columns = _filter_columns_from_sql(sql_text)
+    if filter_columns:
+        result["filter_columns"] = filter_columns
+    return result
+
+
+_FILTER_COL_RE = re.compile(r"\b([a-zA-Z_][\w]*)\s*(?:=|>|<|>=|<=|!=|IN|LIKE)", re.IGNORECASE)
+
+
+def _filter_columns_from_sql(sql_text: str) -> list[str]:
+    columns: list[str] = []
+    for m in _FILTER_COL_RE.finditer(sql_text or ""):
+        col = m.group(1)
+        if col.lower() in ("select", "where", "and", "or", "from", "order", "group", "by", "limit"):
+            continue
+        if col not in columns:
+            columns.append(col)
+    return columns[:32]
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def plan_replayer_summary(bundle: PlanReplayerBundle) -> dict:
