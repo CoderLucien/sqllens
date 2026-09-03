@@ -2,36 +2,52 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import math
 import re
 import secrets
 import ssl
+import time
 import unicodedata
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from importlib import metadata
 from typing import Literal, Protocol, cast
 
 from asyncmy.connection import Connection as AsyncmyConnection
-from asyncmy.constants import CLIENT
+from asyncmy.constants import CLIENT, SERVER_STATUS
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from sqllens_api.evidence_connector import (
+    MAX_SAFE_INTEGER,
     DatabaseProduct,
     DetectionStatus,
+    JsonValue,
     QueryResult,
+    QueryValue,
     ReadOnlyQueryClient,
+    ServerQuery,
+    UnsafeServerQueryError,
+    ValidatedM0Select,
     VersionFingerprint,
+    bind_m0_ordinary_explain,
     detect_database_version,
     query_pack,
+    strict_json_bytes,
     validate_server_query,
 )
+from sqllens_api.evidence_connector.queries import _validate_bound_server_query
 
 ASYNCMY_VERSION = "0.2.14"
 CLIENT_MULTI_STATEMENTS = int(CLIENT.MULTI_STATEMENTS)
+SERVER_STATUS_NO_BACKSLASH_ESCAPES = int(SERVER_STATUS.SERVER_STATUS_NO_BACKSLASH_ESCAPES)
 M0_IO_TIMEOUT_SECONDS = 5.0
 _DNS_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+_EXECUTION_ID = re.compile(r"^exec_[a-f0-9]{16,64}$")
+_NAMED_PARAMETER = re.compile(r":([a-z][a-z0-9_]*)\b")
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 class M0ConnectionInput(BaseModel):
@@ -118,6 +134,8 @@ class _DriverCursor(Protocol):
 
     async def execute(self, query: str, args: object = None) -> object: ...
 
+    def mogrify(self, query: str, args: object = None) -> str: ...
+
     async def fetchmany(self, size: int | None = None) -> list[tuple[object, ...]]: ...
 
 
@@ -125,6 +143,7 @@ class _DriverConnection(Protocol):
     _client_flag: int
     _password: object
     _password_creator: object
+    server_status: int
 
     async def connect(self) -> None: ...
 
@@ -180,6 +199,7 @@ class M0LiveConnection:
     version: str | None = None
     _closed: bool = field(default=False, init=False, repr=False)
     _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _active_execution_id: str | None = field(default=None, init=False, repr=False)
 
     async def close(self) -> None:
         async with self._close_lock:
@@ -261,6 +281,239 @@ class M0LiveConnection:
         self.version = detected.version
         return detected.version
 
+    async def execute(
+        self,
+        *,
+        execution_id: str,
+        query: ServerQuery,
+        parameters: Mapping[str, QueryValue],
+    ) -> QueryResult:
+        """Execute one exact immutable query card with bound values."""
+
+        try:
+            registered = query_pack("tidb-8.5").get(query.query_id)
+            validate_server_query(query)
+        except (TypeError, ValueError, UnsafeServerQueryError):
+            raise M0DriverInvariantError from None
+        if registered != query:
+            raise M0DriverInvariantError
+        return await self._execute_bound(
+            execution_id=execution_id,
+            query=query,
+            parameters=parameters,
+        )
+
+    async def execute_ordinary_explain(
+        self,
+        *,
+        execution_id: str,
+        value: ValidatedM0Select,
+    ) -> QueryResult:
+        """Execute only the ordinary EXPLAIN rebuilt by the frozen binder."""
+
+        if value.database != self.database:
+            raise M0DriverInvariantError
+        try:
+            query = bind_m0_ordinary_explain(value)
+        except (TypeError, ValueError, UnsafeServerQueryError):
+            raise M0DriverInvariantError from None
+        return await self._execute_bound(
+            execution_id=execution_id,
+            query=query,
+            parameters={},
+        )
+
+    async def cancel(self, execution_id: str) -> None:
+        """Abort the socket when the exact active execution is cancelled."""
+
+        if execution_id == self._active_execution_id:
+            self.abort()
+
+    async def _execute_bound(
+        self,
+        *,
+        execution_id: str,
+        query: ServerQuery,
+        parameters: Mapping[str, QueryValue],
+    ) -> QueryResult:
+        template, arguments = _bind_driver_parameters(query, parameters)
+        if not _EXECUTION_ID.fullmatch(execution_id) or self._active_execution_id is not None:
+            raise M0DriverInvariantError
+        if self._closed:
+            raise M0TidbUnavailableError
+
+        self._active_execution_id = execution_id
+        started = time.monotonic_ns()
+        try:
+            _require_single_statement_capability(self._raw)
+            timeout_seconds = min(
+                self._io_timeout_seconds,
+                query.budget.timeout_ms / 1_000,
+            )
+            async with asyncio.timeout(timeout_seconds):
+                async with self._raw.cursor() as cursor:
+                    bound_sql = cursor.mogrify(template, arguments or None)
+                    _validate_driver_bound_sql(
+                        query,
+                        bound_sql,
+                        backslash_escapes=_driver_uses_backslash_escapes(self._raw),
+                    )
+                    _require_single_statement_capability(self._raw)
+                    await cursor.execute(template, arguments or None)
+                    rows = await cursor.fetchmany(query.budget.max_rows + 1)
+                    columns = _cursor_columns(cursor.description)
+            elapsed_ms = max(0, (time.monotonic_ns() - started) // 1_000_000)
+            return _build_query_result(
+                query=query,
+                columns=columns,
+                rows=rows,
+                elapsed_ms=elapsed_ms,
+            )
+        except TimeoutError:
+            await self.close()
+            raise M0TidbTimeoutError from None
+        except asyncio.CancelledError:
+            self.abort()
+            raise
+        except M0DriverInvariantError:
+            await self.close()
+            raise
+        except BaseException:
+            await self.close()
+            raise M0TidbUnavailableError from None
+        finally:
+            self._active_execution_id = None
+
+
+def _bind_driver_parameters(
+    query: ServerQuery,
+    parameters: Mapping[str, QueryValue],
+) -> tuple[str, tuple[QueryValue, ...]]:
+    if not isinstance(parameters, Mapping) or set(parameters) != set(query.parameters):
+        raise M0DriverInvariantError
+    ordered_names: list[str] = []
+
+    def replace_parameter(match: re.Match[str]) -> str:
+        ordered_names.append(match.group(1))
+        return "%s"
+
+    template = _NAMED_PARAMETER.sub(replace_parameter, query.sql)
+    if tuple(ordered_names) != query.parameters:
+        raise M0DriverInvariantError
+    arguments: list[QueryValue] = []
+    for name in ordered_names:
+        value = parameters[name]
+        if value is not None and type(value) not in (str, int, float, bool):
+            raise M0DriverInvariantError
+        if isinstance(value, float) and not math.isfinite(value):
+            raise M0DriverInvariantError
+        arguments.append(value)
+    return template, tuple(arguments)
+
+
+def _validate_driver_bound_sql(
+    query: ServerQuery,
+    bound_sql: str,
+    *,
+    backslash_escapes: bool,
+) -> None:
+    try:
+        _validate_bound_server_query(
+            query,
+            bound_sql,
+            backslash_escapes=backslash_escapes,
+        )
+    except UnsafeServerQueryError:
+        raise M0DriverInvariantError from None
+
+
+def _driver_uses_backslash_escapes(raw: _DriverConnection) -> bool:
+    try:
+        server_status = raw.server_status
+    except (AttributeError, RuntimeError):
+        raise M0DriverInvariantError from None
+    if type(server_status) is not int or server_status < 0:
+        raise M0DriverInvariantError
+    return not bool(server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES)
+
+
+def _build_query_result(
+    *,
+    query: ServerQuery,
+    columns: tuple[str, ...],
+    rows: list[tuple[object, ...]],
+    elapsed_ms: int,
+) -> QueryResult:
+    if columns != query.result_columns or len(rows) > query.budget.max_rows + 1:
+        raise M0TidbUnavailableError
+    normalized_rows: list[dict[str, QueryValue]] = []
+    for row in rows[: query.budget.max_rows]:
+        if not isinstance(row, tuple) or len(row) != len(columns):
+            raise M0TidbUnavailableError
+        normalized_rows.append(
+            {
+                column: _normalize_query_value(value)
+                for column, value in zip(columns, row, strict=True)
+            }
+        )
+    try:
+        observed_bytes = len(
+            strict_json_bytes(
+                cast(
+                    JsonValue,
+                    {
+                        "columns": list(columns),
+                        "rows": normalized_rows,
+                    },
+                )
+            )
+        )
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        raise M0TidbUnavailableError from None
+    if observed_bytes > query.budget.max_bytes:
+        raise M0TidbUnavailableError
+    return QueryResult(
+        columns=columns,
+        rows=tuple(normalized_rows),
+        truncated=len(rows) > query.budget.max_rows,
+        observed_bytes=observed_bytes,
+        elapsed_ms=elapsed_ms,
+    )
+
+
+def _normalize_query_value(value: object) -> QueryValue:
+    if value is None or type(value) in (str, bool):
+        return cast(QueryValue, value)
+    if type(value) is int:
+        integer = value
+        if abs(integer) > MAX_SAFE_INTEGER:
+            raise M0TidbUnavailableError
+        return integer
+    if type(value) is float:
+        number = value
+        if not math.isfinite(number):
+            raise M0TidbUnavailableError
+        return number
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise M0TidbUnavailableError
+        if value == value.to_integral_value():
+            integer = int(value)
+            if abs(integer) > MAX_SAFE_INTEGER:
+                raise M0TidbUnavailableError
+            return integer
+        number = float(value)
+        if not math.isfinite(number):
+            raise M0TidbUnavailableError
+        return number
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise M0TidbUnavailableError
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    if isinstance(value, date):
+        return value.isoformat()
+    raise M0TidbUnavailableError
+
 
 def _cursor_columns(description: tuple[tuple[object, ...], ...] | None) -> tuple[str, ...]:
     if description is None:
@@ -269,7 +522,9 @@ def _cursor_columns(description: tuple[tuple[object, ...], ...] | None) -> tuple
     for item in description:
         if not item or not isinstance(item[0], str):
             return ()
-        columns.append(item[0].lower())
+        raw_name = item[0].strip()
+        normalized = _CAMEL_BOUNDARY.sub("_", raw_name).lower().replace(" ", "_")
+        columns.append(normalized)
     return tuple(columns)
 
 

@@ -78,6 +78,7 @@ class FakeConnection:
         self._client_flag = int(kwargs["client_flag"]) | CLIENT_MULTI_STATEMENTS
         self._password = kwargs["password"]
         self._password_creator: object | None = object()
+        self.server_status = 0
         self.identity_rows = self.identity_rows_default
         self.connect_client_flag: int | None = None
         self.connect_password: object = None
