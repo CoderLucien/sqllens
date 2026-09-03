@@ -13,6 +13,8 @@ from sqllens_api.evidence_connector import (
     QueryRuPolicy,
     ServerQuery,
     UnsafeServerQueryError,
+    ValidatedM0Select,
+    bind_m0_ordinary_explain,
     capability_matrix,
     query_pack,
     validate_server_query,
@@ -283,3 +285,208 @@ def test_recorded_fixture_rows_match_the_server_owned_registry(pack_id: str) -> 
 def test_unknown_pack_has_no_query_registry() -> None:
     with pytest.raises(ValueError, match="unsupported version pack"):
         query_pack("mysql-8.0")
+
+
+def test_tidb_m0_query_cards_are_exactly_bounded_and_secret_free() -> None:
+    queries = query_pack("tidb-8.5")
+
+    candidate = queries["sql_candidates.current_user"]
+    assert candidate.parameters == ("window_start", "window_end", "schema_name")
+    assert candidate.result_columns == (
+        "sql_digest",
+        "execution_count",
+        "p95_ms",
+        "average_scan_rows",
+        "average_return_rows",
+        "last_seen",
+    )
+    assert candidate.budget.timeout_ms == 5_000
+    assert candidate.budget.max_rows == 20
+    assert candidate.budget.max_bytes == 262_144
+    assert "SUBSTRING_INDEX(CURRENT_USER(), '@', 1)" in candidate.sql
+    assert "query_sample_text" not in candidate.sql.lower()
+    assert "digest_text" not in candidate.sql.lower()
+    assert "LIMIT 200" in candidate.sql
+    assert candidate.sql.rstrip().endswith("LIMIT 20")
+
+    digest = queries["sql_digest.encode"]
+    assert digest.parameters == ("sql_text",)
+    assert digest.result_columns == ("sql_digest",)
+    assert digest.cardinality is QueryCardinality.SINGLE_ROW
+    assert "TIDB_ENCODE_SQL_DIGEST(:sql_text)" in digest.sql
+
+    index = queries["index.current_table"]
+    assert index.parameters == ("schema_name", "table_name")
+    assert index.result_columns == (
+        "table_schema",
+        "table_name",
+        "non_unique",
+        "key_name",
+        "seq_in_index",
+        "column_name",
+        "is_visible",
+    )
+    assert index.required_capability == "schema_metadata"
+    assert index.budget.max_rows == 200
+
+    statistics = queries["statistics.health.current_table"]
+    assert statistics.parameters == ("schema_name", "table_name")
+    assert statistics.result_columns == (
+        "db_name",
+        "table_name",
+        "partition_name",
+        "healthy",
+    )
+    assert statistics.required_capability == "statistics_metadata"
+    assert statistics.cardinality is QueryCardinality.SINGLE_ROW
+    assert statistics.budget.timeout_ms == 5_000
+    assert statistics.budget.max_rows == 1
+    assert statistics.sql == (
+        "SHOW STATS_HEALTHY WHERE db_name = :schema_name "
+        "AND table_name = :table_name AND partition_name = ''"
+    )
+
+    for query_id in (
+        "sql_candidates.current_user",
+        "sql_digest.encode",
+        "index.current_table",
+        "statistics.health.current_table",
+    ):
+        validate_server_query(queries[query_id])
+
+
+def test_non_tidb_pack_does_not_expose_m0_query_cards() -> None:
+    queries = query_pack("pingkaidb-7.1")
+
+    assert "sql_candidates.current_user" not in queries
+    assert "sql_digest.encode" not in queries
+    assert "index.current_table" not in queries
+    assert "statistics.health.current_table" not in queries
+
+
+def test_statistics_card_is_the_only_allowed_show_stats_command() -> None:
+    statistics = query_pack("tidb-8.5")["statistics.health.current_table"]
+    validate_server_query(statistics)
+
+    with pytest.raises(UnsafeServerQueryError):
+        validate_server_query(replace(statistics, sql="SHOW STATS_HEALTHY"))
+    with pytest.raises(UnsafeServerQueryError):
+        validate_server_query(
+            replace(
+                statistics,
+                sql=(
+                    "SHOW STATS_HEALTHY WHERE db_name = :schema_name "
+                    "AND table_name = :table_name; DELETE FROM orders"
+                ),
+            )
+        )
+
+
+def test_m0_ordinary_explain_binder_revalidates_and_hides_sql() -> None:
+    value = ValidatedM0Select(
+        canonical_sql="SELECT id FROM orders WHERE customer_id = 42",
+        sql_digest="a" * 64,
+        database="shop",
+        table_name="orders",
+    )
+
+    query = bind_m0_ordinary_explain(value)
+
+    assert query.query_id == "ordinary_plan.validated_select"
+    assert query.query_revision == "tidb-8.5/ordinary_plan.validated_select-v1"
+    assert query.parameters == ()
+    assert query.result_columns == (
+        "id",
+        "est_rows",
+        "task",
+        "access_object",
+        "operator_info",
+    )
+    assert query.budget.timeout_ms == 5_000
+    assert query.budget.max_rows == 200
+    assert query.budget.max_bytes == 524_288
+    assert query.sql == ("EXPLAIN FORMAT='brief' SELECT id FROM orders WHERE customer_id = 42")
+    assert value.canonical_sql not in repr(value)
+    assert value.canonical_sql not in repr(query)
+    validate_server_query(query)
+
+
+@pytest.mark.parametrize(
+    ("canonical_sql", "database", "table_name"),
+    [
+        ("DELETE FROM orders", "shop", "orders"),
+        ("EXPLAIN SELECT id FROM orders", "shop", "orders"),
+        (
+            "SELECT o.id FROM orders AS o JOIN customers AS c ON c.id = o.customer_id",
+            "shop",
+            "orders",
+        ),
+        ("SELECT id FROM orders, customers", "shop", "orders"),
+        ("SELECT id FROM (SELECT id FROM orders) AS derived", "shop", "orders"),
+        ("SELECT id FROM orders FOR UPDATE", "shop", "orders"),
+        ("SELECT id FROM other.orders", "shop", "orders"),
+        ("SELECT id FROM orders", "shop", "customers"),
+        ("SELECT id FROM orders; SELECT id FROM customers", "shop", "orders"),
+        ("select id from orders", "shop", "orders"),
+    ],
+)
+def test_m0_ordinary_explain_binder_rejects_untrusted_or_mismatched_selects(
+    canonical_sql: str,
+    database: str,
+    table_name: str,
+) -> None:
+    value = ValidatedM0Select(
+        canonical_sql=canonical_sql,
+        sql_digest="a" * 64,
+        database=database,
+        table_name=table_name,
+    )
+
+    with pytest.raises(UnsafeServerQueryError):
+        bind_m0_ordinary_explain(value)
+
+
+def test_m0_ordinary_explain_binder_accepts_one_base_table_through_cte() -> None:
+    canonical_sql = (
+        "WITH recent AS (SELECT id FROM orders WHERE customer_id = 42) SELECT id FROM recent"
+    )
+    value = ValidatedM0Select(
+        canonical_sql=canonical_sql,
+        sql_digest="0" * 64,
+        database="shop",
+        table_name="orders",
+    )
+
+    query = bind_m0_ordinary_explain(value)
+
+    assert query.sql == f"EXPLAIN FORMAT='brief' {canonical_sql}"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        ValidatedM0Select(
+            canonical_sql="SELECT id FROM orders",
+            sql_digest="A" * 64,
+            database="shop",
+            table_name="orders",
+        ),
+        ValidatedM0Select(
+            canonical_sql="SELECT id FROM orders",
+            sql_digest="a" * 63,
+            database="shop",
+            table_name="orders",
+        ),
+        ValidatedM0Select(
+            canonical_sql="SELECT id FROM orders",
+            sql_digest="a" * 64,
+            database="",
+            table_name="orders",
+        ),
+    ],
+)
+def test_m0_ordinary_explain_binder_rejects_invalid_identity(
+    value: ValidatedM0Select,
+) -> None:
+    with pytest.raises(UnsafeServerQueryError):
+        bind_m0_ordinary_explain(value)

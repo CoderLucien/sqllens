@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -9,6 +10,7 @@ from types import MappingProxyType
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ErrorLevel, SqlglotError
+from sqlglot.optimizer.scope import Scope, traverse_scope
 
 from sqllens_api.evidence_connector.capabilities import capability_matrix
 
@@ -60,6 +62,16 @@ class ServerQuery:
     budget: QueryBudget
 
 
+@dataclass(frozen=True, slots=True)
+class ValidatedM0Select:
+    """A request-local SELECT identity verified before ordinary EXPLAIN binding."""
+
+    canonical_sql: str = field(repr=False)
+    sql_digest: str
+    database: str
+    table_name: str
+
+
 _MUTATING_OR_CONTROL_EXPRESSIONS = (
     exp.Insert,
     exp.Update,
@@ -87,6 +99,7 @@ _MUTATING_OR_CONTROL_EXPRESSIONS = (
 )
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.]*$")
 _PARAMETER = re.compile(r"^[a-z][a-z0-9_]*$")
+_SQL_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _SENSITIVE_SOURCE_COLUMNS = frozenset(
     {
         "backoff_detail",
@@ -141,11 +154,46 @@ _SLOW_QUERY_COLUMNS = (
     "disk_max",
     "result_rows",
 )
+_M0_CANDIDATE_COLUMNS = (
+    "sql_digest",
+    "execution_count",
+    "p95_ms",
+    "average_scan_rows",
+    "average_return_rows",
+    "last_seen",
+)
+_M0_INDEX_COLUMNS = (
+    "table_schema",
+    "table_name",
+    "non_unique",
+    "key_name",
+    "seq_in_index",
+    "column_name",
+    "is_visible",
+)
+_M0_STATISTICS_COLUMNS = ("db_name", "table_name", "partition_name", "healthy")
+_M0_ORDINARY_PLAN_COLUMNS = (
+    "id",
+    "est_rows",
+    "task",
+    "access_object",
+    "operator_info",
+)
+_M0_STATISTICS_SQL = (
+    "SHOW STATS_HEALTHY WHERE db_name = :schema_name "
+    "AND table_name = :table_name AND partition_name = ''"
+)
+_M0_STATISTICS_BOUND_PREFIX = "SHOW STATS_HEALTHY WHERE db_name = "
+_M0_STATISTICS_BOUND_MIDDLE = " AND table_name = "
+_M0_STATISTICS_BOUND_SUFFIX = " AND partition_name = ''"
 
 
 def validate_server_query(query: ServerQuery) -> None:
     _validate_metadata(query)
     _validate_budget(query.budget)
+    if query.query_id == "statistics.health.current_table":
+        _validate_m0_statistics_query(query)
+        return
     statement = _parse_single_statement(query.sql)
 
     if any(isinstance(node, _MUTATING_OR_CONTROL_EXPRESSIONS) for node in statement.walk()):
@@ -183,6 +231,130 @@ def validate_server_query(query: ServerQuery) -> None:
     if query_expression is not None and not is_explain:
         _validate_result_projection(query, query_expression)
         _validate_cardinality(query, query_expression)
+
+
+def _validate_bound_server_query(
+    query: ServerQuery,
+    bound_sql: str,
+    *,
+    backslash_escapes: bool,
+) -> None:
+    """Reparse one driver-mogrified query without logging its bound literals."""
+
+    if not isinstance(bound_sql, str) or not 1 <= len(bound_sql.encode("utf-8")) <= 131_072:
+        raise UnsafeServerQueryError("bound server query is empty or too large")
+    if query.query_id == "statistics.health.current_table":
+        _validate_bound_m0_statistics_query(
+            bound_sql,
+            backslash_escapes=backslash_escapes,
+        )
+        return
+    statement = _parse_single_statement(bound_sql)
+    if next(statement.find_all(exp.Placeholder), None) is not None:
+        raise UnsafeServerQueryError("bound server query retains a placeholder")
+    if any(isinstance(node, _MUTATING_OR_CONTROL_EXPRESSIONS) for node in statement.walk()) and (
+        query.query_id != "statistics.health.current_table"
+        or not isinstance(statement, exp.Command)
+    ):
+        raise UnsafeServerQueryError("bound server query must remain read-only")
+    if any(isinstance(node, exp.Star) for node in statement.walk()):
+        raise UnsafeServerQueryError("bound server query wildcard projections are not allowed")
+
+    if isinstance(statement, exp.Describe):
+        style = statement.args.get("style")
+        if style is not None and str(style).upper() == "ANALYZE":
+            raise UnsafeServerQueryError("EXPLAIN ANALYZE is not allowed")
+        if query.query_id != "ordinary_plan.validated_select" or not isinstance(
+            statement.this, exp.Query
+        ):
+            raise UnsafeServerQueryError("bound ordinary EXPLAIN is invalid")
+        return
+    if not isinstance(statement, exp.Query):
+        raise UnsafeServerQueryError("bound server query is not a SELECT")
+    _validate_result_projection(query, statement)
+    _validate_cardinality(query, statement)
+
+
+def _validate_bound_m0_statistics_query(
+    bound_sql: str,
+    *,
+    backslash_escapes: bool,
+) -> None:
+    """Validate the sole TiDB SHOW shape without a parser fallback that logs literals."""
+
+    if type(backslash_escapes) is not bool or not bound_sql.startswith(_M0_STATISTICS_BOUND_PREFIX):
+        raise UnsafeServerQueryError("bound statistics query is invalid")
+    position = len(_M0_STATISTICS_BOUND_PREFIX)
+    position = _consume_mysql_string_literal(
+        bound_sql,
+        position,
+        backslash_escapes=backslash_escapes,
+    )
+    if not bound_sql.startswith(_M0_STATISTICS_BOUND_MIDDLE, position):
+        raise UnsafeServerQueryError("bound statistics query is invalid")
+    position += len(_M0_STATISTICS_BOUND_MIDDLE)
+    position = _consume_mysql_string_literal(
+        bound_sql,
+        position,
+        backslash_escapes=backslash_escapes,
+    )
+    if bound_sql[position:] != _M0_STATISTICS_BOUND_SUFFIX:
+        raise UnsafeServerQueryError("bound statistics query is invalid")
+
+
+def _consume_mysql_string_literal(
+    sql: str,
+    start: int,
+    *,
+    backslash_escapes: bool,
+) -> int:
+    if start >= len(sql) or sql[start] != "'":
+        raise UnsafeServerQueryError("bound statistics query is invalid")
+    position = start + 1
+    while position < len(sql):
+        character = sql[position]
+        if unicodedata.category(character).startswith("C"):
+            raise UnsafeServerQueryError("bound statistics query is invalid")
+        if character == "\\" and backslash_escapes:
+            position += 2
+            if position > len(sql):
+                raise UnsafeServerQueryError("bound statistics query is invalid")
+            continue
+        if character == "'":
+            if position + 1 < len(sql) and sql[position + 1] == "'":
+                position += 2
+                continue
+            return position + 1
+        position += 1
+    raise UnsafeServerQueryError("bound statistics query is invalid")
+
+
+def bind_m0_ordinary_explain(value: ValidatedM0Select) -> ServerQuery:
+    """Revalidate and bind the sole M0 dynamic ordinary-EXPLAIN query."""
+
+    _validate_m0_identity(value)
+    statement, physical_table = _validate_m0_select_statement(value.canonical_sql)
+    canonical_sql = statement.sql(dialect="mysql", pretty=False)
+    if canonical_sql != value.canonical_sql:
+        raise UnsafeServerQueryError("M0 SELECT is not in canonical form")
+    if physical_table.name != value.table_name:
+        raise UnsafeServerQueryError("M0 SELECT table identity does not match")
+    table_database = physical_table.db
+    if table_database and table_database != value.database:
+        raise UnsafeServerQueryError("M0 SELECT database identity does not match")
+
+    query = _query(
+        "tidb-8.5",
+        "ordinary_plan.validated_select",
+        f"EXPLAIN FORMAT='brief' {canonical_sql}",
+        parameters=(),
+        result_columns=_M0_ORDINARY_PLAN_COLUMNS,
+        required_capability="ordinary_explain",
+        cardinality=QueryCardinality.BOUNDED_ROWS,
+        budget=_budget(timeout_ms=5_000, max_rows=200, max_bytes=524_288),
+    )
+    validate_server_query(query)
+    return query
 
 
 def query_pack(pack_id: str) -> Mapping[str, ServerQuery]:
@@ -229,6 +401,76 @@ def _validate_budget(budget: QueryBudget) -> None:
         raise UnsafeServerQueryError("query priority policy is invalid")
     if budget.kill_switch_required is not True:
         raise UnsafeServerQueryError("query kill switch is required")
+
+
+def _validate_m0_statistics_query(query: ServerQuery) -> None:
+    """Allow one exact TiDB SHOW command without widening generic validation."""
+
+    if (
+        query.pack_id != "tidb-8.5"
+        or query.pack_revision != "tidb-8.5/queries-v2"
+        or query.query_revision != "tidb-8.5/statistics.health.current_table-v1"
+        or query.sql != _M0_STATISTICS_SQL
+        or query.parameters != ("schema_name", "table_name")
+        or query.result_columns != _M0_STATISTICS_COLUMNS
+        or query.required_capability != "statistics_metadata"
+        or query.cardinality is not QueryCardinality.SINGLE_ROW
+        or query.budget != _budget(timeout_ms=5_000, max_rows=1, max_bytes=65_536)
+    ):
+        raise UnsafeServerQueryError("statistics query does not match the immutable M0 card")
+
+
+def _validate_m0_identity(value: ValidatedM0Select) -> None:
+    if not _SQL_DIGEST.fullmatch(value.sql_digest):
+        raise UnsafeServerQueryError("M0 SQL digest is invalid")
+    for identity in (value.database, value.table_name):
+        if (
+            not 1 <= len(identity) <= 64
+            or identity != identity.strip()
+            or any(unicodedata.category(character).startswith("C") for character in identity)
+        ):
+            raise UnsafeServerQueryError("M0 SELECT identity is invalid")
+    if not 1 <= len(value.canonical_sql.encode("utf-8")) <= 32_768:
+        raise UnsafeServerQueryError("M0 SELECT is empty or too large")
+
+
+def _validate_m0_select_statement(sql: str) -> tuple[exp.Select, exp.Table]:
+    statement = _parse_single_statement(sql)
+    if not isinstance(statement, exp.Select):
+        raise UnsafeServerQueryError("M0 diagnosis requires one SELECT")
+    if any(isinstance(node, _MUTATING_OR_CONTROL_EXPRESSIONS) for node in statement.walk()):
+        raise UnsafeServerQueryError("M0 SELECT must be non-locking and read-only")
+    if next(statement.find_all(exp.Join), None) is not None:
+        raise UnsafeServerQueryError("M0 SELECT cannot join multiple sources")
+    if next(statement.find_all(exp.Subquery), None) is not None:
+        raise UnsafeServerQueryError("M0 SELECT cannot use a derived or scalar subquery")
+    with_expression = statement.args.get("with_")
+    if isinstance(with_expression, exp.With) and bool(with_expression.args.get("recursive")):
+        raise UnsafeServerQueryError("M0 SELECT cannot use a recursive CTE")
+
+    physical_tables: list[exp.Table] = []
+    try:
+        scopes = list(traverse_scope(statement))
+    except (SqlglotError, ValueError, RecursionError):
+        raise UnsafeServerQueryError("M0 SELECT scope analysis failed") from None
+    if not scopes:
+        raise UnsafeServerQueryError("M0 SELECT requires one base table")
+    for scope in scopes:
+        if len(scope.selected_sources) != 1:
+            raise UnsafeServerQueryError("M0 SELECT requires one source per scope")
+        for _name, (_node, source) in scope.selected_sources.items():
+            if isinstance(source, exp.Table):
+                physical_tables.append(source)
+            elif isinstance(source, Scope) and source.is_cte and not source.is_derived_table:
+                continue
+            else:
+                raise UnsafeServerQueryError("M0 SELECT source is not a base table or CTE")
+    if len(physical_tables) != 1:
+        raise UnsafeServerQueryError("M0 SELECT requires exactly one base table")
+    physical_table = physical_tables[0]
+    if not physical_table.name or physical_table.catalog:
+        raise UnsafeServerQueryError("M0 SELECT table identity is unsupported")
+    return statement, physical_table
 
 
 def _parse_single_statement(sql: str) -> exp.Expr:
@@ -315,7 +557,7 @@ def _query(
 
 def _build_query_pack(pack_id: str) -> Mapping[str, ServerQuery]:
     statement_columns = ",\n        ".join(_STATEMENT_SUMMARY_COLUMNS)
-    queries = (
+    common_queries = (
         _query(
             pack_id,
             "server.identity",
@@ -375,9 +617,99 @@ LIMIT 200
             revision=2,
         ),
     )
+    m0_queries: tuple[ServerQuery, ...] = ()
+    if pack_id == "tidb-8.5":
+        m0_queries = (
+            _query(
+                pack_id,
+                "sql_candidates.current_user",
+                _m0_candidate_sql(),
+                parameters=("window_start", "window_end", "schema_name"),
+                result_columns=_M0_CANDIDATE_COLUMNS,
+                required_capability=None,
+                cardinality=QueryCardinality.BOUNDED_ROWS,
+                budget=_budget(timeout_ms=5_000, max_rows=20, max_bytes=262_144),
+            ),
+            _query(
+                pack_id,
+                "sql_digest.encode",
+                "SELECT TIDB_ENCODE_SQL_DIGEST(:sql_text) AS sql_digest",
+                parameters=("sql_text",),
+                result_columns=("sql_digest",),
+                required_capability=None,
+                cardinality=QueryCardinality.SINGLE_ROW,
+                budget=_budget(timeout_ms=2_000, max_rows=1, max_bytes=16_384),
+            ),
+            _query(
+                pack_id,
+                "index.current_table",
+                """\
+SELECT
+    table_schema,
+    table_name,
+    non_unique,
+    key_name,
+    seq_in_index,
+    column_name,
+    is_visible
+FROM information_schema.tidb_indexes
+WHERE table_schema = :schema_name
+  AND table_name = :table_name
+ORDER BY key_name, seq_in_index
+LIMIT 200
+""",
+                parameters=("schema_name", "table_name"),
+                result_columns=_M0_INDEX_COLUMNS,
+                required_capability="schema_metadata",
+                cardinality=QueryCardinality.BOUNDED_ROWS,
+                budget=_budget(timeout_ms=5_000, max_rows=200, max_bytes=524_288),
+            ),
+            _query(
+                pack_id,
+                "statistics.health.current_table",
+                _M0_STATISTICS_SQL,
+                parameters=("schema_name", "table_name"),
+                result_columns=_M0_STATISTICS_COLUMNS,
+                required_capability="statistics_metadata",
+                cardinality=QueryCardinality.SINGLE_ROW,
+                budget=_budget(timeout_ms=5_000, max_rows=1, max_bytes=65_536),
+            ),
+        )
+    queries = (*common_queries, *m0_queries)
     for query in queries:
         validate_server_query(query)
     return MappingProxyType({query.query_id: query for query in queries})
+
+
+def _m0_candidate_sql() -> str:
+    return """\
+SELECT
+    observations.sql_digest AS sql_digest,
+    COUNT(observations.sql_digest) AS execution_count,
+    ROUND(APPROX_PERCENTILE(observations.query_time, 95) * 1000) AS p95_ms,
+    ROUND(AVG(observations.total_keys)) AS average_scan_rows,
+    ROUND(AVG(observations.result_rows)) AS average_return_rows,
+    ROUND(UNIX_TIMESTAMP(MAX(observations.observed_at)) * 1000) AS last_seen
+FROM (
+    SELECT
+        time AS observed_at,
+        digest AS sql_digest,
+        query_time,
+        total_keys,
+        result_rows
+    FROM information_schema.slow_query
+    WHERE time >= :window_start
+      AND time <= :window_end
+      AND db = :schema_name
+      AND user = SUBSTRING_INDEX(CURRENT_USER(), '@', 1)
+      AND digest IS NOT NULL
+    ORDER BY time DESC
+    LIMIT 200
+) AS observations
+GROUP BY observations.sql_digest
+ORDER BY p95_ms DESC, execution_count DESC, sql_digest
+LIMIT 20
+"""
 
 
 def _slow_query_sql(table: str, *, current_user_only: bool) -> str:

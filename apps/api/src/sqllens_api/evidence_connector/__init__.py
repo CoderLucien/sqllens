@@ -38,6 +38,8 @@ from sqllens_api.evidence_connector.queries import (
     QueryRuPolicy,
     ServerQuery,
     UnsafeServerQueryError,
+    ValidatedM0Select,
+    bind_m0_ordinary_explain,
     query_pack,
     validate_server_query,
 )
@@ -77,7 +79,9 @@ __all__ = [
     "ServerQuery",
     "UnsafeServerQueryError",
     "UnsupportedVersionPackError",
+    "ValidatedM0Select",
     "VersionFingerprint",
+    "bind_m0_ordinary_explain",
     "build_managed_evidence",
     "canonical_json_bytes",
     "canonical_sha256",
