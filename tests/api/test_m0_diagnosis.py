@@ -11,7 +11,14 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqllens_api.app import create_app
 from sqllens_api.config import Settings
-from sqllens_api.evidence_connector import QueryResult, QueryValue, ServerQuery, query_pack
+from sqllens_api.evidence_connector import (
+    QueryResult,
+    QueryValue,
+    ServerQuery,
+    ValidatedM0Select,
+    bind_m0_ordinary_explain,
+    query_pack,
+)
 from sqllens_api.m0_connection import (
     M0BusyError,
     M0ConnectionView,
@@ -23,6 +30,7 @@ from sqllens_api.m0_diagnosis import (
     M0DiagnosisInput,
     M0DiagnosisService,
     M0DiagnosisValidationError,
+    M0RawDiagnosis,
     parse_m0_select,
 )
 
@@ -55,11 +63,13 @@ class CandidateStore:
         self.connected = True
         self.busy = False
         self.force_close_calls = 0
+        self.use_entries = 0
 
     @asynccontextmanager
     async def use(self) -> AsyncIterator[CandidateClient]:
         if self.busy:
             raise M0BusyError
+        self.use_entries += 1
         yield self.client
 
     async def force_close(self) -> None:
@@ -82,9 +92,61 @@ class CandidateStore:
         return None
 
 
+class DiagnosisClient:
+    def __init__(self, *, sql_digest: str = "a" * 64) -> None:
+        self.sql_digest = sql_digest
+        self.calls: list[tuple[str, ServerQuery, Mapping[str, QueryValue]]] = []
+        self.ordinary_calls: list[tuple[str, ValidatedM0Select]] = []
+        self.events: list[str] = []
+        self.results: dict[str, QueryResult] = {}
+
+    async def execute(
+        self,
+        *,
+        execution_id: str,
+        query: ServerQuery,
+        parameters: Mapping[str, QueryValue],
+    ) -> QueryResult:
+        self.calls.append((execution_id, query, parameters))
+        self.events.append(query.query_id)
+        if query.query_id == "sql_digest.encode":
+            return bounded_result(query, rows=({"sql_digest": self.sql_digest},))
+        return self.results.get(query.query_id, bounded_result(query))
+
+    async def execute_ordinary_explain(
+        self,
+        *,
+        execution_id: str,
+        value: ValidatedM0Select,
+    ) -> QueryResult:
+        self.ordinary_calls.append((execution_id, value))
+        bound = bind_m0_ordinary_explain(value)
+        self.events.append(bound.query_id)
+        return self.results.get(bound.query_id, bounded_result(bound))
+
+    async def cancel(self, _execution_id: str) -> None:
+        return None
+
+
 FIXED_NOW = datetime(2026, 9, 3, 6, 30, tzinfo=UTC)
 LOCAL_ORIGIN = "http://localhost:18080"
 VALID_SQL_DIGEST = "a" * 64
+
+
+def bounded_result(
+    query: ServerQuery,
+    *,
+    rows: tuple[Mapping[str, QueryValue], ...] = (),
+    truncated: bool = False,
+    observed_bytes: int = 128,
+) -> QueryResult:
+    return QueryResult(
+        columns=query.result_columns,
+        rows=rows,
+        truncated=truncated,
+        observed_bytes=observed_bytes,
+        elapsed_ms=20,
+    )
 
 
 def test_diagnosis_input_is_closed_strict_and_excludes_sql_from_repr() -> None:
@@ -221,6 +283,223 @@ def test_parse_m0_select_never_logs_or_raises_with_raw_sql(
 
     assert marker not in str(caught.value)
     assert marker not in caplog.text
+
+
+def diagnosis_input(
+    *, sql_text: str = "SELECT id FROM orders WHERE customer_id = 42"
+) -> M0DiagnosisInput:
+    return M0DiagnosisInput(
+        sql_digest=VALID_SQL_DIGEST,
+        sql_text=sql_text,
+        window_minutes=30,
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_diagnosis_verifies_digest_then_collects_one_bounded_sequence() -> None:
+    diagnosis_client = DiagnosisClient()
+    store = CandidateStore(cast(Any, diagnosis_client))
+    execution_ids = iter(f"exec_{index:016x}" for index in range(6))
+    service = M0DiagnosisService(
+        store=cast(Any, store),
+        clock=lambda: FIXED_NOW,
+        execution_id_factory=lambda: next(execution_ids),
+    )
+
+    collected = await service.collect_diagnosis(diagnosis_input())
+
+    assert isinstance(collected, M0RawDiagnosis)
+    assert collected.database == "shop"
+    assert collected.sql_digest == VALID_SQL_DIGEST
+    assert collected.table_name == "orders"
+    assert collected.predicate_columns == ("customer_id",)
+    assert collected.window_start == datetime(2026, 9, 3, 6, 0, tzinfo=UTC)
+    assert collected.window_end == FIXED_NOW
+    assert [item.query.query_id for item in collected.results] == [
+        "slow_query.current_user",
+        "statement_summary.cross_user",
+        "ordinary_plan.validated_select",
+        "index.current_table",
+        "statistics.health.current_table",
+    ]
+    assert diagnosis_client.events == [
+        "sql_digest.encode",
+        "slow_query.current_user",
+        "statement_summary.cross_user",
+        "ordinary_plan.validated_select",
+        "index.current_table",
+        "statistics.health.current_table",
+    ]
+    assert store.use_entries == 1
+    assert store.force_close_calls == 0
+    digest_call = diagnosis_client.calls[0]
+    assert digest_call[2] == {"sql_text": diagnosis_input().sql_text}
+    assert all(
+        call[1].query_id != "ordinary_plan.validated_select" for call in diagnosis_client.calls
+    )
+    assert len(diagnosis_client.ordinary_calls) == 1
+    calls_by_id = {call[1].query_id: call[2] for call in diagnosis_client.calls}
+    assert calls_by_id["slow_query.current_user"] == {
+        "window_start": "2026-09-03T06:00:00Z",
+        "window_end": "2026-09-03T06:30:00Z",
+        "schema_name": "shop",
+        "sql_digest": VALID_SQL_DIGEST,
+    }
+    assert calls_by_id["statement_summary.cross_user"] == calls_by_id["slow_query.current_user"]
+    assert calls_by_id["index.current_table"] == {
+        "schema_name": "shop",
+        "table_name": "orders",
+    }
+    assert calls_by_id["statistics.health.current_table"] == {
+        "schema_name": "shop",
+        "table_name": "orders",
+    }
+    ordinary = diagnosis_client.ordinary_calls[0][1]
+    assert ordinary.sql_digest == VALID_SQL_DIGEST
+    assert ordinary.database == "shop"
+    assert ordinary.table_name == "orders"
+    assert ordinary.canonical_sql == diagnosis_input().sql_text
+    assert diagnosis_input().sql_text not in repr(collected)
+
+
+@pytest.mark.asyncio
+async def test_collect_diagnosis_skips_index_roles_when_sql_has_no_predicates() -> None:
+    diagnosis_client = DiagnosisClient()
+    store = CandidateStore(cast(Any, diagnosis_client))
+    service = M0DiagnosisService(store=cast(Any, store), clock=lambda: FIXED_NOW)
+
+    collected = await service.collect_diagnosis(diagnosis_input(sql_text="SELECT id FROM orders"))
+
+    assert [item.query.query_id for item in collected.results] == [
+        "slow_query.current_user",
+        "statement_summary.cross_user",
+        "statistics.health.current_table",
+    ]
+    assert diagnosis_client.events == [
+        "sql_digest.encode",
+        "slow_query.current_user",
+        "statement_summary.cross_user",
+        "statistics.health.current_table",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_collect_diagnosis_rejects_digest_mismatch_without_closing_healthy_socket() -> None:
+    diagnosis_client = DiagnosisClient(sql_digest="b" * 64)
+    store = CandidateStore(cast(Any, diagnosis_client))
+    service = M0DiagnosisService(store=cast(Any, store), clock=lambda: FIXED_NOW)
+
+    with pytest.raises(M0DiagnosisValidationError):
+        await service.collect_diagnosis(diagnosis_input())
+
+    assert diagnosis_client.events == ["sql_digest.encode"]
+    assert store.use_entries == 1
+    assert store.force_close_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "digest_result",
+    [
+        bounded_result(
+            query_pack("tidb-8.5")["sql_digest.encode"],
+            rows=(),
+        ),
+        bounded_result(
+            query_pack("tidb-8.5")["sql_digest.encode"],
+            rows=({"sql_digest": "A" * 64},),
+        ),
+        QueryResult(
+            columns=("raw_sql",),
+            rows=({"raw_sql": VALID_SQL_DIGEST},),
+            truncated=False,
+            observed_bytes=128,
+            elapsed_ms=20,
+        ),
+    ],
+)
+async def test_collect_diagnosis_invalid_digest_result_fails_closed(
+    digest_result: QueryResult,
+) -> None:
+    class InvalidDigestClient(DiagnosisClient):
+        async def execute(
+            self,
+            *,
+            execution_id: str,
+            query: ServerQuery,
+            parameters: Mapping[str, QueryValue],
+        ) -> QueryResult:
+            self.calls.append((execution_id, query, parameters))
+            self.events.append(query.query_id)
+            return digest_result
+
+    diagnosis_client = InvalidDigestClient()
+    store = CandidateStore(cast(Any, diagnosis_client))
+    service = M0DiagnosisService(store=cast(Any, store), clock=lambda: FIXED_NOW)
+
+    with pytest.raises(M0TidbUnavailableError):
+        await service.collect_diagnosis(diagnosis_input())
+
+    assert diagnosis_client.events == ["sql_digest.encode"]
+    assert store.force_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_diagnosis_rejects_local_sql_before_connection_io() -> None:
+    diagnosis_client = DiagnosisClient()
+    store = CandidateStore(cast(Any, diagnosis_client))
+    service = M0DiagnosisService(store=cast(Any, store), clock=lambda: FIXED_NOW)
+
+    with pytest.raises(M0DiagnosisValidationError):
+        await service.collect_diagnosis(
+            diagnosis_input(sql_text="DELETE FROM orders WHERE customer_id = 42")
+        )
+
+    assert diagnosis_client.events == []
+    assert store.use_entries == 0
+    assert store.force_close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_collect_diagnosis_enforces_the_two_mebibyte_aggregate_cap() -> None:
+    diagnosis_client = DiagnosisClient()
+    for query_id in (
+        "slow_query.current_user",
+        "statement_summary.cross_user",
+        "index.current_table",
+    ):
+        query = query_pack("tidb-8.5")[query_id]
+        diagnosis_client.results[query_id] = bounded_result(
+            query,
+            observed_bytes=query.budget.max_bytes,
+        )
+    ordinary_value = parse_m0_select(diagnosis_input().sql_text, database="shop")
+    ordinary_query = bind_m0_ordinary_explain(
+        ValidatedM0Select(
+            canonical_sql=ordinary_value.canonical_sql,
+            sql_digest=VALID_SQL_DIGEST,
+            database="shop",
+            table_name="orders",
+        )
+    )
+    diagnosis_client.results[ordinary_query.query_id] = bounded_result(
+        ordinary_query,
+        observed_bytes=ordinary_query.budget.max_bytes,
+    )
+    store = CandidateStore(cast(Any, diagnosis_client))
+    service = M0DiagnosisService(store=cast(Any, store), clock=lambda: FIXED_NOW)
+
+    with pytest.raises(M0TidbUnavailableError):
+        await service.collect_diagnosis(diagnosis_input())
+
+    assert diagnosis_client.events == [
+        "sql_digest.encode",
+        "slow_query.current_user",
+        "statement_summary.cross_user",
+        "ordinary_plan.validated_select",
+        "index.current_table",
+    ]
+    assert store.force_close_calls == 1
 
 
 def candidate_result(

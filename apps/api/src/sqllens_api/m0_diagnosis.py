@@ -1,20 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import secrets
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlglot import Dialect, exp
 from sqlglot.errors import ErrorLevel, SqlglotError
 from sqlglot.optimizer.scope import Scope, traverse_scope
 
-from sqllens_api.evidence_connector import MAX_SAFE_INTEGER, JsonValue, QueryResult, query_pack
+from sqllens_api.evidence_connector import (
+    MAX_SAFE_INTEGER,
+    JsonValue,
+    QueryResult,
+    QueryValue,
+    ServerQuery,
+    ValidatedM0Select,
+    bind_m0_ordinary_explain,
+    query_pack,
+)
 from sqllens_api.m0_connection import (
     M0BusyError,
     M0ConnectionStore,
@@ -27,6 +37,9 @@ M0_MIN_WINDOW_MINUTES = 5
 M0_MAX_WINDOW_MINUTES = 60
 M0_MAX_SQL_BYTES = 32_768
 M0_MAX_PREDICATE_COLUMNS = 32
+M0_DIAGNOSIS_TIMEOUT_SECONDS = 30.0
+M0_DIAGNOSIS_MAX_ROWS = 1_000
+M0_DIAGNOSIS_MAX_BYTES = 2 * 1_024 * 1_024
 _SQL_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_SELECT_EXPRESSIONS = (
     exp.Insert,
@@ -92,6 +105,54 @@ class ParsedM0Select:
     database: str
     table_name: str
     predicate_columns: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class M0RawQueryResult:
+    """One verified query/result pair retained only until Evidence wrapping."""
+
+    query: ServerQuery
+    result: QueryResult = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class M0RawDiagnosis:
+    """Request-local bounded collection awaiting the managed-Evidence wrapper."""
+
+    validated_select: ValidatedM0Select = field(repr=False)
+    predicate_columns: tuple[str, ...]
+    window_start: datetime
+    window_end: datetime
+    results: tuple[M0RawQueryResult, ...] = field(repr=False)
+
+    @property
+    def database(self) -> str:
+        return self.validated_select.database
+
+    @property
+    def sql_digest(self) -> str:
+        return self.validated_select.sql_digest
+
+    @property
+    def table_name(self) -> str:
+        return self.validated_select.table_name
+
+
+class _M0DiagnosisQueryClient(Protocol):
+    async def execute(
+        self,
+        *,
+        execution_id: str,
+        query: ServerQuery,
+        parameters: Mapping[str, QueryValue],
+    ) -> QueryResult: ...
+
+    async def execute_ordinary_explain(
+        self,
+        *,
+        execution_id: str,
+        value: ValidatedM0Select,
+    ) -> QueryResult: ...
 
 
 def _utc_now() -> datetime:
@@ -251,6 +312,145 @@ class M0DiagnosisService:
         self._clock = clock
         self._execution_id_factory = execution_id_factory
 
+    async def collect_diagnosis(self, value: M0DiagnosisInput) -> M0RawDiagnosis:
+        """Verify one SQL identity and collect only its bounded server-owned roles."""
+
+        if not isinstance(value, M0DiagnosisInput):
+            raise M0DiagnosisValidationError
+        view = await self._store.view()
+        if view is None:
+            raise M0ConnectionRequiredError
+        parsed = parse_m0_select(value.sql_text, database=view.database)
+        window_end = _aware_utc(self._clock())
+        window_start = window_end - timedelta(minutes=value.window_minutes)
+        parameters = {
+            "window_start": _format_time(window_start),
+            "window_end": _format_time(window_end),
+            "schema_name": parsed.database,
+            "sql_digest": value.sql_digest,
+        }
+        try:
+            async with self._store.use() as raw_client:
+                leased_view = await self._store.view()
+                if leased_view is None or leased_view.database != parsed.database:
+                    raise M0TidbUnavailableError
+                client = cast(_M0DiagnosisQueryClient, raw_client)
+                async with asyncio.timeout(M0_DIAGNOSIS_TIMEOUT_SECONDS):
+                    rows_read = 0
+                    bytes_read = 0
+                    digest_query = query_pack("tidb-8.5")["sql_digest.encode"]
+                    digest_result = await client.execute(
+                        execution_id=self._execution_id_factory(),
+                        query=digest_query,
+                        parameters={"sql_text": value.sql_text},
+                    )
+                    rows_read, bytes_read = _consume_aggregate_budget(
+                        digest_query,
+                        digest_result,
+                        rows_read=rows_read,
+                        bytes_read=bytes_read,
+                    )
+                    _verify_server_digest(
+                        digest_result,
+                        query=digest_query,
+                        requested_digest=value.sql_digest,
+                    )
+                    validated = ValidatedM0Select(
+                        canonical_sql=parsed.canonical_sql,
+                        sql_digest=value.sql_digest,
+                        database=parsed.database,
+                        table_name=parsed.table_name,
+                    )
+                    collected: list[M0RawQueryResult] = []
+                    for query_id in (
+                        "slow_query.current_user",
+                        "statement_summary.cross_user",
+                    ):
+                        query = query_pack("tidb-8.5")[query_id]
+                        result = await client.execute(
+                            execution_id=self._execution_id_factory(),
+                            query=query,
+                            parameters=parameters,
+                        )
+                        rows_read, bytes_read = _consume_aggregate_budget(
+                            query,
+                            result,
+                            rows_read=rows_read,
+                            bytes_read=bytes_read,
+                        )
+                        collected.append(M0RawQueryResult(query=query, result=result))
+
+                    if parsed.predicate_columns:
+                        ordinary_query = bind_m0_ordinary_explain(validated)
+                        ordinary_result = await client.execute_ordinary_explain(
+                            execution_id=self._execution_id_factory(),
+                            value=validated,
+                        )
+                        rows_read, bytes_read = _consume_aggregate_budget(
+                            ordinary_query,
+                            ordinary_result,
+                            rows_read=rows_read,
+                            bytes_read=bytes_read,
+                        )
+                        collected.append(
+                            M0RawQueryResult(query=ordinary_query, result=ordinary_result)
+                        )
+
+                        index_query = query_pack("tidb-8.5")["index.current_table"]
+                        index_result = await client.execute(
+                            execution_id=self._execution_id_factory(),
+                            query=index_query,
+                            parameters={
+                                "schema_name": parsed.database,
+                                "table_name": parsed.table_name,
+                            },
+                        )
+                        rows_read, bytes_read = _consume_aggregate_budget(
+                            index_query,
+                            index_result,
+                            rows_read=rows_read,
+                            bytes_read=bytes_read,
+                        )
+                        collected.append(M0RawQueryResult(query=index_query, result=index_result))
+
+                    statistics_query = query_pack("tidb-8.5")["statistics.health.current_table"]
+                    statistics_result = await client.execute(
+                        execution_id=self._execution_id_factory(),
+                        query=statistics_query,
+                        parameters={
+                            "schema_name": parsed.database,
+                            "table_name": parsed.table_name,
+                        },
+                    )
+                    _consume_aggregate_budget(
+                        statistics_query,
+                        statistics_result,
+                        rows_read=rows_read,
+                        bytes_read=bytes_read,
+                    )
+                    collected.append(
+                        M0RawQueryResult(query=statistics_query, result=statistics_result)
+                    )
+        except (M0BusyError, M0ConnectionRequiredError, M0DiagnosisValidationError):
+            raise
+        except asyncio.CancelledError:
+            await asyncio.shield(self._store.force_close())
+            raise
+        except (TimeoutError, M0TidbTimeoutError):
+            await self._store.force_close()
+            raise M0TidbTimeoutError from None
+        except (M0DriverInvariantError, M0TidbUnavailableError):
+            await self._store.force_close()
+            raise M0TidbUnavailableError from None
+
+        return M0RawDiagnosis(
+            validated_select=validated,
+            predicate_columns=parsed.predicate_columns,
+            window_start=window_start,
+            window_end=window_end,
+            results=tuple(collected),
+        )
+
     async def list_candidates(self, window_minutes: int) -> dict[str, JsonValue]:
         if (
             isinstance(window_minutes, bool)
@@ -369,6 +569,73 @@ def _project_candidates(
             }
         )
     return items
+
+
+def _verify_server_digest(
+    result: QueryResult,
+    *,
+    query: ServerQuery,
+    requested_digest: str,
+) -> None:
+    if (
+        query != query_pack("tidb-8.5")["sql_digest.encode"]
+        or result.columns != query.result_columns
+        or result.truncated is not False
+        or len(result.rows) != 1
+    ):
+        raise M0TidbUnavailableError
+    row = result.rows[0]
+    if not isinstance(row, Mapping) or set(row) != {"sql_digest"}:
+        raise M0TidbUnavailableError
+    server_digest = row["sql_digest"]
+    if not isinstance(server_digest, str) or not _SQL_DIGEST.fullmatch(server_digest):
+        raise M0TidbUnavailableError
+    if server_digest != requested_digest:
+        raise M0DiagnosisValidationError
+
+
+def _consume_aggregate_budget(
+    query: ServerQuery,
+    result: QueryResult,
+    *,
+    rows_read: int,
+    bytes_read: int,
+) -> tuple[int, int]:
+    if (
+        not isinstance(result, QueryResult)
+        or result.columns != query.result_columns
+        or not isinstance(result.truncated, bool)
+        or not _bounded_integer(
+            result.elapsed_ms,
+            lower=0,
+            upper=query.budget.timeout_ms,
+        )
+        or not _bounded_integer(
+            result.observed_bytes,
+            lower=1,
+            upper=query.budget.max_bytes,
+        )
+        or len(result.rows) > query.budget.max_rows
+    ):
+        raise M0TidbUnavailableError
+    expected_columns = set(query.result_columns)
+    for row in result.rows:
+        if not isinstance(row, Mapping) or set(row) != expected_columns:
+            raise M0TidbUnavailableError
+        for item in row.values():
+            if item is None or type(item) in (str, bool):
+                continue
+            if type(item) is int and abs(item) <= MAX_SAFE_INTEGER:
+                continue
+            if type(item) is float and math.isfinite(item):
+                continue
+            raise M0TidbUnavailableError
+
+    aggregate_rows = rows_read + len(result.rows)
+    aggregate_bytes = bytes_read + result.observed_bytes
+    if aggregate_rows > M0_DIAGNOSIS_MAX_ROWS or aggregate_bytes > M0_DIAGNOSIS_MAX_BYTES:
+        raise M0TidbUnavailableError
+    return aggregate_rows, aggregate_bytes
 
 
 def _required_integer(value: object, *, lower: int) -> int:
