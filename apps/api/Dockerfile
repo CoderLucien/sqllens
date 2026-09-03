@@ -11,12 +11,14 @@ FROM python:3.12.3-slim-bookworm@sha256:afc139a0a640942491ec481ad8dda10f2c5b753f
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_RETRIES=10 \
+    PIP_DEFAULT_TIMEOUT=120 \
     SQLLENS_DATA_DIR=/data \
     SQLLENS_WEB_DIST_DIR=/app/static
 
 WORKDIR /app
 COPY requirements/runtime.lock requirements/runtime.lock
-RUN python -m pip install --no-cache-dir -r requirements/runtime.lock
+RUN python -m pip install --no-cache-dir --retries 10 --timeout 120 -r requirements/runtime.lock
 
 COPY pyproject.toml ./
 COPY apps/api/ apps/api/
