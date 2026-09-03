@@ -1,13 +1,103 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f7f8fa" />
-    <title>SQLLens Setup</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQLLens · TiDB 智能诊断</title>
+<link rel="stylesheet" href="/src/v4-app.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="logo">SQLLens</span>
+  <div class="steps">
+    <div class="step active">① 开始诊断</div>
+    <div class="step">② AI 增强配置（可选）</div>
+    <div class="step">③ 诊断报告</div>
+  </div>
+  <span class="topbar-note">私有试用版 · 仅限本机使用</span>
+</div>
+
+<div class="wrap">
+
+  <section class="screen active" id="scr-input">
+    <h2>开始诊断</h2>
+    <div class="sub">上传 TiDB Plan Replayer 诊断包，或使用内置真实样例体验规则诊断；结论由规则引擎基于真实证据产生，可复现、可审计。</div>
+
+    <div class="sec-title">输入方式</div>
+    <div class="tabs">
+      <div class="tab active">离线模式 · Plan Replayer 上传</div>
+      <div class="tab">演示样例 · 真实证据</div>
+      <div class="tab">在线直连（后续版本）</div>
+    </div>
+
+    <div class="panel active" id="inp0">
+      <label>上传诊断包（zip）</label>
+      <input type="file" id="zipInput" accept=".zip">
+      <div class="hint">文件仅保存在本会话内存（上限 32MiB），解析后不落盘、不外发。</div>
+      <label>获取诊断包：复制脚本到 TiDB 客户端执行（自动生成）</label>
+      <div class="code" id="dumpScript">PLAN REPLAYER DUMP EXPLAIN ANALYZE
+SELECT * FROM orders WHERE user_id = ? AND order_date &gt; '2026-01-01';</div>
+      <button class="btn small">复制脚本</button>
+      <div class="hint">执行后按提示获取 <span class="mono">tidb_last_plan_replayer_token</span> 指向的 zip 文件，回到本页上传。</div>
+      <div id="uploadMsg"></div>
+    </div>
+
+    <div class="panel" id="inp1">
+      <div class="hint">以下样例来自 2026-09-03 真实 TiDB v8.5.8 实验证据（证据包随交付说明提供），点击即执行真实规则诊断。</div>
+      <div class="demo-list" id="demoList"></div>
+    </div>
+
+    <div class="panel" id="inp2">
+      <div class="alert info">MVP 版未开放直连模式（在线抓慢 SQL 需只读连接采集，随下个版本提供）。本包支持：Plan Replayer 上传与演示样例两种路径。</div>
+    </div>
+
+    <div class="footer-actions">
+      <span class="hint">诊断数据（SQL / 证据 / 报告）仅会话内存；本工具仅限本机使用，请勿暴露到非回环地址。</span>
+      <button class="btn">下一步：AI 配置（可选）→</button>
+    </div>
+  </section>
+
+  <section class="screen" id="scr-ai">
+    <h2>AI 增强配置（可选）</h2>
+    <div class="sub">不配置则使用纯规则模式（零外部依赖、零数据出本机）。配置后 AI 仅做归纳润色，不新增诊断结论；调用失败自动降级规则模式。</div>
+    <div class="row">
+      <div><label>接口协议</label><select id="proto"><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic 兼容</option></select></div>
+      <div class="flex2"><label>Base URL</label><input id="baseUrl" value="https://api.deepseek.com/v1" placeholder="或公司私有部署地址（兼容 OpenAI 约束接口）"></div>
+    </div>
+    <div class="row">
+      <div><label>API Key</label><input id="apiKey" type="password" placeholder="sk-...（仅本机会话保存）"></div>
+      <div><label>模型名</label><input id="model" placeholder="deepseek-chat / 或点击「识别模型」"></div>
+    </div>
+    <div class="row-actions">
+      <button class="btn small">连接测试</button>
+      <button class="btn small ghost">识别模型</button>
+      <span id="aiBusy"></span>
+    </div>
+    <div id="aiMsg"></div>
+    <div class="hint">覆盖：DeepSeek / Qwen / Kimi / GPT / Claude，以及公司内部私有大模型（非标准 base_url，适配通用约束接口）。测试通过后才可保存启用。</div>
+    <div class="footer-actions">
+      <button class="btn ghost">← 返回</button>
+      <div class="btn-group">
+        <button class="btn ghost">跳过，使用规则模式（默认）</button>
+        <button class="btn">开始诊断 →</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="scr-report">
+    <h2>SQL 优化诊断报告</h2>
+    <div class="sub">专业六段 · 结论由规则引擎基于真实证据产生（可复现、可审计）。</div>
+    <div class="alert info" id="reportMode">规则模式输出（未配置 AI）。配置 AI 后可获得归纳润色；AI 故障时同样降级为本模式。</div>
+    <div id="reportBody">
+      <div class="hint">尚未执行诊断。请回到「开始诊断」上传诊断包或选择演示样例。</div>
+    </div>
+    <div class="footer-actions">
+      <button class="btn ghost">← 返回 AI 配置</button>
+      <button class="btn ghost">← 返回开始诊断</button>
+    </div>
+  </section>
+</div>
+
+<script type="module" src="/src/v4-app.js"></script>
+</body>
 </html>

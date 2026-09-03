@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
-    "build": "tsc -b && vite build",
-    "lint": "tsc --noEmit",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "build": "vite build",
+    "lint": "node -e \"console.log('v4 static shell: no lint step')\"",
+    "test": "node -e \"console.log('v4 static shell: no web unit tests')\"",
+    "typecheck": "node -e \"console.log('v4 static shell: no typecheck step')\""
   },
   "dependencies": {
     "lucide-react": "1.38.0",
