@@ -1,0 +1,605 @@
+{
+  "schemaVersion": "m0-report-input-fixtures/v1",
+  "label": "fixture/review-only",
+  "noticeZh": "以下 Evidence 仅用于产品评审，不是实时 TiDB 采集结果。",
+  "scenarios": [
+    {
+      "scenario": "index-scan",
+      "caseId": "case_m0indexreview0001",
+      "database": "shop",
+      "sqlDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "windowStart": "2026-09-03T05:00:00Z",
+      "windowEnd": "2026-09-03T05:30:00Z",
+      "evidence": [
+        {
+          "document": {
+            "schemaVersion": "evidence/v2",
+            "evidenceId": "ev_m0indexstructure01",
+            "revision": 1,
+            "caseId": "case_m0indexreview0001",
+            "profileSubjectRef": "subject_m0previewfixture01",
+            "profileObjectRef": "sql:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "origin": "managed_source",
+            "kind": "sql_structure",
+            "sourceRef": {
+              "sourceId": "src_m0previewfixture01",
+              "revision": 1
+            },
+            "observedAt": "2026-09-03T05:30:00Z",
+            "collectedAt": "2026-09-03T05:31:00Z",
+            "freshness": "fresh",
+            "coverage": 1,
+            "sensitivity": "confidential",
+            "integrityDigest": "sha256:085a65e81eda3b4e0696db424c3abfd73b40707c238851ddcd69fc5cad865d5c",
+            "summaryZh": "SQL 结构解析为 SELECT，涉及 orders；过滤列为 customer_id 与 status。",
+            "payload": {
+              "schemaRevision": "sql-structure/v1",
+              "extractionRevision": "evidence-extractor/v1",
+              "canonicalRevision": "rfc8785-safe-integer/v1",
+              "storageRef": "payload_m0indexstructure01",
+              "recordCount": 1,
+              "truncated": false,
+              "digest": "sha256:085a65e81eda3b4e0696db424c3abfd73b40707c238851ddcd69fc5cad865d5c",
+              "typed": {
+                "kind": "sql_structure",
+                "statementType": "select",
+                "tables": [
+                  "orders"
+                ],
+                "predicateColumns": [
+                  "customer_id",
+                  "status"
+                ]
+              },
+              "typedDigest": "sha256:cacb80ba65fe05d2e3ac2f03e6ebafae4d9f98c6b5a1466cd1edb413e059a18e"
+            },
+            "collection": {
+              "collectorId": "tidb-readonly",
+              "collectorRevision": "evidence-connector/v1",
+              "queryId": "m0.fixture.sql_structure",
+              "queryRevision": "tidb-8.5/m0-fixture-v1",
+              "status": "complete",
+              "redactionRevision": "evidence-redaction/v2",
+              "budget": {
+                "timeoutMs": 5000,
+                "maxRows": 200,
+                "maxBytes": 524288,
+                "elapsedMs": 25,
+                "rowsRead": 1,
+                "bytesRead": 137
+              }
+            }
+          },
+          "storageDocument": {
+            "fixtureLabel": "fixture/review-only",
+            "role": "sql_structure",
+            "rows": [
+              {
+                "tableName": "orders",
+                "predicateColumns": [
+                  "customer_id",
+                  "status"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "document": {
+            "schemaVersion": "evidence/v2",
+            "evidenceId": "ev_m0indexplan000001",
+            "revision": 1,
+            "caseId": "case_m0indexreview0001",
+            "profileSubjectRef": "subject_m0previewfixture01",
+            "profileObjectRef": "orders",
+            "origin": "managed_source",
+            "kind": "ordinary_plan",
+            "sourceRef": {
+              "sourceId": "src_m0previewfixture01",
+              "revision": 1
+            },
+            "observedAt": "2026-09-03T05:30:00Z",
+            "collectedAt": "2026-09-03T05:31:00Z",
+            "freshness": "fresh",
+            "coverage": 1,
+            "sensitivity": "confidential",
+            "integrityDigest": "sha256:517c7c778638eda5c98388367b1ab47a61e851d2d50354b3f596c4e34e6304da",
+            "summaryZh": "普通执行计划显示 orders 表发生 TableFullScan，过滤条件未形成可用访问路径。",
+            "payload": {
+              "schemaRevision": "ordinary-plan/v2",
+              "extractionRevision": "evidence-extractor/v1",
+              "canonicalRevision": "rfc8785-safe-integer/v1",
+              "storageRef": "payload_m0indexplan000001",
+              "recordCount": 1,
+              "truncated": false,
+              "digest": "sha256:517c7c778638eda5c98388367b1ab47a61e851d2d50354b3f596c4e34e6304da",
+              "typed": {
+                "kind": "ordinary_plan",
+                "profileSubjectRef": "subject_m0previewfixture01",
+                "profileObjectRef": "orders",
+                "tableName": "orders",
+                "accessPath": "table_full_scan"
+              },
+              "typedDigest": "sha256:602605c77a76c5959a16e2c4b3c45345db6ae9f55fda39d8fbe588329bda6eb4"
+            },
+            "collection": {
+              "collectorId": "tidb-readonly",
+              "collectorRevision": "evidence-connector/v1",
+              "queryId": "ordinary_plan.validated_select",
+              "queryRevision": "tidb-8.5/m0-fixture-v1",
+              "status": "complete",
+              "redactionRevision": "evidence-redaction/v2",
+              "budget": {
+                "timeoutMs": 5000,
+                "maxRows": 200,
+                "maxBytes": 524288,
+                "elapsedMs": 25,
+                "rowsRead": 1,
+                "bytesRead": 124
+              }
+            }
+          },
+          "storageDocument": {
+            "fixtureLabel": "fixture/review-only",
+            "role": "ordinary_plan",
+            "rows": [
+              {
+                "tableName": "orders",
+                "accessPath": "table_full_scan"
+              }
+            ]
+          }
+        },
+        {
+          "document": {
+            "schemaVersion": "evidence/v2",
+            "evidenceId": "ev_m0indexmetadata001",
+            "revision": 1,
+            "caseId": "case_m0indexreview0001",
+            "profileSubjectRef": "subject_m0previewfixture01",
+            "profileObjectRef": "orders",
+            "origin": "managed_source",
+            "kind": "index",
+            "sourceRef": {
+              "sourceId": "src_m0previewfixture01",
+              "revision": 1
+            },
+            "observedAt": "2026-09-03T05:30:00Z",
+            "collectedAt": "2026-09-03T05:31:00Z",
+            "freshness": "fresh",
+            "coverage": 1,
+            "sensitivity": "confidential",
+            "integrityDigest": "sha256:71aa2b09456680dc36bd30e2aff0b5bc8c03e9600785ec9e8ebae2d61504e694",
+            "summaryZh": "现有索引没有同时覆盖 customer_id 与 status 的过滤顺序。",
+            "payload": {
+              "schemaRevision": "index-metadata/v2",
+              "extractionRevision": "evidence-extractor/v1",
+              "canonicalRevision": "rfc8785-safe-integer/v1",
+              "storageRef": "payload_m0indexmetadata001",
+              "recordCount": 1,
+              "truncated": false,
+              "digest": "sha256:71aa2b09456680dc36bd30e2aff0b5bc8c03e9600785ec9e8ebae2d61504e694",
+              "typed": {
+                "kind": "index",
+                "profileSubjectRef": "subject_m0previewfixture01",
+                "profileObjectRef": "orders",
+                "tableName": "orders",
+                "filterColumns": [
+                  "customer_id",
+                  "status"
+                ],
+                "indexCoverage": "no_matching_composite_index"
+              },
+              "typedDigest": "sha256:a0a9b2d61caa681cab7e3cb7d3b8ac7d6504d27f78a2ae13b252797af7215c2f"
+            },
+            "collection": {
+              "collectorId": "tidb-readonly",
+              "collectorRevision": "evidence-connector/v1",
+              "queryId": "index.current_table",
+              "queryRevision": "tidb-8.5/m0-fixture-v1",
+              "status": "complete",
+              "redactionRevision": "evidence-redaction/v2",
+              "budget": {
+                "timeoutMs": 5000,
+                "maxRows": 200,
+                "maxBytes": 524288,
+                "elapsedMs": 25,
+                "rowsRead": 1,
+                "bytesRead": 172
+              }
+            }
+          },
+          "storageDocument": {
+            "fixtureLabel": "fixture/review-only",
+            "role": "index",
+            "rows": [
+              {
+                "tableName": "orders",
+                "filterColumns": [
+                  "customer_id",
+                  "status"
+                ],
+                "indexCoverage": "no_matching_composite_index"
+              }
+            ]
+          }
+        },
+        {
+          "document": {
+            "schemaVersion": "evidence/v2",
+            "evidenceId": "ev_m0indexslowquery01",
+            "revision": 1,
+            "caseId": "case_m0indexreview0001",
+            "profileSubjectRef": "subject_m0previewfixture01",
+            "profileObjectRef": "sql:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "origin": "managed_source",
+            "kind": "slow_query",
+            "sourceRef": {
+              "sourceId": "src_m0previewfixture01",
+              "revision": 1
+            },
+            "observedAt": "2026-09-03T05:30:00Z",
+            "collectedAt": "2026-09-03T05:31:00Z",
+            "freshness": "fresh",
+            "coverage": 1,
+            "sensitivity": "confidential",
+            "integrityDigest": "sha256:a08b8d2a9f7b4bd389342a5e97ee17c15100274122ac3fc88aa8124a0718c7bf",
+            "summaryZh": "该 SQL 在 30 分钟窗口内执行 18 次，P95 1.8 秒，平均扫描 12 万行。",
+            "payload": {
+              "schemaRevision": "slow-query/v2",
+              "extractionRevision": "evidence-extractor/v1",
+              "canonicalRevision": "rfc8785-safe-integer/v1",
+              "storageRef": "payload_m0indexslowquery01",
+              "recordCount": 1,
+              "truncated": false,
+              "digest": "sha256:a08b8d2a9f7b4bd389342a5e97ee17c15100274122ac3fc88aa8124a0718c7bf",
+              "typed": {
+                "kind": "slow_query",
+                "profileSubjectRef": "subject_m0previewfixture01",
+                "profileObjectRef": "sql:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "windowMinutes": 30,
+                "callCount": 18,
+                "p95Ms": 1800,
+                "averageScanRows": 120000,
+                "averageReturnRows": 8
+              },
+              "typedDigest": "sha256:78822b8ba2d16de64be9f03a196706e7e2804c57cef12532e6bf9cbd2827aff4"
+            },
+            "collection": {
+              "collectorId": "tidb-readonly",
+              "collectorRevision": "evidence-connector/v1",
+              "queryId": "slow_query.current_user",
+              "queryRevision": "tidb-8.5/m0-fixture-v1",
+              "status": "complete",
+              "redactionRevision": "evidence-redaction/v2",
+              "budget": {
+                "timeoutMs": 5000,
+                "maxRows": 200,
+                "maxBytes": 524288,
+                "elapsedMs": 25,
+                "rowsRead": 1,
+                "bytesRead": 163
+              }
+            }
+          },
+          "storageDocument": {
+            "fixtureLabel": "fixture/review-only",
+            "role": "slow_query",
+            "rows": [
+              {
+                "windowMinutes": 30,
+                "callCount": 18,
+                "p95Ms": 1800,
+                "averageScanRows": 120000,
+                "averageReturnRows": 8
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "statistics-health",
+      "caseId": "case_m0statsreview0001",
+      "database": "shop",
+      "sqlDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "windowStart": "2026-09-03T05:00:00Z",
+      "windowEnd": "2026-09-03T05:30:00Z",
+      "evidence": [
+        {
+          "document": {
+            "schemaVersion": "evidence/v2",
+            "evidenceId": "ev_m0statsstructure01",
+            "revision": 1,
+            "caseId": "case_m0statsreview0001",
+            "profileSubjectRef": "subject_m0previewfixture01",
+            "profileObjectRef": "sql:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "origin": "managed_source",
+            "kind": "sql_structure",
+            "sourceRef": {
+              "sourceId": "src_m0previewfixture01",
+              "revision": 1
+            },
+            "observedAt": "2026-09-03T05:30:00Z",
+            "collectedAt": "2026-09-03T05:31:00Z",
+            "freshness": "fresh",
+            "coverage": 1,
+            "sensitivity": "confidential",
+            "integrityDigest": "sha256:4a99424f6a784cd98795161afec3fdc3252bc339e3b01e104714f76fd92afddb",
+            "summaryZh": "SQL 结构解析为 SELECT，涉及 order_items；过滤列为 sku_id。",
+            "payload": {
+              "schemaRevision": "sql-structure/v1",
+              "extractionRevision": "evidence-extractor/v1",
+              "canonicalRevision": "rfc8785-safe-integer/v1",
+              "storageRef": "payload_m0statsstructure01",
+              "recordCount": 1,
+              "truncated": false,
+              "digest": "sha256:4a99424f6a784cd98795161afec3fdc3252bc339e3b01e104714f76fd92afddb",
+              "typed": {
+                "kind": "sql_structure",
+                "statementType": "select",
+                "tables": [
+                  "order_items"
+                ],
+                "predicateColumns": [
+                  "sku_id"
+                ]
+              },
+              "typedDigest": "sha256:54a29ff69094693ad106f9ed5beeebea316728322db635de4ea2fb959eb7d74b"
+            },
+            "collection": {
+              "collectorId": "tidb-readonly",
+              "collectorRevision": "evidence-connector/v1",
+              "queryId": "m0.fixture.sql_structure",
+              "queryRevision": "tidb-8.5/m0-fixture-v1",
+              "status": "complete",
+              "redactionRevision": "evidence-redaction/v2",
+              "budget": {
+                "timeoutMs": 5000,
+                "maxRows": 200,
+                "maxBytes": 524288,
+                "elapsedMs": 25,
+                "rowsRead": 1,
+                "bytesRead": 128
+              }
+            }
+          },
+          "storageDocument": {
+            "fixtureLabel": "fixture/review-only",
+            "role": "sql_structure",
+            "rows": [
+              {
+                "tableName": "order_items",
+                "predicateColumns": [
+                  "sku_id"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "document": {
+            "schemaVersion": "evidence/v2",
+            "evidenceId": "ev_m0statshealth00001",
+            "revision": 1,
+            "caseId": "case_m0statsreview0001",
+            "profileSubjectRef": "subject_m0previewfixture01",
+            "profileObjectRef": "order_items",
+            "origin": "managed_source",
+            "kind": "statistics",
+            "sourceRef": {
+              "sourceId": "src_m0previewfixture01",
+              "revision": 1
+            },
+            "observedAt": "2026-09-03T05:30:00Z",
+            "collectedAt": "2026-09-03T05:31:00Z",
+            "freshness": "fresh",
+            "coverage": 1,
+            "sensitivity": "confidential",
+            "integrityDigest": "sha256:41c083090186d3173ed7918e9ef824cc0c9f2cec7c0b2402c419b45c33912890",
+            "summaryZh": "order_items 表统计健康度为 42%。",
+            "payload": {
+              "schemaRevision": "statistics-health/v1",
+              "extractionRevision": "evidence-extractor/v1",
+              "canonicalRevision": "rfc8785-safe-integer/v1",
+              "storageRef": "payload_m0statshealth00001",
+              "recordCount": 1,
+              "truncated": false,
+              "digest": "sha256:41c083090186d3173ed7918e9ef824cc0c9f2cec7c0b2402c419b45c33912890",
+              "typed": {
+                "kind": "statistics",
+                "profileSubjectRef": "subject_m0previewfixture01",
+                "profileObjectRef": "order_items",
+                "tableName": "order_items",
+                "healthyPercent": 42
+              },
+              "typedDigest": "sha256:72a53650952a196c34f3949cd55df973675549d4256efd37b9db9a9fb5f5ad55"
+            },
+            "collection": {
+              "collectorId": "tidb-readonly",
+              "collectorRevision": "evidence-connector/v1",
+              "queryId": "statistics.health.current_table",
+              "queryRevision": "tidb-8.5/m0-fixture-v1",
+              "status": "complete",
+              "redactionRevision": "evidence-redaction/v2",
+              "budget": {
+                "timeoutMs": 5000,
+                "maxRows": 200,
+                "maxBytes": 524288,
+                "elapsedMs": 25,
+                "rowsRead": 1,
+                "bytesRead": 115
+              }
+            }
+          },
+          "storageDocument": {
+            "fixtureLabel": "fixture/review-only",
+            "role": "statistics",
+            "rows": [
+              {
+                "tableName": "order_items",
+                "healthyPercent": 42
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "repeated-scan",
+      "caseId": "case_m0repeatreview001",
+      "database": "shop",
+      "sqlDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "windowStart": "2026-09-03T05:00:00Z",
+      "windowEnd": "2026-09-03T05:30:00Z",
+      "evidence": [
+        {
+          "document": {
+            "schemaVersion": "evidence/v2",
+            "evidenceId": "ev_m0repeatsummary01",
+            "revision": 1,
+            "caseId": "case_m0repeatreview001",
+            "profileSubjectRef": "subject_m0previewfixture01",
+            "profileObjectRef": "sql:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "origin": "managed_source",
+            "kind": "statement_summary",
+            "sourceRef": {
+              "sourceId": "src_m0previewfixture01",
+              "revision": 1
+            },
+            "observedAt": "2026-09-03T05:30:00Z",
+            "collectedAt": "2026-09-03T05:31:00Z",
+            "freshness": "fresh",
+            "coverage": 1,
+            "sensitivity": "confidential",
+            "integrityDigest": "sha256:c3260392a7575f5fa76d82686f86b99dc76d456b9b63dd68e04e46000cfc92e0",
+            "summaryZh": "该 SQL 在 30 分钟窗口内执行 24 次，按聚合字段计算共读取 3000000 个键。",
+            "payload": {
+              "schemaRevision": "statement-summary/v3",
+              "extractionRevision": "evidence-extractor/v1",
+              "canonicalRevision": "rfc8785-safe-integer/v1",
+              "storageRef": "payload_m0repeatsummary01",
+              "recordCount": 1,
+              "truncated": false,
+              "digest": "sha256:c3260392a7575f5fa76d82686f86b99dc76d456b9b63dd68e04e46000cfc92e0",
+              "typed": {
+                "kind": "statement_summary",
+                "profileSubjectRef": "subject_m0previewfixture01",
+                "profileObjectRef": "sql:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "windowMinutes": 30,
+                "executionCount": 24,
+                "averageTotalKeys": 125000,
+                "averageProcessedKeys": 124000,
+                "weightedTotalKeys": 3000000,
+                "sqlStability": "plan_and_scan_stable"
+              },
+              "typedDigest": "sha256:4ae8ec3afada1c7b19f80ae584e1872e0b3496f872be1b09215715ecfe2e49a5"
+            },
+            "collection": {
+              "collectorId": "tidb-readonly",
+              "collectorRevision": "evidence-connector/v1",
+              "queryId": "statement_summary.cross_user",
+              "queryRevision": "tidb-8.5/m0-fixture-v1",
+              "status": "complete",
+              "redactionRevision": "evidence-redaction/v2",
+              "budget": {
+                "timeoutMs": 5000,
+                "maxRows": 200,
+                "maxBytes": 524288,
+                "elapsedMs": 25,
+                "rowsRead": 1,
+                "bytesRead": 237
+              }
+            }
+          },
+          "storageDocument": {
+            "fixtureLabel": "fixture/review-only",
+            "role": "statement_summary",
+            "rows": [
+              {
+                "windowMinutes": 30,
+                "executionCount": 24,
+                "averageTotalKeys": 125000,
+                "averageProcessedKeys": 124000,
+                "weightedTotalKeys": 3000000,
+                "sqlStability": "plan_and_scan_stable"
+              }
+            ]
+          }
+        },
+        {
+          "document": {
+            "schemaVersion": "evidence/v2",
+            "evidenceId": "ev_m0repeatslowquery1",
+            "revision": 1,
+            "caseId": "case_m0repeatreview001",
+            "profileSubjectRef": "subject_m0previewfixture01",
+            "profileObjectRef": "sql:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "origin": "managed_source",
+            "kind": "slow_query",
+            "sourceRef": {
+              "sourceId": "src_m0previewfixture01",
+              "revision": 1
+            },
+            "observedAt": "2026-09-03T05:30:00Z",
+            "collectedAt": "2026-09-03T05:31:00Z",
+            "freshness": "fresh",
+            "coverage": 1,
+            "sensitivity": "confidential",
+            "integrityDigest": "sha256:ed8aa9065bce2318232e5b5c9671201d0787b61501215da8a22540178ed966e1",
+            "summaryZh": "该 SQL 在 30 分钟窗口内执行 24 次，P95 6.2 秒，平均扫描 12.5 万行。",
+            "payload": {
+              "schemaRevision": "slow-query/v2",
+              "extractionRevision": "evidence-extractor/v1",
+              "canonicalRevision": "rfc8785-safe-integer/v1",
+              "storageRef": "payload_m0repeatslowquery1",
+              "recordCount": 1,
+              "truncated": false,
+              "digest": "sha256:ed8aa9065bce2318232e5b5c9671201d0787b61501215da8a22540178ed966e1",
+              "typed": {
+                "kind": "slow_query",
+                "profileSubjectRef": "subject_m0previewfixture01",
+                "profileObjectRef": "sql:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "windowMinutes": 30,
+                "callCount": 24,
+                "p95Ms": 6200,
+                "averageScanRows": 125000,
+                "averageReturnRows": 10
+              },
+              "typedDigest": "sha256:7e31b03e96b3887bc44b56daff2bd9c555720dd53234f9efe7f67a42c1c0fecb"
+            },
+            "collection": {
+              "collectorId": "tidb-readonly",
+              "collectorRevision": "evidence-connector/v1",
+              "queryId": "slow_query.current_user",
+              "queryRevision": "tidb-8.5/m0-fixture-v1",
+              "status": "complete",
+              "redactionRevision": "evidence-redaction/v2",
+              "budget": {
+                "timeoutMs": 5000,
+                "maxRows": 200,
+                "maxBytes": 524288,
+                "elapsedMs": 25,
+                "rowsRead": 1,
+                "bytesRead": 164
+              }
+            }
+          },
+          "storageDocument": {
+            "fixtureLabel": "fixture/review-only",
+            "role": "slow_query",
+            "rows": [
+              {
+                "windowMinutes": 30,
+                "callCount": 24,
+                "p95Ms": 6200,
+                "averageScanRows": 125000,
+                "averageReturnRows": 10
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
