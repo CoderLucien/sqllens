@@ -159,20 +159,21 @@ AI_STATUS_TEMPLATES = {
     ),
 }
 EVIDENCE_SCHEMA_REVISIONS = {
-    "business_observation": "business-observation/v1",
-    "sql_structure": "sql-structure/v1",
-    "statement_summary": "statement-summary/v2",
-    "slow_query": "slow-query/v2",
-    "schema": "schema-metadata/v1",
-    "index": "index-metadata/v2",
-    "statistics": "statistics-health/v2",
-    "ordinary_plan": "ordinary-plan/v2",
-    "runtime_metric": "prometheus-window/v2",
-    "alert": "tem-alert/v2",
-    "validation_result": "validation-result/v1",
-    "effect_metric_comparison": "effect-metric-comparison/v2",
-    "rollback_confirmation": "rollback-confirmation/v1",
+    "business_observation": frozenset({"business-observation/v1"}),
+    "sql_structure": frozenset({"sql-structure/v1"}),
+    "statement_summary": frozenset({"statement-summary/v2", "statement-summary/v3"}),
+    "slow_query": frozenset({"slow-query/v2"}),
+    "schema": frozenset({"schema-metadata/v1"}),
+    "index": frozenset({"index-metadata/v2"}),
+    "statistics": frozenset({"statistics-health/v1", "statistics-health/v2"}),
+    "ordinary_plan": frozenset({"ordinary-plan/v2"}),
+    "runtime_metric": frozenset({"prometheus-window/v2"}),
+    "alert": frozenset({"tem-alert/v2"}),
+    "validation_result": frozenset({"validation-result/v1"}),
+    "effect_metric_comparison": frozenset({"effect-metric-comparison/v2"}),
+    "rollback_confirmation": frozenset({"rollback-confirmation/v1"}),
 }
+NO_BUSINESS_EVIDENCE_ZH = "未提供业务影响证据，仅说明数据库技术影响"
 RFC3339_DATETIME = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt](?:[01]\d|2[0-3]):[0-5]\d:"
     r"(?:[0-5]\d|60)(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$"
@@ -412,6 +413,12 @@ def render_evidence_summary(evidence: dict[str, Any]) -> str:
             f"过滤列为 {predicates}。"
         )
     if kind == "statement_summary":
+        if evidence["payload"]["schemaRevision"] == "statement-summary/v3":
+            return (
+                f"该 SQL 在 {typed['windowMinutes']} 分钟窗口内执行 "
+                f"{typed['executionCount']} 次，按聚合字段计算共读取 "
+                f"{typed['weightedTotalKeys']} 个键。"
+            )
         return {
             "plan_and_scan_stable": "SQL 计划摘要和扫描行数与前一基线窗口接近。",
             "plan_changed": "SQL 计划摘要相对前一基线窗口发生变化。",
@@ -435,6 +442,8 @@ def render_evidence_summary(evidence: dict[str, Any]) -> str:
             return f"现有索引没有同时覆盖 {filters} 的过滤顺序。"
         return f"当前证据无法确认是否存在覆盖 {filters} 的复合索引。"
     if kind == "statistics":
+        if evidence["payload"]["schemaRevision"] == "statistics-health/v1":
+            return f"{typed['tableName']} 表统计健康度为 {typed['healthyPercent']}%。"
         freshness = {
             "current": "统计信息处于当前窗口",
             "predates_bulk_import": "统计更新时间早于最近一次大批量导入",
@@ -1833,8 +1842,8 @@ def validate_evidence_semantics(
     collection = evidence["collection"]
     budget = collection["budget"]
     typed = payload["typed"]
-    expected_schema_revision = EVIDENCE_SCHEMA_REVISIONS[evidence["kind"]]
-    if payload["schemaRevision"] != expected_schema_revision:
+    allowed_schema_revisions = EVIDENCE_SCHEMA_REVISIONS[evidence["kind"]]
+    if payload["schemaRevision"] not in allowed_schema_revisions:
         raise ValueError(
             f"evidence schema revision does not match kind: {evidence['evidenceId']}"
         )
@@ -2745,6 +2754,7 @@ def build_report_projection(case: dict[str, Any], audience: str) -> dict[str, An
 
 
 def validate_report_projection(report: dict[str, Any], case: dict[str, Any]) -> None:
+    validate_report_business_impact(report)
     if report["caseId"] != case["caseId"] or report["caseRevision"] != case["revision"]:
         raise ValueError("report projection does not identify its source Case revision")
     decision = case["decision"]
@@ -2806,6 +2816,79 @@ def validate_report_projection(report: dict[str, Any], case: dict[str, Any]) -> 
     }
     if report["trace"] != expected_trace:
         raise ValueError("report trace is not the exact decision provenance")
+
+
+def validate_report_business_impact(report: dict[str, Any]) -> None:
+    impact = report["impact"]
+    if not impact["businessEvidenceIds"] and impact["businessZh"] != NO_BUSINESS_EVIDENCE_ZH:
+        raise ValueError("report without business evidence must use the fixed M0 disclosure")
+
+
+def validate_m0_contract_increments() -> None:
+    evidence_validator = schema_validator("evidence-v2.schema.json")
+    report_validator = schema_validator("diagnosis-report-v1.schema.json")
+    base_evidence = load(EXAMPLES / "evidence-v2.valid.json")
+    vectors = (
+        (
+            "statistics-health/v1",
+            "statistics",
+            "orders",
+            {
+                "kind": "statistics",
+                "profileSubjectRef": "subject_0000000000000002",
+                "profileObjectRef": "orders",
+                "tableName": "orders",
+                "healthyPercent": 42,
+            },
+        ),
+        (
+            "statement-summary/v3",
+            "statement_summary",
+            f"sql:{'a' * 64}",
+            {
+                "kind": "statement_summary",
+                "profileSubjectRef": "subject_0000000000000002",
+                "profileObjectRef": f"sql:{'a' * 64}",
+                "windowMinutes": 30,
+                "executionCount": 18,
+                "averageTotalKeys": 120_000,
+                "averageProcessedKeys": 119_000,
+                "weightedTotalKeys": 2_160_000,
+                "sqlStability": "plan_and_scan_stable",
+            },
+        ),
+    )
+    for revision, kind, object_ref, typed in vectors:
+        evidence = copy.deepcopy(base_evidence)
+        evidence["kind"] = kind
+        evidence["profileObjectRef"] = object_ref
+        evidence["payload"]["schemaRevision"] = revision
+        evidence["payload"]["typed"] = typed
+        evidence["payload"]["typedDigest"] = typed_payload_digest(typed)
+        evidence["summaryZh"] = render_evidence_summary(evidence)
+        evidence_validator.validate(evidence)
+        validate_evidence_semantics(
+            evidence,
+            evidence["caseId"],
+            {"src_0000000000000001@3"},
+        )
+        wrong_revision = copy.deepcopy(evidence)
+        wrong_revision["payload"]["schemaRevision"] = "unbound-m0-shape/v1"
+        if evidence_validator.is_valid(wrong_revision):
+            raise ValueError("M0 typed Evidence shape is not bound to its schema revision")
+
+    report = load(EXAMPLES / REPORT_NAMES[0])
+    report["impact"]["businessEvidenceIds"] = []
+    report["impact"]["businessZh"] = NO_BUSINESS_EVIDENCE_ZH
+    report_validator.validate(report)
+    validate_report_business_impact(report)
+    report["impact"]["businessZh"] = "没有证据，但仍给出业务影响"
+    try:
+        validate_report_business_impact(report)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("empty business Evidence accepted non-disclosure copy")
 
 
 def main() -> None:
@@ -2924,11 +3007,12 @@ def main() -> None:
     )
     schema_validator("diagnosis-report-v1.schema.json").validate(insufficient_report)
     validate_report_projection(insufficient_report, insufficient_pending)
+    validate_m0_contract_increments()
     print(
         "vNext contract examples valid: "
         "3 sources, 1 lease-drain chain, 1 standalone evidence, 3 cases, "
         "1 AI abstention, 1 rules-only projection, 3 terminal transitions, "
-        "4 report projections"
+        "4 report projections, 2 M0 typed Evidence increments"
     )
 
 

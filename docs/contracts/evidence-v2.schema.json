@@ -115,10 +115,12 @@
             { "$ref": "#/$defs/businessObservationPayload" },
             { "$ref": "#/$defs/sqlStructurePayload" },
             { "$ref": "#/$defs/statementSummaryPayload" },
+            { "$ref": "#/$defs/statementSummaryV3Payload" },
             { "$ref": "#/$defs/slowQueryPayload" },
             { "$ref": "#/$defs/schemaPayload" },
             { "$ref": "#/$defs/indexPayload" },
             { "$ref": "#/$defs/statisticsPayload" },
+            { "$ref": "#/$defs/statisticsHealthV1Payload" },
             { "$ref": "#/$defs/ordinaryPlanPayload" },
             { "$ref": "#/$defs/runtimeMetricPayload" },
             { "$ref": "#/$defs/alertPayload" },
@@ -127,7 +129,45 @@
             { "$ref": "#/$defs/rollbackConfirmationPayload" }
           ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "schemaRevision": { "const": "statistics-health/v1" } },
+            "required": ["schemaRevision"]
+          },
+          "then": {
+            "properties": { "typed": { "$ref": "#/$defs/statisticsHealthV1Payload" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "typed": { "$ref": "#/$defs/statisticsHealthV1Payload" } },
+            "required": ["typed"]
+          },
+          "then": {
+            "properties": { "schemaRevision": { "const": "statistics-health/v1" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "schemaRevision": { "const": "statement-summary/v3" } },
+            "required": ["schemaRevision"]
+          },
+          "then": {
+            "properties": { "typed": { "$ref": "#/$defs/statementSummaryV3Payload" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "typed": { "$ref": "#/$defs/statementSummaryV3Payload" } },
+            "required": ["typed"]
+          },
+          "then": {
+            "properties": { "schemaRevision": { "const": "statement-summary/v3" } }
+          }
+        }
+      ]
     },
     "businessObservationPayload": {
       "type": "object", "additionalProperties": false,
@@ -155,6 +195,21 @@
         "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
         "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
         "sqlStability": { "enum": ["plan_and_scan_stable", "plan_changed", "scan_changed", "unknown"] }
+      }
+    },
+    "statementSummaryV3Payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "windowMinutes", "executionCount", "averageTotalKeys", "averageProcessedKeys", "weightedTotalKeys", "sqlStability"],
+      "properties": {
+        "kind": { "const": "statement_summary" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "pattern": "^sql:[a-f0-9]{64}$" },
+        "windowMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+        "executionCount": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "averageTotalKeys": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "averageProcessedKeys": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "weightedTotalKeys": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "sqlStability": { "enum": ["plan_and_scan_stable", "plan_changed", "unknown"] }
       }
     },
     "slowQueryPayload": {
@@ -202,6 +257,17 @@
         "estimatedRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
         "actualRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
         "statisticsFreshness": { "enum": ["current", "predates_bulk_import", "stale", "unknown"] }
+      }
+    },
+    "statisticsHealthV1Payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "tableName", "healthyPercent"],
+      "properties": {
+        "kind": { "const": "statistics" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "tableName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "healthyPercent": { "type": "integer", "minimum": 0, "maximum": 100 }
       }
     },
     "ordinaryPlanPayload": {
