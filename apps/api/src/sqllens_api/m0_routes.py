@@ -19,6 +19,7 @@ from sqllens_api.m0_connection import (
     M0TidbUnavailableError,
     M0TidbVersionUnsupportedError,
 )
+from sqllens_api.m0_diagnosis import M0ConnectionRequiredError, M0DiagnosisService
 
 M0_CONNECTION_BODY_LIMIT = 4096
 
@@ -30,6 +31,7 @@ def register_m0_connection_routes(
     app: FastAPI,
     *,
     store: M0ConnectionStore,
+    diagnosis_service: M0DiagnosisService,
     require_owner: RequireOwner,
     require_owner_csrf: RequireOwnerCsrf,
 ) -> None:
@@ -79,6 +81,30 @@ def register_m0_connection_routes(
             raise ApiError(409, "M0_BUSY", "Another M0 operation is already running.") from None
         return Response(status_code=204)
 
+    @app.get("/api/v1/m0/sql-candidates")
+    async def get_m0_sql_candidates(request: Request) -> JSONResponse:
+        require_owner(request)
+        window_minutes = _parse_candidate_window(request)
+        try:
+            payload = await diagnosis_service.list_candidates(window_minutes)
+        except M0ConnectionRequiredError:
+            raise ApiError(
+                409,
+                "M0_CONNECTION_REQUIRED",
+                "A live TiDB connection is required.",
+            ) from None
+        except M0BusyError:
+            raise ApiError(409, "M0_BUSY", "Another M0 operation is already running.") from None
+        except M0TidbTimeoutError:
+            raise ApiError(504, "M0_TIDB_TIMEOUT", "The TiDB connection timed out.") from None
+        except (M0DriverInvariantError, M0TidbUnavailableError):
+            raise ApiError(
+                502,
+                "M0_TIDB_UNAVAILABLE",
+                "The TiDB connection is unavailable.",
+            ) from None
+        return JSONResponse(content=payload)
+
 
 async def _parse_connection_input(request: Request) -> M0ConnectionInput:
     body = bytearray()
@@ -122,6 +148,21 @@ def _validation_error() -> ApiError:
         "VALIDATION_ERROR",
         "The request did not match the expected schema.",
     )
+
+
+def _parse_candidate_window(request: Request) -> int:
+    values = list(request.query_params.multi_items())
+    if not values:
+        return 30
+    if len(values) != 1 or values[0][0] != "window_minutes":
+        raise _validation_error()
+    raw_value = values[0][1]
+    if not raw_value.isascii() or not raw_value.isdigit():
+        raise _validation_error()
+    window_minutes = int(raw_value)
+    if not 5 <= window_minutes <= 60:
+        raise _validation_error()
+    return window_minutes
 
 
 def _connection_payload(view: M0ConnectionView | None) -> dict[str, object]:

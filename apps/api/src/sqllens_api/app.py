@@ -17,6 +17,7 @@ from starlette.responses import Response
 from sqllens_api.config import Settings
 from sqllens_api.errors import ApiError, error_response
 from sqllens_api.m0_connection import M0ConnectionStore
+from sqllens_api.m0_diagnosis import M0DiagnosisService
 from sqllens_api.m0_routes import register_m0_connection_routes
 from sqllens_api.setup import (
     OWNER_COOKIE_NAME,
@@ -63,12 +64,17 @@ def create_app(
     settings: Settings | None = None,
     clock: Clock = _utc_now,
     m0_connection_store: M0ConnectionStore | None = None,
+    m0_diagnosis_service: M0DiagnosisService | None = None,
 ) -> FastAPI:
     """Create the bounded M0 private-preview application."""
 
     runtime_settings = settings or Settings()
     store = SetupStore(runtime_settings)
     connection_store = m0_connection_store or M0ConnectionStore(clock=clock)
+    diagnosis_service = m0_diagnosis_service or M0DiagnosisService(
+        store=connection_store,
+        clock=clock,
+    )
     signer = SetupSessionSigner(runtime_settings)
 
     @asynccontextmanager
@@ -328,6 +334,7 @@ def create_app(
     register_m0_connection_routes(
         app,
         store=connection_store,
+        diagnosis_service=diagnosis_service,
         require_owner=require_owner_authenticated,
         require_owner_csrf=require_owner_session,
     )

@@ -61,6 +61,7 @@ M0_API_ROUTES = {
     ("GET", "/api/v1/m0/connection"),
     ("PUT", "/api/v1/m0/connection"),
     ("DELETE", "/api/v1/m0/connection"),
+    ("GET", "/api/v1/m0/sql-candidates"),
 }
 
 
@@ -99,7 +100,7 @@ def test_m0_deferred_operations_return_404(
     assert response.status_code == 404
 
 
-def test_m0_registers_only_the_required_owner_session_routes(tmp_path: Path) -> None:
+def test_m0_registers_only_the_frozen_private_preview_routes(tmp_path: Path) -> None:
     app = create_app(settings=_settings(tmp_path))
 
     registered = {
