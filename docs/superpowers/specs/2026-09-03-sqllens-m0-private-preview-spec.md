@@ -1,13 +1,12 @@
 # SQLLens M0 Private Preview Specification
 
-Status: Report/evidence slice approved; runtime adapter addendum pending
+Status: Approved in two frozen revisions
 Decision record: `docs/adr/0012-m0-private-preview-vertical-slice.md`
 
-Freeze split: this revision makes sections 6–8 and implementation-plan Tasks
-2–4 normative for `#t20`. Runtime sections remain non-authoritative until the
-separate `#t18` adapter addendum records the pinned-driver/TLS facts. Runtime
-implementation must consume both SHAs; a runtime-only addendum may not change
-the report/evidence interfaces frozen here.
+Freeze split: core revision `a39ba55` makes sections 6–8 and
+implementation-plan Tasks 2–4 normative for `#t20`. `#t18` must also consume
+`docs/superpowers/specs/2026-09-03-sqllens-m0-runtime-adapter-addendum.md`.
+The addendum may not change the report/evidence interfaces frozen by the core.
 
 ## 1. Objective
 
@@ -129,8 +128,9 @@ leaves the prior ready connection usable. No automatic reconnect is allowed
 because the pinned adapter clears the driver's reconnectable password fields
 immediately after authentication and no code calls a reconnecting driver API.
 
-Logout and process shutdown use a separate idempotent lifecycle cleanup path,
-not the ordinary `DELETE` path. Logout first commits session revocation, then
+Logout and process shutdown use a separate idempotent lifecycle cleanup method,
+`force_close()`, not the ordinary `DELETE` path. Logout first commits session
+revocation, then
 cancels any active probe/query, closes and awaits every pending or installed
 socket, and clears all connection references before returning. Shutdown has no
 HTTP busy response: it performs the same cleanup and must leave every socket
@@ -249,16 +249,19 @@ Constraints:
   slash, userinfo, whitespace, NUL, or Unix socket;
 - `port`: integer 1–65535;
 - `database` and `username`: 1–64 characters, no control characters;
-- `password`: 1–512 Unicode characters, represented as a secret field and
-  excluded from `repr`;
+- `password`: a Unicode string whose UTF-8 encoding is 1–512 bytes, represented
+  as a secret field and excluded from `repr`; the adapter passes UTF-8 bytes;
 - `tls_mode`: exactly `verify_ca` or `disabled`; the UI defaults to
   `verify_ca`, and `disabled` requires a visible warning; there is no
   skip-verification mode.
 
 Implementation uses the pinned asynchronous MySQL driver `asyncmy==0.2.14`, one
 connection, `echo=False`, no pool, no driver query callback, UTF-8, autocommit
-enabled, `local_infile=False`, `init_command=None`, and no reconnect or generic
-execute surface. It sets the driver's `connect_timeout=5` and `read_timeout=5`.
+left at the server default (`autocommit=None`), `local_infile=False`,
+`init_command=None`, and no reconnect or generic execute surface. The registered
+identity query requires `@@autocommit = 1`; a different session default fails
+closed rather than issuing an unregistered `SET`. The driver uses
+`connect_timeout=5` and `read_timeout=5`.
 Because this release has no `write_timeout` parameter, each connect,
 execute/read, and asynchronous close operation also runs inside a 5-second
 `asyncio.timeout()` total I/O deadline; timeout or cancellation enters
@@ -274,10 +277,10 @@ adapter constructs `asyncmy.connection.Connection`, verifies the package
 version and all three expected private fields, clears the
 `MULTI_STATEMENTS` bit from `_client_flag`, and reads the bit back as zero. Any
 mismatch fails before `Connection.connect()` is called. Immediately after the
-TLS/authentication handshake—on both later success and failure paths—and before
-the identity probe, it overwrites `_password` and `_password_creator` with
-`b""` and `None` and reads them back. A missing, unwritable, or nonempty field
-closes the socket and fails the connection.
+`Connection.connect()` call returns or raises, its `finally` path overwrites
+`_password` and `_password_creator` with `b""` and `None` and reads them back.
+On success this occurs before the identity probe. A missing, unwritable, or
+nonempty field closes the socket and fails the connection.
 
 This shim neither replaces driver methods nor supports another driver version.
 The store never retains the request DTO or password, and reconnect is
@@ -388,9 +391,12 @@ queries—digest, Slow Query, Statement Summary, ordinary plan, index metadata,
 and statistics health—sequentially. Five are immutable registry entries. The
 ordinary plan is created only by `bind_m0_ordinary_explain(validated_select)`,
 the registered binder that serializes the already validated single-table SELECT
-and prepends `EXPLAIN FORMAT='brief'`; executor and Evidence construction each
-rebuild the bound query and require exact equality. No generic SQL execution
-method accepts a caller-created `ServerQuery`. Collection runs with
+and prepends `EXPLAIN FORMAT='brief'`. Its fixed query ID is
+`ordinary_plan.validated_select`, revision is
+`tidb-8.5/ordinary_plan.validated_select-v1`, and budget is 5 seconds, 200 rows,
+and 524288 bytes. Executor and Evidence construction each rebuild the bound
+query and require exact equality. No generic SQL execution method accepts a
+caller-created `ServerQuery`. Collection runs with
 an overall 30-second deadline, at most 1000 rows and 2 MiB across all results.
 Every query independently retains its stricter registry budget. Failure of one
 optional role becomes a typed gap; identity/digest mismatch, version mismatch,

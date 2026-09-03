@@ -9,7 +9,8 @@
 **Tech Stack:** Python 3.12, FastAPI 0.141.1, Pydantic 2.13.5, sqlglot 30.17.0, asyncmy 0.2.14, React 19, TypeScript strict, Vite, Pytest, Vitest, Playwright, Ruff, mypy, Docker.
 
 **Split freeze:** Tasks 2–4 are executable from the first report/evidence SHA.
-Tasks 5–9 require that SHA plus the later runtime-adapter addendum SHA. The
+Tasks 5–9 require core `a39ba55` plus the commit containing the approved
+`2026-09-03-sqllens-m0-runtime-adapter-addendum.md`. The
 addendum may tighten driver/TLS/lifecycle behavior but may not change the typed
 payload, Evidence, rule, report, or `M0ReportInput -> bytes` interfaces.
 
@@ -38,6 +39,7 @@ payload, Evidence, rule, report, or `M0ReportInput -> bytes` interfaces.
 **Files:**
 - Create: `docs/adr/0012-m0-private-preview-vertical-slice.md`
 - Create: `docs/superpowers/specs/2026-09-03-sqllens-m0-private-preview-spec.md`
+- Create: `docs/superpowers/specs/2026-09-03-sqllens-m0-runtime-adapter-addendum.md`
 - Create: `docs/superpowers/plans/2026-09-03-sqllens-m0-private-preview.md`
 - Modify: `AGENTS.md`
 - Modify: `tasks/plan.md`
@@ -77,6 +79,7 @@ Expected: all frozen terms are present; `git diff --check` exits 0.
 ~~~bash
 git add AGENTS.md tasks/plan.md docs/adr/0012-m0-private-preview-vertical-slice.md \
   docs/superpowers/specs/2026-09-03-sqllens-m0-private-preview-spec.md \
+  docs/superpowers/specs/2026-09-03-sqllens-m0-runtime-adapter-addendum.md \
   docs/superpowers/plans/2026-09-03-sqllens-m0-private-preview.md
 git commit -m "docs: freeze M0 private preview vertical slice"
 git push -u origin docs/m0-private-preview
@@ -567,7 +570,7 @@ transport rather than preserve a reusable slot. Driver loss must also close and
 clear the slot. With the unique test password, assert the post-handshake adapter
 sets driver `_password == b""` and `_password_creator is None` before identity
 I/O. Assert it clears and reads back
-`_client_flag & CLIENT_MULTI_STATEMENTS == 0` before calling the driver's
+`_client_flag & MULTI_STATEMENTS == 0` before calling the driver's
 network connect method. A wrong version or missing, unwritable, or nonconforming
 field must fail before network I/O or close an already-created socket. Assert
 `ssl.create_default_context()` supplies `CERT_REQUIRED` plus hostname checking
@@ -620,14 +623,15 @@ new connection while holding the one non-queuing operation lease. Connect with
 `ssl.create_default_context()` (`CERT_REQUIRED`, hostname checking) for
 `verify_ca`; never pass `ssl=True`. Construct the public
 `asyncmy.connection.Connection` through an adapter that first asserts exact
-package version/field layout, clears the `MULTI_STATEMENTS` bit in
+package version/field layout, uses `autocommit=None`, clears the
+`MULTI_STATEMENTS` bit in
 `_client_flag`, reads the bit back as zero, and only then calls
-`Connection.connect()`. As soon as authentication returns—also on every later
-failure path—the adapter must set `_password=b""` and
-`_password_creator=None`, read both values back, and fail closed while closing
-if the invariant cannot be proved. Perform the identity probe only after that
-scrub, then the short atomic swap; close the rejected/new or replaced/old socket
-on every path. `replace`,
+`Connection.connect()`. The adapter's immediate `finally` block must set
+`_password=b""` and `_password_creator=None` after `Connection.connect()`
+returns or raises, read both values back, and fail closed while closing if the
+invariant cannot be proved. Perform the identity probe only after that scrub,
+require `@@autocommit = 1` without issuing `SET`, then perform the short atomic
+swap; close the rejected/new or replaced/old socket on every path. `replace`,
 `disconnect`, and `use` make one immediate lease attempt and raise the internal
 busy signal rather than waiting. Do not retain the input DTO/password and never
 call a reconnecting driver method. `force_close` is a distinct idempotent
@@ -699,7 +703,7 @@ join/multiple-table/derived-only/DML/lock/outfile/user-EXPLAIN rejection,
 MiB/30-second aggregate caps, and optional-evidence gaps. Assert an injected
 registered-query value containing a second parsed statement is rejected before
 driver I/O. Also assert the executor never receives a connection whose
-`CLIENT_MULTI_STATEMENTS` bit remains set.
+`MULTI_STATEMENTS` bit remains set.
 
 - [ ] **Step 2: Add exact immutable registry entries**
 

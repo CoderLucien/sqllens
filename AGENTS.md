@@ -16,9 +16,10 @@ For M0, read only what the assigned task needs, in this precedence order:
 
 1. `docs/adr/0012-m0-private-preview-vertical-slice.md`;
 2. `docs/superpowers/specs/2026-09-03-sqllens-m0-private-preview-spec.md`;
-3. `docs/superpowers/plans/2026-09-03-sqllens-m0-private-preview.md`;
-4. `tasks/plan.md`;
-5. active task acceptance criteria/checkpoints.
+3. `docs/superpowers/specs/2026-09-03-sqllens-m0-runtime-adapter-addendum.md`;
+4. `docs/superpowers/plans/2026-09-03-sqllens-m0-private-preview.md`;
+5. `tasks/plan.md`;
+6. active task acceptance criteria/checkpoints.
 
 The 2026-09-02 vNext spec, ADR 0010, and ADR 0011 remain historical or future
 records. They are dormant for M0 wherever they add AI, persistent/multiple
@@ -29,8 +30,9 @@ unsafe SQL and `EXPLAIN ANALYZE`.
 
 If implementation and an active M0 document conflict, stop and escalate. Change
 the decision/specification first; do not silently choose an interpretation.
-`#t20` may start from the published report/evidence core SHA. `#t18` connection
-work must additionally consume the published runtime-adapter addendum SHA.
+`#t20` starts from report/evidence core `a39ba55`. `#t18` connection work
+must additionally consume the commit containing
+`docs/superpowers/specs/2026-09-03-sqllens-m0-runtime-adapter-addendum.md`.
 
 ## Frozen M0 Boundary
 
@@ -128,7 +130,7 @@ state machine without a new Human scope decision.
   plus a 5-second outer `asyncio.timeout()` for each I/O; do not invent a
   `write_timeout` argument.
 - Use the exact-version connection adapter: before network I/O clear and verify
-  `_client_flag & CLIENT_MULTI_STATEMENTS == 0`; immediately after the
+  `_client_flag & MULTI_STATEMENTS == 0`; immediately after the
   handshake clear and verify `_password=b""` and `_password_creator=None`.
   Any version/field/read-back mismatch fails closed, reconnect is forbidden,
   and driver methods are never monkey-patched.

@@ -57,6 +57,8 @@ read-back mismatch fails closed. The adapter does not replace driver methods,
 reconnect is forbidden, and the executor still requires an exactly
 reconstructed, exactly one-statement registry/binder query. This three-field
 private shim requires the narrow Reviewer gate and redesign before production.
+Its exact construction, TLS, timeout, and lifecycle sequence is frozen in
+`docs/superpowers/specs/2026-09-03-sqllens-m0-runtime-adapter-addendum.md`.
 
 Only the following API families are registered:
 

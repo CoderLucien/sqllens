@@ -10,8 +10,9 @@ Source of truth, in precedence order:
 
 1. `docs/adr/0012-m0-private-preview-vertical-slice.md`;
 2. `docs/superpowers/specs/2026-09-03-sqllens-m0-private-preview-spec.md`;
-3. `docs/superpowers/plans/2026-09-03-sqllens-m0-private-preview.md`;
-4. this task ledger.
+3. `docs/superpowers/specs/2026-09-03-sqllens-m0-runtime-adapter-addendum.md`;
+4. `docs/superpowers/plans/2026-09-03-sqllens-m0-private-preview.md`;
+5. this task ledger.
 
 The 2026-09-02 vNext spec and ADR 0011 remain historical/future design records.
 They do not authorize a persistent Source, multi-source, AI, Prometheus/TEM,
