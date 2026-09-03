@@ -45,3 +45,6 @@ docker logs -f sqllens                     # 查看日志
   以及内置三份真实证据演示样例。
 - AI 增强为可选配置；不配置时走纯规则模式（零外部依赖、零数据出本机）。
 - 只读：不接受 DML/DDL/`EXPLAIN ANALYZE`，不自动执行任何生产变更。
+- **验证边界（如实标注）**：Plan Replayer 解析的合成 zip 三类拒绝路径
+  （空包/坏 zip/缺内容）已实测通过；**真实 `PLAN REPLAYER DUMP` zip 的
+  evidence/v3 → diagnose 全链路为 M3 侧验证项**，本包未含真实 DUMP 包实测。
