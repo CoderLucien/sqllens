@@ -355,6 +355,16 @@ def test_tidb_m0_query_cards_are_exactly_bounded_and_secret_free() -> None:
         validate_server_query(queries[query_id])
 
 
+def test_tidb_candidate_projects_rounded_percentile_as_a_signed_integer() -> None:
+    candidate = query_pack("tidb-8.5")["sql_candidates.current_user"]
+
+    assert (
+        "CAST(ROUND(APPROX_PERCENTILE(observations.query_time, 95) * 1000) AS SIGNED)"
+        in candidate.sql
+    )
+    assert candidate.query_revision == "tidb-8.5/sql_candidates.current_user-v2"
+
+
 def test_non_tidb_pack_does_not_expose_m0_query_cards() -> None:
     queries = query_pack("pingkaidb-7.1")
 

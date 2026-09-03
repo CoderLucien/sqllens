@@ -698,6 +698,14 @@ def test_candidate_route_requires_a_live_connection_without_invalidating_state(
                 },
             )
         ),
+        candidate_result(
+            rows=(
+                {
+                    **candidate_result().rows[0],
+                    "p95_ms": 59.0,
+                },
+            )
+        ),
         candidate_result(observed_bytes=262_145),
     ],
 )

@@ -641,6 +641,7 @@ LIMIT 200
                 required_capability=None,
                 cardinality=QueryCardinality.BOUNDED_ROWS,
                 budget=_budget(timeout_ms=5_000, max_rows=20, max_bytes=262_144),
+                revision=2,
             ),
             _query(
                 pack_id,
@@ -698,7 +699,7 @@ def _m0_candidate_sql() -> str:
 SELECT
     observations.sql_digest AS sql_digest,
     COUNT(observations.sql_digest) AS execution_count,
-    ROUND(APPROX_PERCENTILE(observations.query_time, 95) * 1000) AS p95_ms,
+    CAST(ROUND(APPROX_PERCENTILE(observations.query_time, 95) * 1000) AS SIGNED) AS p95_ms,
     ROUND(AVG(observations.total_keys)) AS average_scan_rows,
     ROUND(AVG(observations.result_rows)) AS average_return_rows,
     ROUND(UNIX_TIMESTAMP(MAX(observations.observed_at)) * 1000) AS last_seen
