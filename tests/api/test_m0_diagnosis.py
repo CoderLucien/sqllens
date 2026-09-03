@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqllens_api.app import create_app
 from sqllens_api.config import Settings
 from sqllens_api.evidence_connector import QueryResult, QueryValue, ServerQuery, query_pack
@@ -18,7 +19,12 @@ from sqllens_api.m0_connection import (
     M0TidbTimeoutError,
     M0TidbUnavailableError,
 )
-from sqllens_api.m0_diagnosis import M0DiagnosisService
+from sqllens_api.m0_diagnosis import (
+    M0DiagnosisInput,
+    M0DiagnosisService,
+    M0DiagnosisValidationError,
+    parse_m0_select,
+)
 
 
 class CandidateClient:
@@ -78,6 +84,143 @@ class CandidateStore:
 
 FIXED_NOW = datetime(2026, 9, 3, 6, 30, tzinfo=UTC)
 LOCAL_ORIGIN = "http://localhost:18080"
+VALID_SQL_DIGEST = "a" * 64
+
+
+def test_diagnosis_input_is_closed_strict_and_excludes_sql_from_repr() -> None:
+    sql_text = "SELECT id FROM orders WHERE customer_id = 42"
+
+    value = M0DiagnosisInput.model_validate(
+        {
+            "sql_digest": VALID_SQL_DIGEST,
+            "sql_text": sql_text,
+            "window_minutes": 30,
+        }
+    )
+
+    assert value.sql_text == sql_text
+    assert sql_text not in repr(value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"sql_digest": "A" * 64, "sql_text": "SELECT id FROM orders", "window_minutes": 30},
+        {"sql_digest": "a" * 63, "sql_text": "SELECT id FROM orders", "window_minutes": 30},
+        {"sql_digest": VALID_SQL_DIGEST, "sql_text": "", "window_minutes": 30},
+        {
+            "sql_digest": VALID_SQL_DIGEST,
+            "sql_text": "\u00e9" * 16_385,
+            "window_minutes": 30,
+        },
+        {"sql_digest": VALID_SQL_DIGEST, "sql_text": "SELECT id FROM orders", "window_minutes": 4},
+        {"sql_digest": VALID_SQL_DIGEST, "sql_text": "SELECT id FROM orders", "window_minutes": 61},
+        {
+            "sql_digest": VALID_SQL_DIGEST,
+            "sql_text": "SELECT id FROM orders",
+            "window_minutes": True,
+        },
+        {
+            "sql_digest": VALID_SQL_DIGEST,
+            "sql_text": "SELECT id FROM orders",
+            "window_minutes": 30.0,
+        },
+        {
+            "sql_digest": VALID_SQL_DIGEST,
+            "sql_text": "SELECT id FROM orders",
+            "window_minutes": 30,
+            "extra": "not allowed",
+        },
+    ],
+)
+def test_diagnosis_input_rejects_open_or_noncanonical_values(payload: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        M0DiagnosisInput.model_validate(payload)
+
+
+def test_parse_m0_select_returns_only_bounded_structure_and_hides_sql_from_repr() -> None:
+    sql_text = "SELECT id FROM orders WHERE customer_id = 42 AND state = 'paid'"
+
+    parsed = parse_m0_select(sql_text, database="shop")
+
+    assert parsed.canonical_sql == sql_text
+    assert parsed.database == "shop"
+    assert parsed.table_name == "orders"
+    assert parsed.predicate_columns == ("customer_id", "state")
+    assert "customer_id = 42" not in repr(parsed)
+    assert "paid" not in repr(parsed)
+
+
+def test_parse_m0_select_accepts_one_nonrecursive_cte_over_one_base_table() -> None:
+    parsed = parse_m0_select(
+        "WITH recent AS (SELECT id, customer_id FROM shop.orders WHERE state = 'paid') "
+        "SELECT id FROM recent WHERE customer_id = 42",
+        database="shop",
+    )
+
+    assert parsed.table_name == "orders"
+    assert parsed.predicate_columns == ("customer_id", "state")
+
+
+def test_parse_m0_select_accepts_normal_multiline_sql_whitespace() -> None:
+    parsed = parse_m0_select(
+        "SELECT id\nFROM orders\nWHERE customer_id = 42\tAND state = 'paid'",
+        database="shop",
+    )
+
+    assert parsed.table_name == "orders"
+    assert parsed.predicate_columns == ("customer_id", "state")
+
+
+def test_parse_m0_select_bounds_and_deduplicates_the_filter_column_prefix() -> None:
+    predicates = " OR ".join(f"column_{index} = {index}" for index in range(40))
+
+    parsed = parse_m0_select(f"SELECT id FROM orders WHERE {predicates}", database="shop")
+
+    assert parsed.predicate_columns == tuple(f"column_{index}" for index in range(32))
+
+
+def test_parse_m0_select_handles_deep_predicates_without_recursing() -> None:
+    predicates = " OR ".join(f"column_{index} = 1" for index in range(1_200))
+
+    parsed = parse_m0_select(f"SELECT id FROM orders WHERE {predicates}", database="shop")
+
+    assert parsed.predicate_columns == tuple(f"column_{index}" for index in range(32))
+
+
+@pytest.mark.parametrize(
+    "sql_text",
+    [
+        "UPDATE orders SET state = 'paid' WHERE id = 1",
+        "EXPLAIN SELECT id FROM orders",
+        "SELECT o.id FROM orders AS o JOIN customers AS c ON c.id = o.customer_id",
+        "SELECT orders.id FROM orders, customers",
+        "SELECT id FROM (SELECT id FROM orders) AS derived_orders",
+        "SELECT (SELECT MAX(id) FROM customers) FROM orders",
+        "SELECT id FROM orders FOR UPDATE",
+        "SELECT id INTO OUTFILE '/tmp/m0-out' FROM orders",
+        "SELECT id FROM orders; SELECT id FROM customers",
+        "WITH RECURSIVE descendants AS (SELECT id FROM orders) SELECT id FROM descendants",
+        "SELECT 1",
+        "SELECT id FROM other.orders",
+    ],
+)
+def test_parse_m0_select_rejects_every_non_single_table_read_only_shape(sql_text: str) -> None:
+    with pytest.raises(M0DiagnosisValidationError):
+        parse_m0_select(sql_text, database="shop")
+
+
+def test_parse_m0_select_never_logs_or_raises_with_raw_sql(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    marker = "m0_confidential_marker_4f67"
+    sql_text = f"SELECT id FROM orders WHERE state = '{marker}' AND"
+
+    with pytest.raises(M0DiagnosisValidationError) as caught:
+        parse_m0_select(sql_text, database="shop")
+
+    assert marker not in str(caught.value)
+    assert marker not in caplog.text
 
 
 def candidate_result(

@@ -3,9 +3,16 @@ from __future__ import annotations
 import asyncio
 import re
 import secrets
-from collections.abc import Callable, Mapping
+import unicodedata
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import cast
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlglot import Dialect, exp
+from sqlglot.errors import ErrorLevel, SqlglotError
+from sqlglot.optimizer.scope import Scope, traverse_scope
 
 from sqllens_api.evidence_connector import MAX_SAFE_INTEGER, JsonValue, QueryResult, query_pack
 from sqllens_api.m0_connection import (
@@ -18,10 +25,73 @@ from sqllens_api.m0_connection import (
 
 M0_MIN_WINDOW_MINUTES = 5
 M0_MAX_WINDOW_MINUTES = 60
+M0_MAX_SQL_BYTES = 32_768
+M0_MAX_PREDICATE_COLUMNS = 32
 _SQL_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_UNSAFE_SELECT_EXPRESSIONS = (
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Create,
+    exp.Drop,
+    exp.Alter,
+    exp.Merge,
+    exp.TruncateTable,
+    exp.Transaction,
+    exp.Commit,
+    exp.Rollback,
+    exp.Grant,
+    exp.Revoke,
+    exp.Copy,
+    exp.LoadData,
+    exp.Into,
+    exp.Lock,
+    exp.Analyze,
+    exp.Execute,
+    exp.Set,
+    exp.Command,
+    exp.Use,
+    exp.Pragma,
+)
 
 type Clock = Callable[[], datetime]
 type ExecutionIdFactory = Callable[[], str]
+
+
+class M0DiagnosisInput(BaseModel):
+    """Closed request model whose SQL text never appears in object representations."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sql_digest: str = Field(pattern=_SQL_DIGEST.pattern)
+    sql_text: str = Field(repr=False)
+    window_minutes: int = Field(ge=M0_MIN_WINDOW_MINUTES, le=M0_MAX_WINDOW_MINUTES)
+
+    @field_validator("sql_text")
+    @classmethod
+    def validate_sql_bytes(cls, value: str) -> str:
+        try:
+            byte_length = len(value.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise ValueError("SQL text must be valid UTF-8") from None
+        if not 1 <= byte_length <= M0_MAX_SQL_BYTES:
+            raise ValueError("SQL text must encode to between 1 and 32768 UTF-8 bytes")
+        return value
+
+
+class M0DiagnosisValidationError(ValueError):
+    def __init__(self) -> None:
+        super().__init__("The SQL is not a supported M0 SELECT.")
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedM0Select:
+    """Request-local SQL structure safe to retain only for one diagnosis call."""
+
+    canonical_sql: str = field(repr=False)
+    database: str
+    table_name: str
+    predicate_columns: tuple[str, ...]
 
 
 def _utc_now() -> datetime:
@@ -30,6 +100,136 @@ def _utc_now() -> datetime:
 
 def _execution_id() -> str:
     return f"exec_{secrets.token_hex(8)}"
+
+
+def parse_m0_select(sql_text: str, *, database: str) -> ParsedM0Select:
+    """Parse one bounded single-table SELECT without exposing its text in diagnostics."""
+
+    try:
+        sql_bytes = sql_text.encode("utf-8")
+    except (AttributeError, UnicodeEncodeError):
+        raise M0DiagnosisValidationError from None
+    if (
+        not 1 <= len(sql_bytes) <= M0_MAX_SQL_BYTES
+        or not _bounded_identifier(database)
+        or any(
+            unicodedata.category(character).startswith("C") and character not in "\t\n\r"
+            for character in sql_text
+        )
+    ):
+        raise M0DiagnosisValidationError
+
+    statement = _parse_user_statement(sql_text)
+    if not isinstance(statement, exp.Select):
+        raise M0DiagnosisValidationError
+    if any(isinstance(node, _UNSAFE_SELECT_EXPRESSIONS) for node in statement.walk()):
+        raise M0DiagnosisValidationError
+    if next(statement.find_all(exp.Join), None) is not None:
+        raise M0DiagnosisValidationError
+    if next(statement.find_all(exp.Subquery), None) is not None:
+        raise M0DiagnosisValidationError
+    with_expression = statement.args.get("with_")
+    if isinstance(with_expression, exp.With) and bool(with_expression.args.get("recursive")):
+        raise M0DiagnosisValidationError
+
+    physical_tables: list[exp.Table] = []
+    try:
+        scopes = list(traverse_scope(statement))
+    except (SqlglotError, ValueError, RecursionError):
+        raise M0DiagnosisValidationError from None
+    if not scopes:
+        raise M0DiagnosisValidationError
+    for scope in scopes:
+        if len(scope.selected_sources) != 1:
+            raise M0DiagnosisValidationError
+        for _name, (_node, source) in scope.selected_sources.items():
+            if isinstance(source, exp.Table):
+                physical_tables.append(source)
+            elif isinstance(source, Scope) and source.is_cte and not source.is_derived_table:
+                continue
+            else:
+                raise M0DiagnosisValidationError
+    if len(physical_tables) != 1:
+        raise M0DiagnosisValidationError
+
+    physical_table = physical_tables[0]
+    table_name = physical_table.name
+    table_database = physical_table.db
+    if (
+        not _bounded_identifier(table_name)
+        or physical_table.catalog
+        or (table_database and table_database != database)
+    ):
+        raise M0DiagnosisValidationError
+
+    try:
+        canonical_sql = statement.sql(dialect="mysql", pretty=False)
+        canonical_bytes = canonical_sql.encode("utf-8")
+    except (SqlglotError, ValueError, UnicodeError, RecursionError):
+        raise M0DiagnosisValidationError from None
+    if not 1 <= len(canonical_bytes) <= M0_MAX_SQL_BYTES:
+        raise M0DiagnosisValidationError
+
+    predicate_columns: list[str] = []
+    seen_columns: set[str] = set()
+    for where in statement.find_all(exp.Where):
+        for column in _columns_in_expression_order(where):
+            name = column.name
+            if not _bounded_identifier(name):
+                raise M0DiagnosisValidationError
+            normalized_name = name.casefold()
+            if normalized_name in seen_columns:
+                continue
+            seen_columns.add(normalized_name)
+            predicate_columns.append(name)
+            if len(predicate_columns) == M0_MAX_PREDICATE_COLUMNS:
+                break
+        if len(predicate_columns) == M0_MAX_PREDICATE_COLUMNS:
+            break
+
+    return ParsedM0Select(
+        canonical_sql=canonical_sql,
+        database=database,
+        table_name=table_name,
+        predicate_columns=tuple(predicate_columns),
+    )
+
+
+def _columns_in_expression_order(expression: exp.Expr) -> Iterator[exp.Column]:
+    pending = [expression]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, exp.Column):
+            yield current
+        pending.extend(reversed(tuple(current.iter_expressions())))
+
+
+def _parse_user_statement(sql_text: str) -> exp.Expr:
+    try:
+        dialect = Dialect.get_or_raise("mysql")
+        tokens = dialect.tokenize(sql_text)
+        statements = [
+            statement
+            for statement in dialect.parser(error_level=ErrorLevel.RAISE).parse(
+                tokens,
+                "?" * len(sql_text),
+            )
+            if statement is not None
+        ]
+    except (SqlglotError, ValueError, UnicodeError, RecursionError):
+        raise M0DiagnosisValidationError from None
+    if len(statements) != 1:
+        raise M0DiagnosisValidationError
+    return statements[0]
+
+
+def _bounded_identifier(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= 64
+        and value == value.strip()
+        and not any(unicodedata.category(character).startswith("C") for character in value)
+    )
 
 
 class M0ConnectionRequiredError(RuntimeError):
