@@ -209,11 +209,11 @@ def build_m0_rules_report(value: M0ReportInput) -> bytes:
         "caseId": value.case_id,
         "caseRevision": 1,
         "audience": "dba_sre",
-        "titleZh": _title(hits),
+        "titleZh": _title(hits, leading.completeness),
         "priority": priority,
         "configuredMode": "rules",
         "effectiveMode": "rules",
-        "conclusionZh": _conclusion(hits),
+        "conclusionZh": _conclusion(hits, leading.completeness),
         "impact": {
             "clusterZh": "当前本地连接的 TiDB 集群",
             "databaseZh": value.database,
@@ -241,7 +241,7 @@ def build_m0_rules_report(value: M0ReportInput) -> bytes:
             invalid_roles,
         ),
         "trace": {
-            "evidenceLevel": "E2",
+            "evidenceLevel": _evidence_level(leading.completeness),
             "evidenceCompleteness": leading.completeness,
             "evidenceIds": evidence_ids,
             "ruleIds": [item.rule_id for item in hits],
@@ -296,37 +296,51 @@ def _read_evidence_bundle(
     value: M0ReportInput,
     window_minutes: int,
 ) -> tuple[list[_EvidenceRecord], set[str], bool]:
+    previews = [_peek_evidence_header(collected) for collected in value.evidence]
+    id_counts: defaultdict[str, int] = defaultdict(int)
+    for _, evidence_id in previews:
+        if evidence_id is not None:
+            id_counts[evidence_id] += 1
+    duplicate_ids = {evidence_id for evidence_id, count in id_counts.items() if count > 1}
     records: list[_EvidenceRecord] = []
     invalid_roles: set[str] = set()
-    seen_ids: set[str] = set()
-    for collected in value.evidence:
-        role = _peek_role(collected)
+    for collected, (role, evidence_id) in zip(value.evidence, previews, strict=True):
+        if evidence_id in duplicate_ids:
+            if role is not None:
+                invalid_roles.add(role)
+            continue
         try:
             record = _read_evidence(collected, value=value, window_minutes=window_minutes)
         except (KeyError, TypeError, ValueError, UnicodeError, RecursionError):
             if role is not None:
                 invalid_roles.add(role)
             continue
-        if record.evidence_id in seen_ids:
-            invalid_roles.add(record.kind)
-            continue
-        seen_ids.add(record.evidence_id)
         records.append(record)
+    records.sort(key=lambda record: (record.kind, record.evidence_id))
     contexts = {
         (record.source_id, record.source_revision, record.profile_subject_ref) for record in records
     }
     return records, invalid_roles, len(contexts) > 1
 
 
-def _peek_role(collected: CollectedEvidence) -> str | None:
+def _peek_evidence_header(
+    collected: CollectedEvidence,
+) -> tuple[str | None, str | None]:
     try:
         value = strict_json_loads(collected.document_json)
     except (TypeError, ValueError, UnicodeError, RecursionError):
-        return None
+        return None, None
     if not isinstance(value, dict):
-        return None
+        return None, None
     kind = value.get("kind")
-    return kind if isinstance(kind, str) and kind in _ROLE_ORDER else None
+    role = kind if isinstance(kind, str) and kind in _ROLE_ORDER else None
+    evidence_id = value.get("evidenceId")
+    valid_id = (
+        evidence_id
+        if isinstance(evidence_id, str) and _EVIDENCE_ID.fullmatch(evidence_id)
+        else None
+    )
+    return role, valid_id
 
 
 def _read_evidence(
@@ -340,8 +354,9 @@ def _read_evidence(
     _require_exact_fields(document, _TOP_LEVEL_FIELDS, "Evidence")
     if strict_json_bytes(cast(JsonValue, document)) != collected.document_json:
         raise ValueError("Evidence is not canonical strict JSON")
-    if document["schemaVersion"] != "evidence/v2" or document["revision"] != 1:
+    if document["schemaVersion"] != "evidence/v2":
         raise ValueError("Evidence version is unsupported")
+    _require_integer(document["revision"], "Evidence revision", 1, 1)
     evidence_id = _require_pattern(document["evidenceId"], _EVIDENCE_ID, "Evidence ID")
     if document["caseId"] != value.case_id:
         raise ValueError("Evidence belongs to another Case")
@@ -381,7 +396,7 @@ def _read_evidence(
     if payload["canonicalRevision"] != "rfc8785-safe-integer/v1":
         raise ValueError("Evidence canonical revision is unsupported")
     _require_pattern(payload["storageRef"], _STORAGE_ID, "storage reference")
-    record_count = _require_integer(payload["recordCount"], "record count", 0, 100_000)
+    record_count = _require_integer(payload["recordCount"], "record count", 1, 100_000)
     if not isinstance(payload["truncated"], bool):
         raise ValueError("Evidence truncation flag is invalid")
     raw_digest = _require_pattern(payload["digest"], _SHA256, "payload digest")
@@ -389,7 +404,12 @@ def _read_evidence(
     if raw_digest != integrity_digest:
         raise ValueError("Evidence digest fields differ")
     raw_loaded = strict_json_loads(collected.storage_payload)
-    _require_object(raw_loaded, "raw Evidence payload")
+    raw_document = _require_object(raw_loaded, "raw Evidence payload")
+    if strict_json_bytes(cast(JsonValue, raw_document)) != collected.storage_payload:
+        raise ValueError("raw Evidence payload is not canonical strict JSON")
+    raw_rows = raw_document.get("rows")
+    if not isinstance(raw_rows, list) or len(raw_rows) != record_count:
+        raise ValueError("raw Evidence rows differ from the record count")
     actual_raw_digest = f"sha256:{hashlib.sha256(collected.storage_payload).hexdigest()}"
     if actual_raw_digest != raw_digest:
         raise ValueError("raw Evidence digest mismatch")
@@ -723,8 +743,18 @@ def _priority(
     return "P2"
 
 
-def _title(hits: list[_Assessment]) -> str:
+def _evidence_level(completeness: int) -> str:
+    if completeness == 0:
+        return "E0"
+    if completeness < 100:
+        return "E1"
+    return "E2"
+
+
+def _title(hits: list[_Assessment], completeness: int) -> str:
     if not hits:
+        if completeness == 100:
+            return "现有完整证据未命中 M0 异常规则"
         return "现有证据不足以发布异常 SQL 处置结论"
     titles = {
         INDEX_RULE_ID: "发现高扫描放大全表扫描，先验证访问路径",
@@ -734,9 +764,11 @@ def _title(hits: list[_Assessment]) -> str:
     return titles[hits[0].rule_id]
 
 
-def _conclusion(hits: list[_Assessment]) -> str:
+def _conclusion(hits: list[_Assessment], completeness: int) -> str:
     if not hits:
-        return "当前合格证据未同时满足任一 M0 规则阈值，因此不发布根因或变更建议。"
+        if completeness < 100:
+            return "当前证据不完整，无法安全判定异常 SQL 原因或发布处置建议。"
+        return "当前合格证据完整，但未同时满足任一 M0 规则阈值，因此不发布根因或变更建议。"
     texts: list[str] = []
     for assessment in hits:
         if assessment.rule_id == INDEX_RULE_ID:
@@ -849,8 +881,8 @@ def _actions(hits: list[_Assessment]) -> list[dict[str, JsonValue]]:
         if assessment.rule_id == REPEATED_SCAN_RULE_ID:
             summary = assessment.eligible["statement_summary"].typed
             slow = assessment.eligible["slow_query"].typed
-            execution_target = max(1, cast(int, summary["executionCount"]) // 2)
-            scan_target = max(1, cast(int, slow["averageScanRows"]) // 10)
+            execution_target = min(9, max(1, cast(int, summary["executionCount"]) // 2))
+            scan_target = min(9_999, max(1, cast(int, slow["averageScanRows"]) // 10))
             action: dict[str, JsonValue] = {
                 "actionId": "act_m0repeatedscan001",
                 "order": 0,
@@ -887,7 +919,7 @@ def _actions(hits: list[_Assessment]) -> list[dict[str, JsonValue]]:
             }
         elif assessment.rule_id == INDEX_RULE_ID:
             slow = assessment.eligible["slow_query"].typed
-            scan_target = max(1, cast(int, slow["averageScanRows"]) // 10)
+            scan_target = min(9_999, max(1, cast(int, slow["averageScanRows"]) // 10))
             action = {
                 "actionId": "act_m0indexscanrisk001",
                 "order": 0,

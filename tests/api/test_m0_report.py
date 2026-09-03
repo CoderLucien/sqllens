@@ -5,7 +5,7 @@ import copy
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -146,11 +146,14 @@ def rebind_review_evidence(
     case_id: str,
     sql_digest: str | None = None,
     table_name: str | None = None,
+    evidence_id: str | None = None,
 ) -> CollectedEvidence:
     document = copy.deepcopy(collected.document)
     storage = strict_json_loads(collected.storage_payload)
     assert isinstance(storage, dict)
     document["caseId"] = case_id
+    if evidence_id is not None:
+        document["evidenceId"] = evidence_id
     typed = document["payload"]["typed"]
     if sql_digest is not None:
         sql_ref = f"sql:{sql_digest}"
@@ -181,6 +184,26 @@ def test_m0_report_input_is_frozen_and_does_not_repr_evidence() -> None:
     assert value.evidence[0].document["evidenceId"] not in repr(value)
     with pytest.raises(FrozenInstanceError):
         value.database = "other"  # type: ignore[misc]
+
+
+def test_empty_evidence_is_e0_and_explicitly_incomplete() -> None:
+    value = replace(load_scenario("index-scan"), evidence=())
+
+    result = report(value)
+
+    assert result["priority"] == "observe"
+    assert result["trace"]["evidenceLevel"] == "E0"
+    assert result["trace"]["evidenceCompleteness"] == 0
+    assert "证据不足" in result["titleZh"]
+    assert "证据不完整" in result["conclusionZh"]
+
+
+def test_partial_evidence_is_e1() -> None:
+    result = report(without_kind(load_scenario("statistics-health"), "statistics"))
+
+    assert result["priority"] == "observe"
+    assert result["trace"]["evidenceLevel"] == "E1"
+    assert result["trace"]["evidenceCompleteness"] == 50
 
 
 def test_index_rule_emits_a_narrow_rules_only_chinese_report() -> None:
@@ -215,7 +238,7 @@ def test_index_rule_emits_a_narrow_rules_only_chinese_report() -> None:
     assert action["prerequisitesZh"]
     assert action["stepsZh"]
     assert action["validation"]["targetZh"] == (
-        "平均扫描行数降至不高于 12000 行，SQL P95 不高于当前 1800 ms 基线；"
+        "平均扫描行数降至不高于 9999 行，SQL P95 不高于当前 1800 ms 基线；"
         "写入 P95 不高于灰度前冻结基线的 110%"
     )
     assert action["rollbackZh"]
@@ -328,7 +351,10 @@ def test_statistics_rule_does_not_hit_at_80() -> None:
     assert result["priority"] == "observe"
     assert result["actions"] == []
     assert result["trace"]["ruleIds"] == []
+    assert result["trace"]["evidenceLevel"] == "E2"
     assert result["trace"]["evidenceCompleteness"] == 100
+    assert "未命中" in result["titleZh"]
+    assert "合格证据完整" in result["conclusionZh"]
 
 
 @pytest.mark.parametrize("missing_kind", ["sql_structure", "statistics"])
@@ -523,6 +549,89 @@ def test_duplicate_required_role_fails_closed_instead_of_cherry_picking() -> Non
     assert result["actions"] == []
 
 
+def test_duplicate_evidence_id_invalidates_all_colliding_roles_independent_of_order() -> None:
+    index = load_scenario("index-scan")
+    statistics = load_scenario("statistics-health")
+    duplicate_id = evidence_by_kind(index, "index").document["evidenceId"]
+    assert isinstance(duplicate_id, str)
+    health = rebind_review_evidence(
+        evidence_by_kind(statistics, "statistics"),
+        case_id=index.case_id,
+        table_name="orders",
+        evidence_id=duplicate_id,
+    )
+    health_last = M0ReportInput(
+        case_id=index.case_id,
+        database=index.database,
+        sql_digest=index.sql_digest,
+        window_start=index.window_start,
+        window_end=index.window_end,
+        evidence=(*index.evidence, health),
+    )
+    health_first = replace(health_last, evidence=(health, *index.evidence))
+
+    first = report(health_first)
+    last = report(health_last)
+
+    assert first == last
+    assert first["priority"] == "observe"
+    assert first["actions"] == []
+    assert first["trace"]["ruleIds"] == []
+
+
+@pytest.mark.parametrize(
+    ("label", "transform"),
+    [
+        (
+            "boolean-revision",
+            lambda document: document.__setitem__("revision", True),
+        ),
+        (
+            "zero-record-claim",
+            lambda document: (
+                document["payload"].__setitem__("recordCount", 0),
+                document["collection"]["budget"].__setitem__("rowsRead", 0),
+            ),
+        ),
+    ],
+)
+def test_index_rule_rejects_schema_invalid_or_empty_evidence(
+    label: str,
+    transform: Callable[[dict[str, Any]], None],
+) -> None:
+    del label
+    result = report(replace_evidence(load_scenario("index-scan"), "slow_query", transform))
+
+    assert result["priority"] == "observe"
+    assert result["actions"] == []
+    assert result["trace"]["ruleIds"] == []
+
+
+def test_index_rule_rejects_noncanonical_raw_storage_even_with_matching_digest() -> None:
+    value = load_scenario("index-scan")
+    original = evidence_by_kind(value, "slow_query")
+    raw_value = strict_json_loads(original.storage_payload)
+    noncanonical_raw = json.dumps(raw_value, ensure_ascii=False, indent=2).encode("utf-8")
+    digest = "sha256:" + hashlib.sha256(noncanonical_raw).hexdigest()
+
+    def bind_self_declared_digest(document: dict[str, Any]) -> None:
+        document["integrityDigest"] = digest
+        document["payload"]["digest"] = digest
+
+    result = report(
+        replace_evidence(
+            value,
+            "slow_query",
+            bind_self_declared_digest,
+            storage_payload=noncanonical_raw,
+        )
+    )
+
+    assert result["priority"] == "observe"
+    assert result["actions"] == []
+    assert result["trace"]["ruleIds"] == []
+
+
 def test_report_bytes_are_canonical_and_independent_of_evidence_order() -> None:
     value = load_scenario("index-scan")
     reversed_value = M0ReportInput(
@@ -564,8 +673,10 @@ def test_review_json_is_exact_canonical_rule_output(
 
 def test_standalone_preview_embeds_the_three_exact_review_reports() -> None:
     parser = _EmbeddedReportsParser()
-    parser.feed(PREVIEW_PATH.read_text(encoding="utf-8"))
-    embedded = json.loads("".join(parser.chunks))
+    html = PREVIEW_PATH.read_text(encoding="utf-8")
+    parser.feed(html)
+    script_data = "".join(parser.chunks)
+    embedded = json.loads(script_data)
     expected = [
         json.loads((EXAMPLES_PATH / filename).read_text(encoding="utf-8"))
         for filename in (
@@ -576,6 +687,9 @@ def test_standalone_preview_embeds_the_three_exact_review_reports() -> None:
     ]
 
     assert embedded == expected
+    assert "\\u8be5" in script_data
+    assert not any(character in script_data for character in "<>&\u2028\u2029")
+    assert "evidence-item__ids" not in html
 
 
 def test_report_never_copies_raw_storage_or_free_form_evidence_summary() -> None:
@@ -618,8 +732,7 @@ def test_repeated_scan_rule_emits_measured_hotspot_and_p1_action() -> None:
         "同一 30 分钟窗口的执行次数、平均扫描行数与 SQL P95"
     )
     assert action["validation"]["targetZh"] == (
-        "执行次数降至不高于 12 次，或平均扫描行数降至不高于 12500 行；"
-        "SQL P95 不高于当前 6200 ms 基线"
+        "执行次数降至不高于 9 次，或平均扫描行数降至不高于 9999 行；SQL P95 不高于当前 6200 ms 基线"
     )
     assert any("恢复" in item for item in action["rollbackZh"])
 
