@@ -26,6 +26,8 @@ docker buildx build \
 echo "==> 随包交付文件"
 cp -f "${REPO_ROOT}/docs/validation/v4-m3-smoke-checklist.md" "${OUT}/" 2>/dev/null || true
 cp -f "${REPO_ROOT}/docs/v4-m3-startup.md" "${OUT}/" 2>/dev/null || true
+# 在输出目录内生成 sha256sum，路径用相对文件名（M3 侧 cd 到该目录后可 -c 校验）。
+( cd "${OUT}" && sha256sum sqllens-v4-m0-arm64.tar > sha256sum.txt )
 
 echo "==> 完成：${OUT}/"
 ls -la "${OUT}"
