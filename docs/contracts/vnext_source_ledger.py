@@ -7,7 +7,13 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-LEASE_STATE_OPERATIONS = {"leases_updated", "leases_drained"}
+LEASE_STATE_OPERATIONS = {
+    "leases_updated",
+    "leases_drained",
+    "verified",
+    "verification_failed",
+    "verification_failure_started",
+}
 DRAIN_START_OPERATIONS = {
     "rotation_started",
     "disable_started",
@@ -53,6 +59,7 @@ def replay_source_history(
     seen_leases: set[str] = set()
     seen_jobs: set[str] = set()
     prior_state_at: datetime | None = None
+    drain_started_at: datetime | None = None
 
     for revision in range(1, expected_revision_count + 1):
         state_event = state_by_revision[revision]
@@ -66,12 +73,21 @@ def replay_source_history(
             leases_by_revision.get(revision, []),
             key=lambda item: parse_time(item["createdAt"]),
         )
+        lease_operations = {item["operation"] for item in revision_leases}
+        if "lease_acquired" in lease_operations and lease_operations != {
+            "lease_acquired"
+        }:
+            raise ValueError("Source lease revision cannot mix acquisition and release")
         operation = state_event["operation"]
         if revision_leases and operation not in LEASE_STATE_OPERATIONS:
             raise ValueError("lease events are attached to a non-lease state revision")
-        if operation in LEASE_STATE_OPERATIONS and not revision_leases:
+        if operation in {"leases_updated", "leases_drained"} and not revision_leases:
             raise ValueError("lease state revision lacks lease ledger events")
-        if operation in DRAIN_START_OPERATIONS and revision_leases:
+        if (
+            operation in DRAIN_START_OPERATIONS
+            and operation != "verification_failure_started"
+            and revision_leases
+        ):
             raise ValueError("drain admission revision cannot mutate active leases")
 
         prior_lease_at = prior_state_at
@@ -91,10 +107,20 @@ def replay_source_history(
             if lease_operation == "lease_acquired":
                 if not (
                     operation == "leases_updated"
-                    and current_state == "enabled"
-                    and state_event["toState"] == "enabled"
+                    and state_event["toState"] == current_state
                 ):
-                    raise ValueError("lease acquisition is outside enabled admission")
+                    raise ValueError(
+                        "lease acquisition is outside reservation admission"
+                    )
+                if lease_event["purpose"] == "diagnosis":
+                    if current_state != "enabled":
+                        raise ValueError(
+                            "diagnosis lease acquisition is outside enabled admission"
+                        )
+                elif current_state in {"draining", "tombstoned"}:
+                    raise ValueError(
+                        "verification reservation is outside a testable Source state"
+                    )
                 if lease_id in seen_leases or job_id in seen_jobs:
                     raise ValueError("lease acquisition reuses an audit identity")
                 if lease_event["toLeaseCount"] != len(active) + 1:
@@ -102,6 +128,9 @@ def replay_source_history(
                 active[lease_id] = {
                     "leaseId": lease_id,
                     "jobId": job_id,
+                    "purpose": lease_event["purpose"],
+                    "credentialRevision": lease_event["credentialRevision"],
+                    "bindingDigest": lease_event["bindingDigest"],
                     "acquiredRevision": revision,
                     "acquiredAt": lease_event["createdAt"],
                 }
@@ -113,6 +142,13 @@ def replay_source_history(
                 raise ValueError(
                     "lease release/cancel is absent from the active ledger"
                 )
+            if any(
+                active[lease_id][field] != lease_event[field]
+                for field in ("purpose", "credentialRevision", "bindingDigest")
+            ):
+                raise ValueError(
+                    "Source lease release differs from acquisition binding"
+                )
             if lease_event["toLeaseCount"] != len(active) - 1:
                 raise ValueError("lease release/cancel count does not remove one")
             if lease_operation == "lease_force_cancelled":
@@ -122,15 +158,36 @@ def replay_source_history(
                     and state_event["toState"] == "draining"
                 ):
                     raise ValueError("force cancellation requires an admitted drain")
+                approval = lease_event["ownerApproval"]
+                if (
+                    drain_started_at is None
+                    or parse_time(approval["approvedAt"]) <= drain_started_at
+                ):
+                    raise ValueError(
+                        "force-cancel Owner approval must be captured after drain admission"
+                    )
             elif lease_operation == "lease_released":
                 allowed = (
-                    operation == "leases_updated"
-                    and current_state == "enabled"
-                    and state_event["toState"] == "enabled"
-                ) or (
-                    operation == "leases_drained"
-                    and current_state == "draining"
-                    and state_event["toState"] == "draining"
+                    (
+                        operation == "leases_updated"
+                        and current_state
+                        in {"draft", "enabled", "disabled", "verification_failed"}
+                        and state_event["toState"] == current_state
+                    )
+                    or (
+                        operation == "leases_drained"
+                        and current_state == "draining"
+                        and state_event["toState"] == "draining"
+                    )
+                    or (
+                        lease_event["purpose"] == "verification"
+                        and operation
+                        in {
+                            "verified",
+                            "verification_failed",
+                            "verification_failure_started",
+                        }
+                    )
                 )
                 if not allowed:
                     raise ValueError(
@@ -141,14 +198,37 @@ def replay_source_history(
             del active[lease_id]
 
         if operation == "leases_updated" and not (
-            current_state == "enabled" and state_event["toState"] == "enabled"
+            current_state in {"draft", "enabled", "disabled", "verification_failed"}
+            and state_event["toState"] == current_state
         ):
-            raise ValueError("leases_updated must snapshot an enabled Source")
+            raise ValueError("leases_updated must preserve a reservable Source state")
         if operation == "leases_drained" and not (
             current_state == "draining" and state_event["toState"] == "draining"
         ):
             raise ValueError("leases_drained must snapshot an admitted drain")
+        direct_verification_result = operation in {
+            "verified",
+            "verification_failure_started",
+        } or (
+            operation == "verification_failed"
+            and state_event["fromState"] != "draining"
+        )
+        if direct_verification_result:
+            released_verifications = [
+                event
+                for event in revision_leases
+                if event["operation"] == "lease_released"
+                and event["purpose"] == "verification"
+            ]
+            if len(revision_leases) != 1 or len(released_verifications) != 1:
+                raise ValueError(
+                    "verification result revision must release one reservation"
+                )
         current_state = state_event["toState"]
+        if operation in DRAIN_START_OPERATIONS:
+            drain_started_at = state_at
+        elif current_state != "draining":
+            drain_started_at = None
         prior_state_at = state_at
 
     if current_state != source["state"]:

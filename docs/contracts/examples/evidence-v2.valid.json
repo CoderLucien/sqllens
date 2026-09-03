@@ -9,7 +9,7 @@
   "kind": "slow_query",
   "sourceRef": {
     "sourceId": "src_0000000000000001",
-    "revision": 3
+    "revision": 4
   },
   "observedAt": "2026-09-02T08:00:00Z",
   "collectedAt": "2026-09-02T08:05:00Z",

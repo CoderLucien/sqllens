@@ -94,7 +94,7 @@
       "claim_0000000000000001"
     ],
     "sourceRevisions": [
-      "src_0000000000000001@3"
+      "src_0000000000000001@4"
     ],
     "aiInvocation": {
       "providerRevision": "openai-compatible/v1",

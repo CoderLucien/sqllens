@@ -1,7 +1,7 @@
 {
   "schemaVersion": "source/v1",
   "sourceId": "src_0000000000000001",
-  "revision": 3,
+  "revision": 4,
   "type": "tidb",
   "name": "生产订单集群",
   "state": "enabled",
@@ -75,7 +75,7 @@
   },
   "verification": {
     "status": "passed",
-    "testedAt": "2026-09-02T09:20:00Z",
+    "testedAt": "2026-09-02T09:15:00Z",
     "identityDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "errorCode": null
   },
@@ -87,7 +87,7 @@
       "operation": "registered",
       "fromState": null,
       "toState": "draft",
-      "credentialRevision": 1,
+      "credentialRevision": 2,
       "actor": {
         "kind": "user",
         "role": "owner",
@@ -101,6 +101,23 @@
       "eventId": "sevt_0000000000000002",
       "sourceRevision": 2,
       "type": "source_state",
+      "operation": "leases_updated",
+      "fromState": "draft",
+      "toState": "draft",
+      "credentialRevision": 2,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "source-verifier",
+        "displayName": "连接校验器"
+      },
+      "createdAt": "2026-09-02T09:10:00Z",
+      "reason": "取得持久化 verification reservation 后开始连接校验"
+    },
+    {
+      "eventId": "sevt_0000000000000003",
+      "sourceRevision": 3,
+      "type": "source_state",
       "operation": "verified",
       "fromState": "draft",
       "toState": "draft",
@@ -112,11 +129,11 @@
         "displayName": "连接校验器"
       },
       "createdAt": "2026-09-02T09:15:00Z",
-      "reason": "版本、身份和只读能力校验通过"
+      "reason": "版本、身份和只读能力校验通过并释放 reservation"
     },
     {
-      "eventId": "sevt_0000000000000003",
-      "sourceRevision": 3,
+      "eventId": "sevt_0000000000000004",
+      "sourceRevision": 4,
       "type": "source_state",
       "operation": "enabled",
       "fromState": "draft",
@@ -132,7 +149,50 @@
       "reason": "启用已验证的数据源"
     }
   ],
-  "leaseEvents": [],
+  "leaseEvents": [
+    {
+      "eventId": "levt_0000000000009001",
+      "sourceRevision": 2,
+      "operation": "lease_acquired",
+      "leaseId": "lease_0000000000009001",
+      "jobId": "job_0000000000009001",
+      "purpose": "verification",
+      "credentialRevision": 2,
+      "bindingDigest": "sha256:f9013e2d8cc5fe4fbc42bef79f0c7ea7c23b917aa4d53da2d5b1e830955ab2d2",
+      "fromLeaseCount": 0,
+      "toLeaseCount": 1,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "source-verifier",
+        "displayName": "连接校验器"
+      },
+      "ownerApproval": null,
+      "createdAt": "2026-09-02T09:09:00Z",
+      "reason": "连接校验器取得 reservation 后方可解密凭据"
+    },
+    {
+      "eventId": "levt_0000000000009002",
+      "sourceRevision": 3,
+      "operation": "lease_released",
+      "leaseId": "lease_0000000000009001",
+      "jobId": "job_0000000000009001",
+      "purpose": "verification",
+      "credentialRevision": 2,
+      "bindingDigest": "sha256:f9013e2d8cc5fe4fbc42bef79f0c7ea7c23b917aa4d53da2d5b1e830955ab2d2",
+      "fromLeaseCount": 1,
+      "toLeaseCount": 0,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "source-verifier",
+        "displayName": "连接校验器"
+      },
+      "ownerApproval": null,
+      "createdAt": "2026-09-02T09:14:00Z",
+      "reason": "校验结果持久化并原子释放 reservation"
+    }
+  ],
   "createdAt": "2026-09-02T09:00:00Z",
   "updatedAt": "2026-09-02T09:20:00Z",
   "activeLeases": []

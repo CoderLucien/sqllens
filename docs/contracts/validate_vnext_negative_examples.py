@@ -47,6 +47,7 @@ def main() -> None:
     report = load(EXAMPLES / "diagnosis-report-v1.index-access.review.json")
     source = load(EXAMPLES / "source-v1.valid.json")
     evidence = load(EXAMPLES / "evidence-v2.valid.json")
+    source_audit = contracts.build_fixture_source_audit_resolver(source)
 
     with tempfile.TemporaryDirectory() as directory:
         duplicate_json = Path(directory) / "duplicate.json"
@@ -124,14 +125,25 @@ def main() -> None:
     expect_error(
         lambda: contracts.validate_standalone_evidence(
             invalid_evidence,
-            {"src_0000000000000001@3"},
+            {"src_0000000000000001@4"},
         ),
         "typed Evidence selects an implementation-specific canonical revision",
     )
 
     def validate_source(candidate: dict[str, Any]) -> None:
         source_validator.validate(candidate)
-        validate_source_semantics(candidate)
+        validate_source_semantics(candidate, source_audit)
+
+    def validate_transition(prior: dict[str, Any], proposed: dict[str, Any]) -> None:
+        try:
+            resolver = contracts.build_fixture_source_audit_resolver(prior, proposed)
+        except (KeyError, TypeError) as exc:
+            raise ValueError("malformed Source audit fixture") from exc
+        contracts.validate_source_transition(
+            prior,
+            proposed,
+            resolver,
+        )
 
     def validate_rerendered_fact_case(candidate: dict[str, Any]) -> None:
         candidate["facts"][0].update(contracts.render_fact(candidate["facts"][0]))
@@ -611,13 +623,13 @@ def main() -> None:
     if not hasattr(contracts, "validate_source_transition"):
         raise AssertionError("Source prior/proposed transition validator is missing")
     draining_source, rotated_source = contracts.build_source_rotation(source)
-    contracts.validate_source_transition(source, draining_source)
-    contracts.validate_source_transition(draining_source, rotated_source)
+    validate_transition(source, draining_source)
+    validate_transition(draining_source, rotated_source)
 
     invalid = copy.deepcopy(draining_source)
     invalid["transitionEvents"][0]["reason"] = "重写旧 revision 的审计事件"
     expect_error(
-        lambda: contracts.validate_source_transition(source, invalid),
+        lambda: validate_transition(source, invalid),
         "Source transition rewrites prior lifecycle audit",
     )
 
@@ -625,7 +637,7 @@ def main() -> None:
     invalid["auth"]["credentialRevision"] = 1
     invalid["transitionEvents"][-1]["credentialRevision"] = 1
     expect_error(
-        lambda: contracts.validate_source_transition(draining_source, invalid),
+        lambda: validate_transition(draining_source, invalid),
         "Source credential revision decreases across rotation",
     )
 
@@ -638,7 +650,7 @@ def main() -> None:
         "credentialRevision"
     ]
     expect_error(
-        lambda: contracts.validate_source_transition(draining_source, invalid),
+        lambda: validate_transition(draining_source, invalid),
         "Source rotation completes without a new credential revision",
     )
 
@@ -646,7 +658,7 @@ def main() -> None:
     invalid["revision"] += 1
     invalid["transitionEvents"][-1]["sourceRevision"] = invalid["revision"]
     expect_error(
-        lambda: contracts.validate_source_transition(source, invalid),
+        lambda: validate_transition(source, invalid),
         "Source transition skips a revision",
     )
 
@@ -655,17 +667,15 @@ def main() -> None:
     lease_dropped_source, _ = contracts.build_source_rotation(leased_source)
     lease_dropped_source["credentialLifecycle"]["activeLeaseCount"] = 0
     expect_error(
-        lambda: contracts.validate_source_transition(
-            leased_source, lease_dropped_source
-        ),
+        lambda: validate_transition(leased_source, lease_dropped_source),
         "Source enters draining by erasing active leases without lease audit",
     )
 
     leased_source, leased_draining, drained_source = contracts.build_source_lease_drain(
         source
     )
-    contracts.validate_source_transition(leased_source, leased_draining)
-    contracts.validate_source_transition(leased_draining, drained_source)
+    validate_transition(leased_source, leased_draining)
+    validate_transition(leased_draining, drained_source)
 
     invalid = copy.deepcopy(leased_source)
     snapshot_at = invalid["transitionEvents"][-1]["createdAt"]
@@ -759,21 +769,21 @@ def main() -> None:
         }
     )
     expect_error(
-        lambda: contracts.validate_source_transition(leased_source, invalid),
+        lambda: validate_transition(leased_source, invalid),
         "Source force-cancels a lease before entering drain",
     )
 
     invalid = copy.deepcopy(drained_source)
     invalid["leaseEvents"][-1]["ownerApproval"] = None
     expect_error(
-        lambda: contracts.validate_source_transition(leased_draining, invalid),
+        lambda: validate_transition(leased_draining, invalid),
         "force-cancelled lease omits explicit Owner approval",
     )
 
     invalid = copy.deepcopy(drained_source)
     invalid["leaseEvents"][-1]["ownerApproval"]["approvedAt"] = "2026-09-02T09:28:01Z"
     expect_error(
-        lambda: contracts.validate_source_transition(leased_draining, invalid),
+        lambda: validate_transition(leased_draining, invalid),
         "force-cancel approval is recorded after the cancellation event",
     )
 
@@ -782,14 +792,14 @@ def main() -> None:
         {"role": "operator", "id": "operator", "displayName": "普通操作员"}
     )
     expect_error(
-        lambda: contracts.validate_source_transition(leased_draining, invalid),
+        lambda: validate_transition(leased_draining, invalid),
         "force-cancel approval is issued by a non-Owner user",
     )
 
     invalid = copy.deepcopy(drained_source)
     invalid["leaseEvents"][-1]["fromLeaseCount"] = 2
     expect_error(
-        lambda: contracts.validate_source_transition(leased_draining, invalid),
+        lambda: validate_transition(leased_draining, invalid),
         "lease release audit count chain skips a state",
     )
 
@@ -819,7 +829,7 @@ def main() -> None:
         }
     )
     expect_error(
-        lambda: contracts.validate_source_transition(leased_enabled, invalid),
+        lambda: validate_transition(leased_enabled, invalid),
         "enabled edit erases active leases without a ledger event",
     )
 
@@ -855,7 +865,7 @@ def main() -> None:
         }
     )
     expect_error(
-        lambda: contracts.validate_source_transition(leased_enabled, invalid),
+        lambda: validate_transition(leased_enabled, invalid),
         "verification failure erases active leases instead of entering drain",
     )
 
@@ -863,14 +873,14 @@ def main() -> None:
     invalid["leaseEvents"][0]["leaseId"] = "lease_ffffffffffffffff"
     invalid["leaseEvents"][0]["jobId"] = "job_ffffffffffffffff"
     expect_error(
-        lambda: contracts.validate_source_transition(leased_draining, invalid),
+        lambda: validate_transition(leased_draining, invalid),
         "lease release invents a lease and job absent from an authoritative ledger",
     )
 
     invalid = copy.deepcopy(drained_source)
     invalid["transitionEvents"][-1]["createdAt"] = "2026-09-02T09:26:00Z"
     expect_error(
-        lambda: contracts.validate_source_transition(leased_draining, invalid),
+        lambda: validate_transition(leased_draining, invalid),
         "leases_drained state event precedes its release and cancellation events",
     )
 
@@ -879,7 +889,7 @@ def main() -> None:
         {"state": "retiring", "pendingOperation": "delete"}
     )
     expect_error(
-        lambda: contracts.validate_source_transition(source, invalid),
+        lambda: validate_transition(source, invalid),
         "rotation_started audit is paired with delete pendingOperation",
     )
 
@@ -890,7 +900,7 @@ def main() -> None:
         "displayName": "数据源生命周期",
     }
     expect_error(
-        lambda: contracts.validate_source_transition(source, invalid),
+        lambda: validate_transition(source, invalid),
         "drain admission is not initiated by an explicit Owner action",
     )
 
@@ -899,14 +909,14 @@ def main() -> None:
         {"role": "operator", "id": "operator", "displayName": "普通操作员"}
     )
     expect_error(
-        lambda: contracts.validate_source_transition(source, invalid),
+        lambda: validate_transition(source, invalid),
         "drain admission is initiated by a non-Owner user",
     )
 
     invalid = copy.deepcopy(draining_source)
     invalid["credentialLifecycle"]["pendingOperation"] = None
     expect_error(
-        lambda: contracts.validate_source_transition(source, invalid),
+        lambda: validate_transition(source, invalid),
         "draining Source omits the operation that owns the lease barrier",
     )
 

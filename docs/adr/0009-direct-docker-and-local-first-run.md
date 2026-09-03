@@ -2,6 +2,7 @@
 
 Status: Accepted for vNext P0
 Date: 2026-09-02
+Last updated: 2026-09-03
 Supersedes: ADR 0004 customer happy-path deployment
 
 ## Context
@@ -36,9 +37,18 @@ parameters before opening the Web UI.
 
 An empty instance accepts Owner creation only through the canonical browser
 origin `http://localhost:18080` and only while no Owner exists. Creation is
-atomic and closes the first-run endpoint. There is no default password and no
-terminal bootstrap code in the happy path. Local recovery remains explicit,
-audited, and separate.
+atomic and closes the first-run endpoint. There is no default password or
+terminal bootstrap code anywhere in the vNext P0 image.
+
+vNext P0 removes the legacy `bootstrap_required` state, bootstrap-ingest and
+bootstrap-reissue entrypoint commands, `POST /api/v1/setup/bootstrap`, and all
+recovery-code UI. These are not retained as hidden compatibility paths. A
+legacy setup state or volume fails closed with
+`LEGACY_SETUP_STATE_UNSUPPORTED`; it cannot consume an old code or silently
+migrate. In-place upgrade/recovery is a separate P1 product surface requiring
+its own Human-approved trust, migration, audit, rollback, and data-preservation
+contract. Until then, a user who must preserve an old installation uses the old
+release to export or back up it before starting vNext with new volumes.
 
 Remote/LAN binding, custom ports, offline packages, Kubernetes, source builds,
 upgrade orchestration, signatures, SBOM, and provenance remain release or P1
@@ -64,6 +74,8 @@ the release gate publishes a real signed digest.
   proxy-controlled headers.
 - Setup endpoints other than status and Owner creation remain unavailable
   before authentication.
+- Legacy bootstrap routes and entrypoint commands do not exist in vNext P0;
+  old codes fail closed and are never echoed in responses, logs, or CLI output.
 - Secrets never enter image layers, command arguments, logs, or responses.
 - Port publication remains loopback-only unless a later reviewed ADR defines
   authenticated remote deployment.
@@ -87,8 +99,9 @@ proofs remains inside the declared local-host trust boundary.
 ## Consequences
 
 - The first product-value slice is simpler to install and test.
-- Previous bootstrap-ingest and launcher behavior becomes migration/recovery
-  code or is removed from the customer path.
+- Previous bootstrap-ingest, bootstrap-reissue, and launcher recovery behavior
+  is removed from the vNext image rather than retained as an alternate
+  pre-authentication trust path.
 - Formal multi-platform clean-room and supply-chain gates occur after Human
   product acceptance rather than before it.
 - ADR 0004 remains historical context for a future packaged release, but its

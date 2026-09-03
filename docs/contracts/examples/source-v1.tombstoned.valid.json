@@ -1,15 +1,15 @@
 {
   "schemaVersion": "source/v1",
   "sourceId": "src_0000000000000099",
-  "revision": 8,
+  "revision": 7,
   "type": "tidb",
   "name": "已删除的历史订单集群",
   "state": "tombstoned",
   "product": "tidb",
   "version": {
-    "detected": "8.5.2",
-    "family": "tidb-8.5",
-    "supported": true
+    "detected": null,
+    "family": "unknown",
+    "supported": false
   },
   "endpoint": {
     "scheme": "mysql",
@@ -45,9 +45,9 @@
     "reference": "IAM-2026-0902"
   },
   "verification": {
-    "status": "passed",
-    "testedAt": "2026-09-02T09:20:00Z",
-    "identityDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    "status": "not_run",
+    "testedAt": null,
+    "identityDigest": null,
     "errorCode": null
   },
   "transitionEvents": [
@@ -72,6 +72,40 @@
       "eventId": "sevt_0000000000000082",
       "sourceRevision": 2,
       "type": "source_state",
+      "operation": "leases_updated",
+      "fromState": "draft",
+      "toState": "draft",
+      "credentialRevision": 1,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "source-verifier",
+        "displayName": "连接校验器"
+      },
+      "createdAt": "2026-09-02T09:04:00Z",
+      "reason": "取得 verification reservation 后开始连接校验"
+    },
+    {
+      "eventId": "sevt_0000000000000083",
+      "sourceRevision": 3,
+      "type": "source_state",
+      "operation": "verified",
+      "fromState": "draft",
+      "toState": "draft",
+      "credentialRevision": 1,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "source-verifier",
+        "displayName": "连接校验器"
+      },
+      "createdAt": "2026-09-02T09:06:00Z",
+      "reason": "版本、身份和只读能力校验通过并释放 reservation"
+    },
+    {
+      "eventId": "sevt_0000000000000084",
+      "sourceRevision": 4,
+      "type": "source_state",
       "operation": "enabled",
       "fromState": "draft",
       "toState": "enabled",
@@ -84,40 +118,6 @@
       },
       "createdAt": "2026-09-02T09:10:00Z",
       "reason": "启用已验证的数据源"
-    },
-    {
-      "eventId": "sevt_0000000000000083",
-      "sourceRevision": 3,
-      "type": "source_state",
-      "operation": "edited",
-      "fromState": "enabled",
-      "toState": "enabled",
-      "credentialRevision": 1,
-      "actor": {
-        "kind": "user",
-        "role": "owner",
-        "id": "owner",
-        "displayName": "本机 Owner"
-      },
-      "createdAt": "2026-09-02T09:20:00Z",
-      "reason": "更新负责人说明"
-    },
-    {
-      "eventId": "sevt_0000000000000084",
-      "sourceRevision": 4,
-      "type": "source_state",
-      "operation": "edited",
-      "fromState": "enabled",
-      "toState": "enabled",
-      "credentialRevision": 1,
-      "actor": {
-        "kind": "user",
-        "role": "owner",
-        "id": "owner",
-        "displayName": "本机 Owner"
-      },
-      "createdAt": "2026-09-02T09:30:00Z",
-      "reason": "更新查询预算"
     },
     {
       "eventId": "sevt_0000000000000085",
@@ -133,29 +133,12 @@
         "id": "owner",
         "displayName": "本机 Owner"
       },
-      "createdAt": "2026-09-02T09:40:00Z",
-      "reason": "更新允许的 Schema"
+      "createdAt": "2026-09-02T09:30:00Z",
+      "reason": "更新负责人说明"
     },
     {
       "eventId": "sevt_0000000000000086",
       "sourceRevision": 6,
-      "type": "source_state",
-      "operation": "edited",
-      "fromState": "enabled",
-      "toState": "enabled",
-      "credentialRevision": 1,
-      "actor": {
-        "kind": "user",
-        "role": "owner",
-        "id": "owner",
-        "displayName": "本机 Owner"
-      },
-      "createdAt": "2026-09-02T09:45:00Z",
-      "reason": "更新数据源名称"
-    },
-    {
-      "eventId": "sevt_0000000000000087",
-      "sourceRevision": 7,
       "type": "source_state",
       "operation": "delete_started",
       "fromState": "enabled",
@@ -168,11 +151,11 @@
         "displayName": "本机 Owner"
       },
       "createdAt": "2026-09-02T09:50:00Z",
-      "reason": "停止新任务并销毁凭据"
+      "reason": "停止新任务并等待凭据销毁"
     },
     {
-      "eventId": "sevt_0000000000000088",
-      "sourceRevision": 8,
+      "eventId": "sevt_0000000000000087",
+      "sourceRevision": 7,
       "type": "source_state",
       "operation": "tombstoned",
       "fromState": "draining",
@@ -185,10 +168,53 @@
         "displayName": "数据源生命周期"
       },
       "createdAt": "2026-09-02T10:00:00Z",
-      "reason": "活动租约归零并完成凭据销毁"
+      "reason": "活动 reservation 归零并完成凭据销毁"
     }
   ],
-  "leaseEvents": [],
+  "leaseEvents": [
+    {
+      "eventId": "levt_0000000000000071",
+      "sourceRevision": 2,
+      "operation": "lease_acquired",
+      "leaseId": "lease_0000000000000071",
+      "jobId": "job_0000000000000071",
+      "purpose": "verification",
+      "credentialRevision": 1,
+      "bindingDigest": "sha256:b7701f9c16aadaa978e233c027fc19a23c74a6f9256f65d14e643f656519d77e",
+      "fromLeaseCount": 0,
+      "toLeaseCount": 1,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "source-verifier",
+        "displayName": "连接校验器"
+      },
+      "ownerApproval": null,
+      "createdAt": "2026-09-02T09:03:00Z",
+      "reason": "连接校验器取得 reservation"
+    },
+    {
+      "eventId": "levt_0000000000000072",
+      "sourceRevision": 3,
+      "operation": "lease_released",
+      "leaseId": "lease_0000000000000071",
+      "jobId": "job_0000000000000071",
+      "purpose": "verification",
+      "credentialRevision": 1,
+      "bindingDigest": "sha256:b7701f9c16aadaa978e233c027fc19a23c74a6f9256f65d14e643f656519d77e",
+      "fromLeaseCount": 1,
+      "toLeaseCount": 0,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "source-verifier",
+        "displayName": "连接校验器"
+      },
+      "ownerApproval": null,
+      "createdAt": "2026-09-02T09:05:00Z",
+      "reason": "校验结果持久化并释放 reservation"
+    }
+  ],
   "createdAt": "2026-09-02T09:00:00Z",
   "updatedAt": "2026-09-02T10:00:00Z",
   "activeLeases": []

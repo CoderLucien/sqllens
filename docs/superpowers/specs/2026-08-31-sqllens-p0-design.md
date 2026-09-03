@@ -1,6 +1,6 @@
 # SQLLens P0 Design
 
-Status: approved product direction, implementation baseline under review
+Status: Superseded by `2026-09-02-sqllens-vnext-product-spec.md`; retained as historical context
 Working name: `sqllens` (public release name is blocked pending brand review)
 
 ## Objective

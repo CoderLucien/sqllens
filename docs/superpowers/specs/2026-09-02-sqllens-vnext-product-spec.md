@@ -76,8 +76,12 @@ single-use setup nonce bound to an HttpOnly SameSite=Strict cookie. Docker
 loopback publication is exposure control; container peer IP and proxy headers
 are not caller identity. Creation atomically closes the first-run endpoint.
 The no-code P0 journey explicitly trusts the local operating-system/Docker
-administrator during empty-instance setup. Recovery is a separate local,
-audited flow.
+administrator during empty-instance setup. vNext P0 has no bootstrap code,
+`bootstrap_required` state, bootstrap ingest/reissue command, or bootstrap API.
+A legacy setup volume fails closed with `LEGACY_SETUP_STATE_UNSUPPORTED` and
+cannot silently migrate. Preserving an older installation requires export or
+backup with the old release; a future in-place recovery/migration flow requires
+its own Human-approved contract and is not part of P0.
 
 #### A3. Configure initial sources
 
@@ -192,18 +196,96 @@ rotate credential, and delete. A source revision includes:
 A diagnosis snapshots the source revision and evidence. Later source edits or
 deletion affect only new jobs and do not rewrite historical reports.
 
-Admission also pins the credential revision and acquires a lease. Rotation,
-disable, and delete stop new admission and enter drain without changing the
-authoritative active lease set. Every runtime admission first records a unique
-`leaseId`/`jobId`; each later normal release or forced cancellation must name an
-active identity, remove exactly that identity, and append an immutable lease
-event. The displayed count must equal the replayed active set and cannot be
-edited independently. A force cancellation is valid only after an explicit
-drain operation has stopped new admissions.
-Rotation activates a new revision for new jobs; deletion destroys the usable
-secret only after leases reach zero and retains a metadata-only tombstone. A
-forced cancel requires a prior Owner confirmation bound to its audit event.
-Hard deletion with active leases is forbidden.
+The Source JSON is a public projection, not an authorization authority. Before
+runtime use, the service must resolve each embedded state/reservation event
+against a server-owned transactional audit record and verify the latest full
+snapshot digest. The audit record, rather than caller-provided actor or role
+text, binds the authenticated principal/service permission and the exact
+committed revision. Missing audit state, an untrusted current snapshot, or a
+caller-replayed verification result fails closed.
+The resolver returns an audit record only after a transactional join to a
+committed receipt whose ID is globally unique to one Owner intent or verifier
+job across all Sources. Source revisions use a closed per-operation field
+allowlist, and their public timestamps are audit-derived: `createdAt` equals
+registration time and `updatedAt` equals the latest state-event time.
+
+Both diagnosis work and verifier execution use the same persisted reservation
+ledger. Each acquisition records a unique `leaseId`/`jobId`, purpose
+(`diagnosis` or `verification`), Source revision, credential revision, and
+canonical verification-input digest before a credential is decrypted. Both
+purposes count toward the same concurrency ceiling and a Source may have at
+most one active verifier. Each later normal release or forced cancellation
+must name an active identity, remove exactly that identity, and append an
+immutable event. The displayed count must equal the replayed active set and
+cannot be edited independently. One Source revision cannot mix acquisition and
+release: every acquired reservation remains visible in its committed state
+snapshot before a later revision can release it.
+
+Rotation, disable, and delete stop new admission and enter drain without
+silently changing that authoritative active set. They wait for both diagnosis
+and verification reservations. A verification PASS/FAIL atomically releases
+its own reservation and may publish only against the exact reserved Source
+revision. After an intervening revision or drain, the terminated verifier may
+release its reservation but cannot publish a result. Cancellation is not
+considered complete until the external execution is confirmed terminated. A
+force cancellation is valid only after an explicit drain operation has stopped
+new admissions and a later, separate Owner approval is bound to its audit
+record. The approval timestamp must be strictly after the committed drain
+admission and no later than the cancellation event.
+
+Every Source write also carries an `Idempotency-Key`. The server stores only a
+key digest and a receipt scoped to the authenticated Owner, method, canonical
+route, Source/expected revision, and canonical intent. Because that intent can
+contain a low-entropy credential, it is persisted only as HMAC-SHA-256 under a
+dedicated server-held key. The key remains in the secrets volume and is kept
+resolvable for the lifetime of every receipt it signed. The receipt keeps only
+the closed, server-generated public response DTO and its integrity digest for
+exact replay, never a request or connector object. Receipt state, credential
+metadata, each Source mutation, and its audit record commit together. A
+route-specific response schema is validated before the receipt is committed;
+sensitive-key scanning is defense in depth rather than a substitute for that
+closed DTO. Each Source HTTP-write transaction atomically commits its mutation,
+receipt state, and audit record. Background diagnosis/lifecycle events use
+their own unique trusted ledger records rather than fabricating an HTTP
+receipt. A verifier request first commits its in-progress receipt plus reservation before
+external execution, then atomically commits result, reservation release, and
+final receipt. Same-key/same-intent retries replay the redacted committed
+status/result without rerunning side effects; a reused key for a different
+intent or a concurrent in-progress attempt fails with a stable conflict. All
+audit records in one verifier execution reference the same receipt ID. A
+receipt cannot authorize two distinct Owner intents or verifier jobs and
+survives Source deletion for at least 24 hours; CAS alone is not treated as
+idempotency.
+Crash recovery never deletes an `in_progress` receipt or retries its external
+connector. After proving the prior worker terminated, it atomically releases
+the reservation and commits `VERIFICATION_INTERRUPTED` plus the final receipt;
+a new test requires a new key.
+Force cancellation separately binds its Owner command receipt and authenticated
+approval attestation; an original verifier receipt remains the execution
+correlation rather than being reused as cancellation authorization.
+
+Rotation switches to a new credential revision only after old leases drain,
+then remains disabled until fresh verification and Owner enable; deletion
+destroys the usable secret only after leases reach zero and retains a
+metadata-only tombstone. The terminal shape clears endpoint host/path, every
+authentication field, source associations and scope, capabilities, active
+leases, live verification, and detected version support; only non-queryable
+identity/operational metadata and append-only audit ledgers remain. Hard
+deletion with active leases is forbidden.
+
+Verification is bound to endpoint, allowed schema scope, authentication
+identity, and credential revision. Endpoint or scope changes are forbidden
+while enabled; in any other editable state they clear the prior
+version/capability/verification projection and must be retested before Owner
+enable. Metadata-only edits preserve the projection; ordering changes to the
+unique allowed-schema set are not material.
+Credential rotation also finishes disabled with the new revision unverified,
+never immediately reopens admission using the old credential's PASS. A disabled
+retest persists either a fresh pass while remaining disabled or an explicit
+`verification_failed` state. Zero-lease draft and failed Sources can be deleted
+through the audited drain/tombstone path. A successful enabled retest stays
+enabled; a failed one records its result while starting diagnosis-lease drain,
+and the later lifecycle completion cannot rewrite that verifier result.
 
 ### Database read-only account
 
@@ -395,10 +477,12 @@ Refactor:
 - model output from ID ranking only to the bounded structured synthesis contract;
 - the current case UI into the Chinese decision report.
 
-Remove from the customer path:
+Remove from vNext P0:
 
 - fixed English low-confidence hypotheses and the fixed 20% report;
-- terminal bootstrap-ingest and launcher-specific setup as the default path;
+- terminal bootstrap-ingest/reissue, bootstrap API/state, recovery-code UI, and
+  launcher-specific setup from the vNext image (not merely from the default
+  path);
 - RC, cross-platform clean-room, provenance, and full performance gates before
   the first product-value slice is approved.
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,13 @@ from vnext_diagnosis_policy import (
     validate_policy_pins,
 )
 from vnext_outcome_policy import validate_outcome_policy
+from vnext_source_audit import (
+    SourceAuditResolver,
+    build_fixture_source_audit_resolver,
+    canonical_string_set,
+    source_verification_binding_digest,
+    validate_trusted_source_audit,
+)
 from vnext_source_ledger import replay_source_history
 
 ROOT = Path(__file__).parent
@@ -83,31 +90,49 @@ SOURCE_STATE_TRANSITIONS = {
         "verification_failed",
         "tombstoned",
     },
-    "disabled": {"disabled", "enabled", "draining"},
-    "verification_failed": {"verification_failed", "draft", "enabled", "draining"},
+    "disabled": {"disabled", "enabled", "draining", "verification_failed"},
+    "verification_failed": {"verification_failed", "draft", "draining"},
     "tombstoned": {"tombstoned"},
 }
 SOURCE_AUDIT_TRANSITIONS = {
     "registered": {(None, "draft")},
-    "verified": {("draft", "draft"), ("verification_failed", "draft")},
+    "verified": {
+        ("draft", "draft"),
+        ("enabled", "enabled"),
+        ("disabled", "disabled"),
+        ("verification_failed", "draft"),
+    },
     "enabled": {("draft", "enabled"), ("disabled", "enabled")},
     "edited": {
         ("draft", "draft"),
         ("enabled", "enabled"),
         ("disabled", "disabled"),
+        ("verification_failed", "draft"),
         ("verification_failed", "verification_failed"),
     },
-    "leases_updated": {("enabled", "enabled")},
+    "leases_updated": {
+        ("draft", "draft"),
+        ("enabled", "enabled"),
+        ("disabled", "disabled"),
+        ("verification_failed", "verification_failed"),
+    },
     "rotation_started": {("enabled", "draining")},
-    "rotation_completed": {("draining", "enabled")},
+    "rotation_completed": {("draining", "disabled")},
     "disable_started": {("enabled", "draining")},
     "disabled": {("draining", "disabled")},
-    "delete_started": {("enabled", "draining"), ("disabled", "draining")},
+    "delete_started": {
+        ("draft", "draining"),
+        ("enabled", "draining"),
+        ("disabled", "draining"),
+        ("verification_failed", "draining"),
+    },
     "leases_drained": {("draining", "draining")},
     "tombstoned": {("draining", "tombstoned")},
     "verification_failure_started": {("enabled", "draining")},
     "verification_failed": {
         ("draft", "verification_failed"),
+        ("disabled", "verification_failed"),
+        ("verification_failed", "verification_failed"),
         ("draining", "verification_failed"),
     },
 }
@@ -127,6 +152,70 @@ SOURCE_OPERATION_ACTORS = {
     "verification_failure_started": "system",
     "verification_failed": "system",
 }
+SOURCE_OPERATION_MUTABLE_FIELDS = {
+    "verified": {
+        "state",
+        "version",
+        "capabilities",
+        "verification",
+        "credentialLifecycle",
+        "activeLeases",
+        "leaseEvents",
+    },
+    "enabled": {"state"},
+    "edited": {
+        "name",
+        "state",
+        "version",
+        "endpoint",
+        "associatedSourceIds",
+        "allowedSchemas",
+        "capabilities",
+        "budgets",
+        "owner",
+        "verification",
+    },
+    "leases_updated": {"credentialLifecycle", "activeLeases", "leaseEvents"},
+    "rotation_started": {"state", "credentialLifecycle"},
+    "rotation_completed": {
+        "state",
+        "version",
+        "auth",
+        "credentialLifecycle",
+        "capabilities",
+        "verification",
+    },
+    "disable_started": {"state", "credentialLifecycle"},
+    "disabled": {"state", "credentialLifecycle"},
+    "delete_started": {"state", "credentialLifecycle"},
+    "leases_drained": {"credentialLifecycle", "activeLeases", "leaseEvents"},
+    "tombstoned": {
+        "state",
+        "version",
+        "endpoint",
+        "auth",
+        "credentialLifecycle",
+        "associatedSourceIds",
+        "allowedSchemas",
+        "capabilities",
+        "verification",
+    },
+    "verification_failure_started": {
+        "state",
+        "credentialLifecycle",
+        "verification",
+        "activeLeases",
+        "leaseEvents",
+    },
+    "verification_failed": {
+        "state",
+        "credentialLifecycle",
+        "verification",
+        "activeLeases",
+        "leaseEvents",
+    },
+}
+SOURCE_REVISION_METADATA_FIELDS = {"revision", "updatedAt", "transitionEvents"}
 AI_CLAIM_TEMPLATES = {
     ("ai.index_candidate_priority", "v1"): (
         {
@@ -275,6 +364,8 @@ def validate_source_audit(source: dict[str, Any]) -> None:
             raise ValueError("Source transition references a future revision")
         if index == 0 and event["fromState"] is not None:
             raise ValueError("Source audit must start from an unregistered state")
+        if index == 0 and event_at != source_created:
+            raise ValueError("Source createdAt must match its registration audit event")
         if event["fromState"] != previous_state:
             raise ValueError("Source transition audit is discontinuous")
         transition = (event["fromState"], event["toState"])
@@ -296,6 +387,8 @@ def validate_source_audit(source: dict[str, Any]) -> None:
         raise ValueError("latest Source transition does not match current state")
     if previous_revision != source["revision"]:
         raise ValueError("current Source revision lacks a transition audit event")
+    if previous_time != source_updated:
+        raise ValueError("Source updatedAt must match its latest state audit event")
     if (
         source["transitionEvents"][-1]["credentialRevision"]
         != source["auth"]["credentialRevision"]
@@ -337,12 +430,25 @@ def validate_source_lease_audit(source: dict[str, Any]) -> None:
                 raise ValueError("lease acquisition must add exactly one active lease")
             if approval is not None:
                 raise ValueError("lease acquisition cannot carry Owner approval")
+            expected_actor = {
+                "diagnosis": "diagnosis-job",
+                "verification": "source-verifier",
+            }[event["purpose"]]
+            if event["actor"].get("id") != expected_actor:
+                raise ValueError("Source reservation actor differs from its purpose")
             active[event["leaseId"]] = {
                 "leaseId": event["leaseId"],
                 "jobId": event["jobId"],
+                "purpose": event["purpose"],
+                "credentialRevision": event["credentialRevision"],
+                "bindingDigest": event["bindingDigest"],
                 "acquiredRevision": event["sourceRevision"],
                 "acquiredAt": event["createdAt"],
             }
+            if len(active) > source["budgets"]["maxConcurrency"]:
+                raise ValueError("Source reservations exceed maxConcurrency")
+            if sum(item["purpose"] == "verification" for item in active.values()) > 1:
+                raise ValueError("Source permits only one verification reservation")
             seen_lease_ids.add(event["leaseId"])
             seen_job_ids.add(event["jobId"])
             previous_time = event_at
@@ -350,14 +456,32 @@ def validate_source_lease_audit(source: dict[str, Any]) -> None:
 
         if event["leaseId"] not in active:
             raise ValueError("Source lease release references an inactive lease")
-        if active[event["leaseId"]]["jobId"] != event["jobId"]:
-            raise ValueError("Source lease release job differs from acquisition")
+        acquired = active[event["leaseId"]]
+        if any(
+            acquired[field] != event[field]
+            for field in (
+                "jobId",
+                "purpose",
+                "credentialRevision",
+                "bindingDigest",
+            )
+        ):
+            raise ValueError("Source lease release differs from its acquisition")
         if event["toLeaseCount"] != event["fromLeaseCount"] - 1:
             raise ValueError("lease release must remove exactly one active lease")
         if event["operation"] == "lease_released" and approval is not None:
             raise ValueError(
                 "ordinary lease release cannot carry force-cancel approval"
             )
+        if event["operation"] == "lease_released":
+            expected_actor = {
+                "diagnosis": "diagnosis-job",
+                "verification": "source-verifier",
+            }[event["purpose"]]
+            if event["actor"].get("id") != expected_actor:
+                raise ValueError(
+                    "Source reservation release actor differs from purpose"
+                )
         if event["operation"] == "lease_force_cancelled":
             if (
                 approval is None
@@ -1156,7 +1280,10 @@ def validate_diagnosis_dependency_closure(
         raise ValueError("decision actions are not the closed dependency projection")
 
 
-def validate_source_semantics(source: dict[str, Any]) -> None:
+def validate_source_semantics(
+    source: dict[str, Any],
+    resolve_source_audit: SourceAuditResolver | None = None,
+) -> None:
     reject_non_finite_json(source)
     validate_source_audit(source)
     validate_source_lease_audit(source)
@@ -1192,6 +1319,27 @@ def validate_source_semantics(source: dict[str, Any]) -> None:
         raise ValueError("Source product does not match authentication kind")
     if source["version"]["family"] == "unknown" and source["version"]["supported"]:
         raise ValueError("unknown Source version cannot be supported")
+    verification = source["verification"]
+    verification_complete = {
+        "not_run": (
+            verification["testedAt"] is None
+            and verification["identityDigest"] is None
+            and verification["errorCode"] is None
+        ),
+        "passed": (
+            isinstance(verification["testedAt"], str)
+            and isinstance(verification["identityDigest"], str)
+            and verification["errorCode"] is None
+        ),
+        "failed": (
+            isinstance(verification["testedAt"], str)
+            and verification["identityDigest"] is None
+            and isinstance(verification["errorCode"], str)
+            and bool(verification["errorCode"])
+        ),
+    }.get(verification["status"], False)
+    if not verification_complete:
+        raise ValueError("Source verification projection is incomplete for its status")
     if (
         source["state"] == "verification_failed"
         and source["verification"]["status"] != "failed"
@@ -1202,12 +1350,22 @@ def validate_source_semantics(source: dict[str, Any]) -> None:
         or (
             source["state"] == "draining"
             and source["credentialLifecycle"]["pendingOperation"]
-            == "verification_failure"
+            in {"delete", "verification_failure"}
         )
     ):
         raise ValueError(
             "failed verification requires verification-failure drain or terminal state"
         )
+    if (
+        source["verification"]["status"] == "failed"
+        and source["state"] == "draining"
+        and source["credentialLifecycle"]["pendingOperation"] == "delete"
+        and not (
+            source["transitionEvents"][-1]["operation"] == "delete_started"
+            and source["transitionEvents"][-1]["fromState"] == "verification_failed"
+        )
+    ):
+        raise ValueError("delete drain failure must originate from verification_failed")
 
     required_by_type = {
         "tidb": {"version", "schema"},
@@ -1216,6 +1374,8 @@ def validate_source_semantics(source: dict[str, Any]) -> None:
         "alertmanager": {"alert_read"},
     }
     if source["state"] == "enabled":
+        if source["verification"]["status"] != "passed":
+            raise ValueError("enabled Source requires a passed verification")
         available = {
             item["name"]
             for item in source["capabilities"]
@@ -1235,11 +1395,23 @@ def validate_source_semantics(source: dict[str, Any]) -> None:
         "verification_failure",
     }:
         raise ValueError("draining Source requires an explicit pending operation")
-    if (
-        source["state"] in {"draft", "disabled", "verification_failed"}
-        and lifecycle["activeLeaseCount"]
-    ):
-        raise ValueError("inactive Source cannot retain active job leases")
+    binding_digest = source_verification_binding_digest(source)
+    verification_reservations = 0
+    for lease in source["activeLeases"]:
+        if lease["credentialRevision"] != source["auth"]["credentialRevision"]:
+            raise ValueError("active Source reservation binds another credential")
+        if lease["bindingDigest"] != binding_digest:
+            raise ValueError("active Source reservation binds stale verification input")
+        if lease["purpose"] == "verification":
+            verification_reservations += 1
+            if source["state"] == "tombstoned":
+                raise ValueError("tombstoned Source cannot retain verification work")
+        elif source["state"] != "enabled" and source["state"] != "draining":
+            raise ValueError("inactive Source cannot retain diagnosis leases")
+    if verification_reservations > 1:
+        raise ValueError("Source permits only one verification reservation")
+    if lifecycle["activeLeaseCount"] > source["budgets"]["maxConcurrency"]:
+        raise ValueError("Source reservations exceed maxConcurrency")
     if lifecycle["pendingOperation"] is not None and source["state"] != "draining":
         raise ValueError("pending credential operation requires draining Source")
     if lifecycle["state"] in {"rotating", "retiring"} and source["state"] != "draining":
@@ -1282,8 +1454,330 @@ def validate_source_semantics(source: dict[str, Any]) -> None:
         if source["auth"]["credentialRef"] is not None:
             raise ValueError("tombstoned Source cannot retain a credential reference")
 
+    validate_trusted_source_audit(source, resolve_source_audit)
 
-def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) -> None:
+
+def validate_source_verification_revision(
+    prior: dict[str, Any],
+    proposed: dict[str, Any],
+    state_event: dict[str, Any],
+    new_lease_events: list[dict[str, Any]],
+) -> None:
+    """Bind persisted verification projections to verifier-authored revisions."""
+
+    operation = state_event["operation"]
+    previous = prior["verification"]
+    current = proposed["verification"]
+
+    if (
+        current != previous
+        and current["status"] == "passed"
+        and operation
+        not in {"verified", "verification_failed", "verification_failure_started"}
+    ):
+        raise ValueError("only the verifier can publish a passed verification")
+
+    verification_input_changed = proposed["endpoint"] != prior["endpoint"] or (
+        canonical_string_set(proposed["allowedSchemas"])
+        != canonical_string_set(prior["allowedSchemas"])
+    )
+    if operation == "delete_started" and current != previous:
+        raise ValueError("delete drain rewrites its verification snapshot")
+
+    verification_projection_changed = any(
+        proposed[field] != prior[field]
+        for field in ("version", "capabilities", "verification")
+    )
+    if (
+        operation
+        not in {
+            "edited",
+            "verified",
+            "rotation_completed",
+            "tombstoned",
+            "verification_failure_started",
+            "verification_failed",
+        }
+        and verification_projection_changed
+    ):
+        raise ValueError("lifecycle operation rewrites verification projection")
+
+    if operation == "edited":
+        if prior["state"] == "enabled" and verification_input_changed:
+            raise ValueError(
+                "enabled Source must be disabled before changing verification-bound input"
+            )
+        if verification_input_changed:
+            expected_state = (
+                "draft" if prior["state"] == "verification_failed" else prior["state"]
+            )
+            invalidated_version = {
+                "detected": None,
+                "family": "unknown",
+                "supported": False,
+            }
+            invalidated_verification = {
+                "status": "not_run",
+                "testedAt": None,
+                "identityDigest": None,
+                "errorCode": None,
+            }
+            if not (
+                proposed["state"] == expected_state
+                and proposed["version"] == invalidated_version
+                and proposed["capabilities"] == []
+                and current == invalidated_verification
+            ):
+                raise ValueError(
+                    "verification-bound edit must invalidate its verification projection"
+                )
+        elif not (
+            proposed["state"] == prior["state"]
+            and proposed["version"] == prior["version"]
+            and proposed["capabilities"] == prior["capabilities"]
+            and current == previous
+        ):
+            raise ValueError("metadata-only edit rewrites verification projection")
+
+    if operation in {
+        "verified",
+        "verification_failure_started",
+        "verification_failed",
+    }:
+        completion = operation == "verification_failed" and prior["state"] == "draining"
+        expected_actor = "source-lifecycle" if completion else "source-verifier"
+        if not (
+            state_event["actor"].get("role") == "system"
+            and state_event["actor"].get("id") == expected_actor
+        ):
+            if completion:
+                raise ValueError(
+                    "verification-failure completion is not authored by Source lifecycle"
+                )
+            raise ValueError(
+                "Source verification audit is not authored by its verifier"
+            )
+
+    direct_result = operation in {"verified", "verification_failure_started"} or (
+        operation == "verification_failed" and prior["state"] != "draining"
+    )
+    if direct_result:
+        active_verification = [
+            item for item in prior["activeLeases"] if item["purpose"] == "verification"
+        ]
+        released_verification = [
+            item
+            for item in new_lease_events
+            if item["operation"] == "lease_released"
+            and item["purpose"] == "verification"
+        ]
+        if (
+            len(active_verification) != 1
+            or len(new_lease_events) != 1
+            or len(released_verification) != 1
+        ):
+            raise ValueError(
+                "verification result requires one active verification reservation"
+            )
+        reservation = active_verification[0]
+        release = released_verification[0]
+        if reservation["acquiredRevision"] != prior["revision"]:
+            raise ValueError(
+                "verification result crossed its reservation source revision"
+            )
+        if any(
+            reservation[field] != release[field]
+            for field in (
+                "leaseId",
+                "jobId",
+                "purpose",
+                "credentialRevision",
+                "bindingDigest",
+            )
+        ):
+            raise ValueError("verification result releases another reservation")
+        if reservation["credentialRevision"] != prior["auth"][
+            "credentialRevision"
+        ] or reservation["bindingDigest"] != source_verification_binding_digest(prior):
+            raise ValueError("verification reservation does not bind the tested input")
+        immutable_during_test = (
+            "schemaVersion",
+            "sourceId",
+            "type",
+            "name",
+            "product",
+            "endpoint",
+            "auth",
+            "associatedSourceIds",
+            "allowedSchemas",
+            "budgets",
+            "owner",
+            "createdAt",
+        )
+        for field in immutable_during_test:
+            if proposed[field] != prior[field]:
+                raise ValueError(
+                    f"Source verification revision rewrites tested input: {field}"
+                )
+
+    if (
+        operation not in {"edited", "tombstoned"}
+        and verification_input_changed
+        and not direct_result
+    ):
+        raise ValueError("verification-bound input changed outside edit/delete")
+
+    if operation == "verified":
+        tested_at = current["testedAt"]
+        if not (
+            current["status"] == "passed"
+            and tested_at is not None
+            and parse_time(tested_at) == parse_time(state_event["createdAt"])
+            and current["identityDigest"] is not None
+            and current["errorCode"] is None
+        ):
+            raise ValueError("verified revision requires a fresh passed verification")
+        version = proposed["version"]
+        if not (
+            version["supported"]
+            and version["family"] != "unknown"
+            and version["detected"]
+        ):
+            raise ValueError("verified revision requires a supported detected version")
+        available = {
+            item["name"]
+            for item in proposed["capabilities"]
+            if item["status"] == "available"
+        }
+        required = {
+            "tidb": {"version", "schema"},
+            "prometheus": {"prom_query"},
+            "tem": {"alert_read"},
+            "alertmanager": {"alert_read"},
+        }[proposed["type"]]
+        if missing := required - available:
+            raise ValueError(
+                f"verified revision lacks required capabilities: {sorted(missing)}"
+            )
+
+    if operation == "verification_failure_started" or (
+        operation == "verification_failed" and prior["state"] != "draining"
+    ):
+        tested_at = current["testedAt"]
+        if not (
+            current["status"] == "failed"
+            and tested_at is not None
+            and parse_time(tested_at) == parse_time(state_event["createdAt"])
+            and current["identityDigest"] is None
+            and current["errorCode"]
+        ):
+            raise ValueError("failed revision requires a fresh failed verification")
+
+    if (
+        operation == "verification_failed"
+        and prior["state"] == "draining"
+        and verification_projection_changed
+    ):
+        raise ValueError(
+            "verification-failure drain completion rewrites its failed projection"
+        )
+
+    if operation == "rotation_completed":
+        preserved_fields = (
+            "schemaVersion",
+            "sourceId",
+            "type",
+            "name",
+            "product",
+            "endpoint",
+            "activeLeases",
+            "associatedSourceIds",
+            "allowedSchemas",
+            "budgets",
+            "owner",
+            "leaseEvents",
+            "createdAt",
+        )
+        if any(proposed[field] != prior[field] for field in preserved_fields):
+            raise ValueError("rotation completion rewrites unrelated Source fields")
+        if not (
+            proposed["state"] == "disabled"
+            and proposed["version"]
+            == {"detected": None, "family": "unknown", "supported": False}
+            and proposed["capabilities"] == []
+            and current
+            == {
+                "status": "not_run",
+                "testedAt": None,
+                "identityDigest": None,
+                "errorCode": None,
+            }
+        ):
+            raise ValueError("rotated credential must remain disabled and unverified")
+
+
+def validate_source_operation_fields(
+    prior: dict[str, Any], proposed: dict[str, Any], operation: str
+) -> None:
+    """Reject mutations outside the explicitly authorized operation surface."""
+
+    if set(proposed) != set(prior):
+        raise ValueError("Source operation rewrites unrelated Source fields")
+    if operation not in SOURCE_OPERATION_MUTABLE_FIELDS:
+        raise ValueError(f"unsupported Source revision operation: {operation}")
+    allowed = (
+        SOURCE_REVISION_METADATA_FIELDS | SOURCE_OPERATION_MUTABLE_FIELDS[operation]
+    )
+    for field, prior_value in prior.items():
+        if field not in allowed and proposed[field] != prior_value:
+            raise ValueError(
+                f"Source {operation} operation rewrites unrelated Source field: {field}"
+            )
+
+    if operation != "tombstoned":
+        return
+    sanitized_endpoint = copy.deepcopy(prior["endpoint"])
+    sanitized_endpoint.update(host="deleted.invalid", path=None)
+    metadata_only = (
+        proposed["state"] == "tombstoned"
+        and proposed["endpoint"] == sanitized_endpoint
+        and proposed["auth"]
+        == {
+            "kind": "none",
+            "credentialRef": None,
+            "credentialRevision": None,
+            "username": None,
+            "expiresAt": None,
+        }
+        and proposed["credentialLifecycle"]
+        == {
+            "state": "tombstoned",
+            "activeLeaseCount": 0,
+            "pendingOperation": None,
+            "retireAfter": None,
+        }
+        and proposed["associatedSourceIds"] == []
+        and proposed["allowedSchemas"] == []
+        and proposed["version"]
+        == {"detected": None, "family": "unknown", "supported": False}
+        and proposed["capabilities"] == []
+        and proposed["verification"]
+        == {
+            "status": "not_run",
+            "testedAt": None,
+            "identityDigest": None,
+            "errorCode": None,
+        }
+    )
+    if not metadata_only:
+        raise ValueError("Source deletion must produce a metadata-only tombstone")
+
+
+def validate_source_transition(
+    prior: dict[str, Any],
+    proposed: dict[str, Any],
+    resolve_source_audit: SourceAuditResolver | None = None,
+) -> None:
     if prior["sourceId"] != proposed["sourceId"]:
         raise ValueError("Source transition cannot change sourceId")
     if proposed["revision"] != prior["revision"] + 1:
@@ -1349,12 +1843,6 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
             "verification_failure",
         }:
             raise ValueError("drain admission requires a recognized pending operation")
-        if proposed_lease_count != prior_lease_count:
-            raise ValueError("Source must preserve active leases when entering drain")
-        if proposed["activeLeases"] != prior["activeLeases"]:
-            raise ValueError(
-                "Source must preserve lease identities when entering drain"
-            )
         expected_start = {
             "rotate": "rotation_started",
             "disable": "disable_started",
@@ -1373,11 +1861,46 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
             or state_event["actor"].get("role") != "owner"
         ):
             raise ValueError("drain start requires an explicit Owner action")
-        if new_lease_events:
-            raise ValueError(
-                "leases cannot be released in the drain admission revision"
-            )
-    if prior["state"] == "draining":
+        if pending_operation == "verification_failure":
+            if not (
+                len(new_lease_events) == 1
+                and new_lease_events[0]["operation"] == "lease_released"
+                and new_lease_events[0]["purpose"] == "verification"
+            ):
+                raise ValueError(
+                    "verification-failure admission must release its verification reservation"
+                )
+            released = new_lease_events[0]
+            expected_active = [
+                item
+                for item in prior["activeLeases"]
+                if item["leaseId"] != released["leaseId"]
+            ]
+            if len(expected_active) != len(prior["activeLeases"]) - 1:
+                raise ValueError(
+                    "verification-failure admission releases an inactive reservation"
+                )
+            if not (
+                proposed_lease_count == prior_lease_count - 1
+                and proposed["activeLeases"] == expected_active
+            ):
+                raise ValueError(
+                    "verification-failure admission does not atomically release its reservation"
+                )
+        else:
+            if proposed_lease_count != prior_lease_count:
+                raise ValueError(
+                    "Source must preserve active leases when entering drain"
+                )
+            if proposed["activeLeases"] != prior["activeLeases"]:
+                raise ValueError(
+                    "Source must preserve lease identities when entering drain"
+                )
+            if new_lease_events:
+                raise ValueError(
+                    "leases cannot be released in the drain admission revision"
+                )
+    elif prior["state"] == "draining":
         if any(event["operation"] == "lease_acquired" for event in new_lease_events):
             raise ValueError("draining Source cannot acquire new leases")
         if proposed_lease_count > prior_lease_count:
@@ -1421,12 +1944,16 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
                     "drain completion requires a recognized pending operation"
                 )
             expected_state = {
-                "rotate": "enabled",
+                "rotate": "disabled",
                 "disable": "disabled",
                 "delete": "tombstoned",
                 "verification_failure": "verification_failed",
             }[pending_operation]
             if proposed["state"] != expected_state:
+                if pending_operation == "rotate":
+                    raise ValueError(
+                        "rotated credential must remain disabled and unverified"
+                    )
                 raise ValueError(
                     "Source drain completion does not match pending operation"
                 )
@@ -1441,23 +1968,48 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
                     "Source completion operation does not match pendingOperation"
                 )
     elif new_lease_events:
-        if not (prior["state"] == proposed["state"] == "enabled"):
-            raise ValueError(
-                "lease ledger changes outside draining require an enabled Source"
-            )
         if any(
             event["operation"] == "lease_force_cancelled" for event in new_lease_events
         ):
             raise ValueError("force cancellation requires an admitted drain operation")
-        if state_event["operation"] != "leases_updated":
+        operation = state_event["operation"]
+        if operation == "leases_updated":
+            if not (
+                prior["state"] == proposed["state"]
+                and prior["state"]
+                in {"draft", "enabled", "disabled", "verification_failed"}
+            ):
+                raise ValueError(
+                    "reservation ledger update must preserve a testable Source state"
+                )
+        elif operation in {"verified", "verification_failed"}:
+            if not (
+                len(new_lease_events) == 1
+                and new_lease_events[0]["operation"] == "lease_released"
+                and new_lease_events[0]["purpose"] == "verification"
+            ):
+                raise ValueError(
+                    "verification result must release exactly one verification reservation"
+                )
+        else:
             raise ValueError(
-                "enabled lease ledger changes require a leases_updated state audit"
+                "lease ledger changes require a reservation or verification-result audit"
             )
 
     prior_ref = prior["auth"]["credentialRef"]
     proposed_ref = proposed["auth"]["credentialRef"]
     prior_credential_revision = prior["auth"]["credentialRevision"]
     proposed_credential_revision = proposed["auth"]["credentialRevision"]
+    if state_event["operation"] != "tombstoned" and any(
+        prior["auth"][field] != proposed["auth"][field]
+        for field in ("kind", "username")
+    ):
+        raise ValueError("credential metadata changed outside rotation/delete")
+    if (
+        state_event["operation"] not in {"rotation_completed", "tombstoned"}
+        and prior["auth"]["expiresAt"] != proposed["auth"]["expiresAt"]
+    ):
+        raise ValueError("credential metadata changed outside rotation/delete")
     if prior["state"] == "draining" and proposed["state"] != "draining":
         pending_operation = prior_lifecycle["pendingOperation"]
         if pending_operation == "rotate" and not (
@@ -1499,7 +2051,7 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
             prior["state"] == "draining"
             and prior_lifecycle["pendingOperation"] == "rotate"
             and prior_lifecycle["activeLeaseCount"] == 0
-            and proposed["state"] == "enabled"
+            and proposed["state"] == "disabled"
             and proposed_credential_revision is not None
             and (
                 prior_credential_revision is None
@@ -1519,8 +2071,12 @@ def validate_source_transition(prior: dict[str, Any], proposed: dict[str, Any]) 
                 "credential identity changed outside rotation/delete completion"
             )
 
-    validate_source_semantics(prior)
-    validate_source_semantics(proposed)
+    validate_source_verification_revision(
+        prior, proposed, state_event, new_lease_events
+    )
+    validate_source_operation_fields(prior, proposed, str(state_event["operation"]))
+    validate_source_semantics(prior, resolve_source_audit)
+    validate_source_semantics(proposed, resolve_source_audit)
 
 
 def build_source_rotation(
@@ -1538,7 +2094,7 @@ def build_source_rotation(
     draining["updatedAt"] = "2026-09-02T09:25:00Z"
     draining["transitionEvents"].append(
         {
-            "eventId": "sevt_0000000000000004",
+            "eventId": "sevt_0000000000000401",
             "sourceRevision": draining["revision"],
             "type": "source_state",
             "operation": "rotation_started",
@@ -1558,9 +2114,21 @@ def build_source_rotation(
 
     rotated = copy.deepcopy(draining)
     rotated["revision"] = draining["revision"] + 1
-    rotated["state"] = "enabled"
+    rotated["state"] = "disabled"
     rotated["auth"]["credentialRef"] = "cred_0000000000000002"
     rotated["auth"]["credentialRevision"] = 3
+    rotated["version"] = {
+        "detected": None,
+        "family": "unknown",
+        "supported": False,
+    }
+    rotated["capabilities"] = []
+    rotated["verification"] = {
+        "status": "not_run",
+        "testedAt": None,
+        "identityDigest": None,
+        "errorCode": None,
+    }
     rotated["credentialLifecycle"] = {
         "state": "active",
         "activeLeaseCount": 0,
@@ -1570,12 +2138,12 @@ def build_source_rotation(
     rotated["updatedAt"] = "2026-09-02T09:30:00Z"
     rotated["transitionEvents"].append(
         {
-            "eventId": "sevt_0000000000000005",
+            "eventId": "sevt_0000000000000402",
             "sourceRevision": rotated["revision"],
             "type": "source_state",
             "operation": "rotation_completed",
             "fromState": "draining",
-            "toState": "enabled",
+            "toState": "disabled",
             "credentialRevision": rotated["auth"]["credentialRevision"],
             "actor": {
                 "kind": "system",
@@ -1584,7 +2152,7 @@ def build_source_rotation(
                 "displayName": "数据源生命周期",
             },
             "createdAt": rotated["updatedAt"],
-            "reason": "旧租约归零，启用新凭据 revision",
+            "reason": "旧租约归零并切换新凭据；保持禁用直至重新验证",
         }
     )
     return draining, rotated
@@ -1593,6 +2161,8 @@ def build_source_rotation(
 def build_source_lease_drain(
     source: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    binding_digest = source_verification_binding_digest(source)
+    credential_revision = source["auth"]["credentialRevision"]
     leased = copy.deepcopy(source)
     leased["revision"] = source["revision"] + 1
     leased["credentialLifecycle"]["activeLeaseCount"] = 2
@@ -1624,6 +2194,9 @@ def build_source_lease_drain(
                 "operation": "lease_acquired",
                 "leaseId": "lease_0000000000000001",
                 "jobId": "job_0000000000000001",
+                "purpose": "diagnosis",
+                "credentialRevision": credential_revision,
+                "bindingDigest": binding_digest,
                 "fromLeaseCount": 0,
                 "toLeaseCount": 1,
                 "actor": {
@@ -1642,6 +2215,9 @@ def build_source_lease_drain(
                 "operation": "lease_acquired",
                 "leaseId": "lease_0000000000000002",
                 "jobId": "job_0000000000000002",
+                "purpose": "diagnosis",
+                "credentialRevision": credential_revision,
+                "bindingDigest": binding_digest,
                 "fromLeaseCount": 1,
                 "toLeaseCount": 2,
                 "actor": {
@@ -1660,6 +2236,9 @@ def build_source_lease_drain(
         {
             "leaseId": event["leaseId"],
             "jobId": event["jobId"],
+            "purpose": event["purpose"],
+            "credentialRevision": event["credentialRevision"],
+            "bindingDigest": event["bindingDigest"],
             "acquiredRevision": event["sourceRevision"],
             "acquiredAt": event["createdAt"],
         }
@@ -1728,6 +2307,9 @@ def build_source_lease_drain(
                 "operation": "lease_released",
                 "leaseId": "lease_0000000000000001",
                 "jobId": "job_0000000000000001",
+                "purpose": "diagnosis",
+                "credentialRevision": credential_revision,
+                "bindingDigest": binding_digest,
                 "fromLeaseCount": 2,
                 "toLeaseCount": 1,
                 "actor": {
@@ -1746,6 +2328,9 @@ def build_source_lease_drain(
                 "operation": "lease_force_cancelled",
                 "leaseId": "lease_0000000000000002",
                 "jobId": "job_0000000000000002",
+                "purpose": "diagnosis",
+                "credentialRevision": credential_revision,
+                "bindingDigest": binding_digest,
                 "fromLeaseCount": 1,
                 "toLeaseCount": 0,
                 "actor": {
@@ -1772,13 +2357,90 @@ def build_source_lease_drain(
     return leased, draining, drained
 
 
+def build_source_verification_reservation(source: dict[str, Any]) -> dict[str, Any]:
+    """Build a persisted verifier reservation before credential decryption."""
+
+    reserved = copy.deepcopy(source)
+    reserved["revision"] = source["revision"] + 1
+    reserved["credentialLifecycle"]["activeLeaseCount"] += 1
+    reserved["updatedAt"] = "2026-09-02T09:23:00Z"
+    binding_digest = source_verification_binding_digest(source)
+    credential_revision = source["auth"]["credentialRevision"]
+    lease_at = "2026-09-02T09:22:00Z"
+    reserved["activeLeases"].append(
+        {
+            "leaseId": "lease_0000000000000301",
+            "jobId": "job_0000000000000301",
+            "purpose": "verification",
+            "credentialRevision": credential_revision,
+            "bindingDigest": binding_digest,
+            "acquiredRevision": reserved["revision"],
+            "acquiredAt": lease_at,
+        }
+    )
+    reserved["leaseEvents"].append(
+        {
+            "eventId": "levt_0000000000000301",
+            "sourceRevision": reserved["revision"],
+            "operation": "lease_acquired",
+            "leaseId": "lease_0000000000000301",
+            "jobId": "job_0000000000000301",
+            "purpose": "verification",
+            "credentialRevision": credential_revision,
+            "bindingDigest": binding_digest,
+            "fromLeaseCount": source["credentialLifecycle"]["activeLeaseCount"],
+            "toLeaseCount": reserved["credentialLifecycle"]["activeLeaseCount"],
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-verifier",
+                "displayName": "连接校验器",
+            },
+            "ownerApproval": None,
+            "createdAt": lease_at,
+            "reason": "取得持久化 reservation 后方可解密数据源凭据",
+        }
+    )
+    reserved["transitionEvents"].append(
+        {
+            "eventId": "sevt_0000000000000301",
+            "sourceRevision": reserved["revision"],
+            "type": "source_state",
+            "operation": "leases_updated",
+            "fromState": source["state"],
+            "toState": source["state"],
+            "credentialRevision": credential_revision,
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-verifier",
+                "displayName": "连接校验器",
+            },
+            "createdAt": reserved["updatedAt"],
+            "reason": "持久化 verification reservation",
+        }
+    )
+    return reserved
+
+
 def build_source_verification_failure_drain(source: dict[str, Any]) -> dict[str, Any]:
+    verification_leases = [
+        item for item in source["activeLeases"] if item["purpose"] == "verification"
+    ]
+    if len(verification_leases) != 1:
+        raise ValueError(
+            "verification failure builder requires one verification reservation"
+        )
+    verification_lease = verification_leases[0]
     draining = copy.deepcopy(source)
     draining["revision"] = source["revision"] + 1
     draining["state"] = "draining"
+    draining["activeLeases"] = [
+        item for item in source["activeLeases"] if item != verification_lease
+    ]
     draining["credentialLifecycle"] = {
         "state": "active",
-        "activeLeaseCount": source["credentialLifecycle"]["activeLeaseCount"],
+        "activeLeaseCount": source["credentialLifecycle"]["activeLeaseCount"] - 1,
         "pendingOperation": "verification_failure",
         "retireAfter": None,
     }
@@ -1808,7 +2470,81 @@ def build_source_verification_failure_drain(source: dict[str, Any]) -> dict[str,
             "reason": "连接重新校验失败，停止新任务并保留已有租约直到排空",
         }
     )
+    release_at = (
+        (parse_time(draining["updatedAt"]) - timedelta(seconds=1))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    draining["leaseEvents"].append(
+        {
+            "eventId": "levt_0000000000000302",
+            "sourceRevision": draining["revision"],
+            "operation": "lease_released",
+            "leaseId": verification_lease["leaseId"],
+            "jobId": verification_lease["jobId"],
+            "purpose": "verification",
+            "credentialRevision": verification_lease["credentialRevision"],
+            "bindingDigest": verification_lease["bindingDigest"],
+            "fromLeaseCount": source["credentialLifecycle"]["activeLeaseCount"],
+            "toLeaseCount": draining["credentialLifecycle"]["activeLeaseCount"],
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-verifier",
+                "displayName": "连接校验器",
+            },
+            "ownerApproval": None,
+            "createdAt": release_at,
+            "reason": "失败结果持久化并原子释放 verification reservation",
+        }
+    )
     return draining
+
+
+def build_source_verification_failure_completion(
+    source: dict[str, Any],
+) -> dict[str, Any]:
+    """Complete an admitted verification-failure drain after all work exits."""
+
+    if not (
+        source["state"] == "draining"
+        and source["credentialLifecycle"]["pendingOperation"] == "verification_failure"
+        and source["credentialLifecycle"]["activeLeaseCount"] == 0
+        and source["activeLeases"] == []
+    ):
+        raise ValueError(
+            "verification failure completion requires a zero-reservation drain"
+        )
+    completed = copy.deepcopy(source)
+    completed["revision"] = source["revision"] + 1
+    completed["state"] = "verification_failed"
+    completed["credentialLifecycle"] = {
+        "state": "active",
+        "activeLeaseCount": 0,
+        "pendingOperation": None,
+        "retireAfter": None,
+    }
+    completed["updatedAt"] = "2026-09-02T09:25:00Z"
+    completed["transitionEvents"].append(
+        {
+            "eventId": "sevt_0000000000000104",
+            "sourceRevision": completed["revision"],
+            "type": "source_state",
+            "operation": "verification_failed",
+            "fromState": "draining",
+            "toState": "verification_failed",
+            "credentialRevision": completed["auth"]["credentialRevision"],
+            "actor": {
+                "kind": "system",
+                "role": "system",
+                "id": "source-lifecycle",
+                "displayName": "数据源生命周期",
+            },
+            "createdAt": completed["updatedAt"],
+            "reason": "所有 reservation 已终止；完成 verification failure drain",
+        }
+    )
+    return completed
 
 
 def validate_evidence_semantics(
@@ -2823,27 +3559,55 @@ def main() -> None:
     cases = validate_schema("diagnosis-case-v2.schema.json", list(CASE_NAMES))
     reports = validate_schema("diagnosis-report-v1.schema.json", list(REPORT_NAMES))
     for source in sources:
-        validate_source_semantics(source)
+        validate_source_semantics(source, build_fixture_source_audit_resolver(source))
     draining_source, rotated_source = build_source_rotation(sources[0])
     source_validator = schema_validator("source-v1.schema.json")
     source_validator.validate(draining_source)
     source_validator.validate(rotated_source)
-    validate_source_transition(sources[0], draining_source)
-    validate_source_transition(draining_source, rotated_source)
+    rotation_audit = build_fixture_source_audit_resolver(
+        sources[0], draining_source, rotated_source
+    )
+    validate_source_transition(sources[0], draining_source, rotation_audit)
+    validate_source_transition(draining_source, rotated_source, rotation_audit)
     leased_source, leased_draining, drained_source = build_source_lease_drain(
         sources[0]
     )
     source_validator.validate(leased_source)
     source_validator.validate(leased_draining)
     source_validator.validate(drained_source)
-    validate_source_transition(sources[0], leased_source)
-    validate_source_transition(leased_source, leased_draining)
-    validate_source_transition(leased_draining, drained_source)
-    verification_failure_draining = build_source_verification_failure_drain(
-        leased_source
+    lease_audit = build_fixture_source_audit_resolver(
+        sources[0], leased_source, leased_draining, drained_source
     )
+    validate_source_transition(sources[0], leased_source, lease_audit)
+    validate_source_transition(leased_source, leased_draining, lease_audit)
+    validate_source_transition(leased_draining, drained_source, lease_audit)
+    verification_reserved = build_source_verification_reservation(sources[0])
+    verification_failure_draining = build_source_verification_failure_drain(
+        verification_reserved
+    )
+    verification_failure_completed = build_source_verification_failure_completion(
+        verification_failure_draining
+    )
+    source_validator.validate(verification_reserved)
     source_validator.validate(verification_failure_draining)
-    validate_source_transition(leased_source, verification_failure_draining)
+    source_validator.validate(verification_failure_completed)
+    verification_audit = build_fixture_source_audit_resolver(
+        sources[0],
+        verification_reserved,
+        verification_failure_draining,
+        verification_failure_completed,
+    )
+    validate_source_transition(sources[0], verification_reserved, verification_audit)
+    validate_source_transition(
+        verification_reserved,
+        verification_failure_draining,
+        verification_audit,
+    )
+    validate_source_transition(
+        verification_failure_draining,
+        verification_failure_completed,
+        verification_audit,
+    )
     available_source_revisions = {
         f"{source['sourceId']}@{source['revision']}" for source in sources
     }
@@ -2926,9 +3690,9 @@ def main() -> None:
     validate_report_projection(insufficient_report, insufficient_pending)
     print(
         "vNext contract examples valid: "
-        "3 sources, 1 lease-drain chain, 1 standalone evidence, 3 cases, "
-        "1 AI abstention, 1 rules-only projection, 3 terminal transitions, "
-        "4 report projections"
+        "3 sources, 1 diagnosis lease-drain chain, 1 verification-failure chain, "
+        "1 standalone evidence, 3 cases, 1 AI abstention, "
+        "1 rules-only projection, 3 terminal transitions, 4 report projections"
     )
 
 

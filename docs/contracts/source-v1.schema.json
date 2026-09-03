@@ -282,7 +282,14 @@
       "if": { "properties": { "state": { "enum": ["draft", "disabled", "verification_failed"] } }, "required": ["state"] },
       "then": {
         "properties": {
-          "credentialLifecycle": { "properties": { "activeLeaseCount": { "const": 0 } } }
+          "activeLeases": {
+            "not": {
+              "contains": {
+                "properties": { "purpose": { "const": "diagnosis" } },
+                "required": ["purpose"]
+              }
+            }
+          }
         }
       }
     },
@@ -290,8 +297,15 @@
       "if": { "properties": { "state": { "const": "tombstoned" } }, "required": ["state"] },
       "then": {
         "properties": {
-          "auth": { "properties": { "kind": { "const": "none" }, "credentialRef": { "type": "null" }, "credentialRevision": { "type": "null" }, "username": { "type": "null" } } },
-          "credentialLifecycle": { "properties": { "state": { "const": "tombstoned" }, "activeLeaseCount": { "const": 0 }, "pendingOperation": { "type": "null" } } }
+          "version": { "properties": { "detected": { "type": "null" }, "family": { "const": "unknown" }, "supported": { "const": false } } },
+          "endpoint": { "properties": { "host": { "const": "deleted.invalid" }, "path": { "type": "null" } } },
+          "auth": { "properties": { "kind": { "const": "none" }, "credentialRef": { "type": "null" }, "credentialRevision": { "type": "null" }, "username": { "type": "null" }, "expiresAt": { "type": "null" } } },
+          "credentialLifecycle": { "properties": { "state": { "const": "tombstoned" }, "activeLeaseCount": { "const": 0 }, "pendingOperation": { "type": "null" }, "retireAfter": { "type": "null" } } },
+          "associatedSourceIds": { "maxItems": 0 },
+          "allowedSchemas": { "maxItems": 0 },
+          "capabilities": { "maxItems": 0 },
+          "verification": { "properties": { "status": { "const": "not_run" }, "testedAt": { "type": "null" }, "identityDigest": { "type": "null" }, "errorCode": { "type": "null" } } },
+          "activeLeases": { "maxItems": 0 }
         }
       }
     },
@@ -358,17 +372,27 @@
     },
     {
       "if": { "properties": { "verification": { "properties": { "status": { "const": "passed" } }, "required": ["status"] } }, "required": ["verification"] },
-      "then": { "properties": { "verification": { "properties": { "testedAt": { "type": "string" }, "identityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }, "errorCode": { "type": "null" } } } } },
-      "else": { "properties": { "verification": { "properties": { "identityDigest": { "type": "null" } } } } }
+      "then": { "properties": { "verification": { "properties": { "testedAt": { "type": "string" }, "identityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }, "errorCode": { "type": "null" } } } } }
+    },
+    {
+      "if": { "properties": { "verification": { "properties": { "status": { "const": "not_run" } }, "required": ["status"] } }, "required": ["verification"] },
+      "then": { "properties": { "verification": { "properties": { "testedAt": { "type": "null" }, "identityDigest": { "type": "null" }, "errorCode": { "type": "null" } } } } }
+    },
+    {
+      "if": { "properties": { "verification": { "properties": { "status": { "const": "failed" } }, "required": ["status"] } }, "required": ["verification"] },
+      "then": { "properties": { "verification": { "properties": { "testedAt": { "type": "string" }, "identityDigest": { "type": "null" }, "errorCode": { "type": "string", "minLength": 1 } } } } }
     }
   ],
   "$defs": {
     "activeLease": {
       "type": "object", "additionalProperties": false,
-      "required": ["leaseId", "jobId", "acquiredRevision", "acquiredAt"],
+      "required": ["leaseId", "jobId", "purpose", "credentialRevision", "bindingDigest", "acquiredRevision", "acquiredAt"],
       "properties": {
         "leaseId": { "type": "string", "pattern": "^lease_[a-z0-9]{16,64}$" },
         "jobId": { "type": "string", "pattern": "^job_[a-z0-9]{16,64}$" },
+        "purpose": { "enum": ["diagnosis", "verification"] },
+        "credentialRevision": { "type": ["integer", "null"], "minimum": 1 },
+        "bindingDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "acquiredRevision": { "type": "integer", "minimum": 1 },
         "acquiredAt": { "type": "string", "format": "date-time" }
       }
@@ -425,13 +449,16 @@
     },
     "leaseEvent": {
       "type": "object", "additionalProperties": false,
-      "required": ["eventId", "sourceRevision", "operation", "leaseId", "jobId", "fromLeaseCount", "toLeaseCount", "actor", "ownerApproval", "createdAt", "reason"],
+      "required": ["eventId", "sourceRevision", "operation", "leaseId", "jobId", "purpose", "credentialRevision", "bindingDigest", "fromLeaseCount", "toLeaseCount", "actor", "ownerApproval", "createdAt", "reason"],
       "properties": {
         "eventId": { "type": "string", "pattern": "^levt_[a-z0-9]{16,64}$" },
         "sourceRevision": { "type": "integer", "minimum": 1 },
         "operation": { "enum": ["lease_acquired", "lease_released", "lease_force_cancelled"] },
         "leaseId": { "type": "string", "pattern": "^lease_[a-z0-9]{16,64}$" },
         "jobId": { "type": "string", "pattern": "^job_[a-z0-9]{16,64}$" },
+        "purpose": { "enum": ["diagnosis", "verification"] },
+        "credentialRevision": { "type": ["integer", "null"], "minimum": 1 },
+        "bindingDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "fromLeaseCount": { "type": "integer", "minimum": 0, "maximum": 1024 },
         "toLeaseCount": { "type": "integer", "minimum": 0, "maximum": 1024 },
         "actor": { "$ref": "#/$defs/actor" },

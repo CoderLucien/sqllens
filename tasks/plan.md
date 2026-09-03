@@ -32,15 +32,18 @@ docs/superpowers/specs/2026-09-02-sqllens-vnext-product-spec.md.
 
 - Python 3.12, FastAPI, React, sqlglot classification, and typed API errors.
 - Credential vault and key rotation foundations.
-- Single-Owner session, CSRF, idempotency, persistent admission lease, restart
-  recovery, and provider timeout/byte budgets.
+- Single-Owner session, CSRF, existing job idempotency/persistent lease
+  foundations, restart recovery, and provider timeout/byte budgets.
 - Evidence identifiers, integrity digests, revision pinning, and rules fallback.
 
 ### Refactor Incrementally
 
 - apps/api/src/sqllens_api/setup.py: preserve atomic state and credential
-  semantics, replace terminal bootstrap happy path with localhost-only Owner
-  creation, then move source/model steps behind explicit services.
+  semantics, remove the legacy bootstrap trust path in favor of localhost-only
+  Owner creation, then move source/model steps behind explicit services.
+- Source writes: add server-owned idempotency receipts and audit attestations;
+  unify diagnosis and verification reservations before treating Source/v1 as
+  an authorization-safe projection.
 - apps/api/src/sqllens_api/app.py: extract route groups and dependency
   boundaries while touching each vertical slice; do not perform a broad rewrite.
 - apps/api/src/sqllens_api/diagnosis.py: replace SQL-structure-only fixed output
@@ -51,9 +54,10 @@ docs/superpowers/specs/2026-09-02-sqllens-vnext-product-spec.md.
 - apps/web/src/DiagnosisWorkspace.tsx: replace internal-ID-first rendering with
   the approved Chinese report and trace drawer.
 
-### Remove From The Customer Path
+### Remove From vNext P0
 
-- terminal bootstrap-ingest and one-time code entry;
+- terminal bootstrap-ingest/reissue, bootstrap API/state, recovery-code UI, and
+  one-time code entry (including hidden compatibility paths);
 - fixed 20 percent evidence completeness and English cannot-determine
   hypotheses;
 - model-only hypothesis-ID ranking as the claimed AI diagnosis capability;
@@ -103,7 +107,9 @@ Slice A:
 Slice B:
 
 - separate setup shell and daily shell;
-- Source/v1 CRUD with encrypted credential reference and immutable revision.
+- Source/v1 CRUD with encrypted credential reference and immutable revision;
+- server-owned Source-write idempotency receipts and audit attestations;
+- one persisted concurrency/drain barrier for diagnosis and verifier execution.
 
 Slice C:
 

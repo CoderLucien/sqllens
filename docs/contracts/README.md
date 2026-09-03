@@ -35,13 +35,14 @@ python3 docs/contracts/validate_vnext_negative_examples.py
 ```
 
 The positive validator checks all three Case/Report pairs, an explicit
-non-invoked AI abstention, one complete Source lease-drain chain, complete
-`validated_effective` and `rolled_back` transitions, and a separately rendered
-actionless `evidence_insufficient` Case/Report path. A report must be an exact
-projection of one Case revision for mode, conclusion, priority, business
-impact, evidence summary, rule/AI reasoning, ordered actions, uncertainty, and
-complete provenance. It cannot add an evidence ID, action, measurement, or
-business impact that the Case did not bind.
+non-invoked AI abstention, one complete diagnosis lease-drain chain, one
+complete enabled-reverification failure chain, complete `validated_effective`
+and `rolled_back` transitions, and a separately rendered actionless
+`evidence_insufficient` Case/Report path. A report must be an exact projection
+of one Case revision for mode, conclusion, priority, business impact, evidence
+summary, rule/AI reasoning, ordered actions, uncertainty, and complete
+provenance. It cannot add an evidence ID, action, measurement, or business
+impact that the Case did not bind.
 
 The executable domain policy is deliberately split into independently tested
 models instead of accumulating conditions in the fixture runner:
@@ -53,7 +54,11 @@ models instead of accumulating conditions in the fixture runner:
 - `vnext_outcome_policy.py` owns the singular authorized outcome tuple and its
   causal/effect semantics;
 - `vnext_source_ledger.py` performs one full-history replay of Source state and
-  lease events.
+  lease events;
+- `vnext_source_audit.py` resolves Source projections against server-owned
+  event attestations and the latest committed snapshot digest;
+- `vnext_source_idempotency.py` owns the Source-write receipt scope, intent,
+  replay, conflict, and retention boundary.
 
 DiagnosisCase/v2 records both workflow and business-outcome transition events.
 A non-pending outcome requires `workflowState=ready` and exactly one first
@@ -90,26 +95,114 @@ records and cannot be inferred from status text.
 Source/v1 lifecycle validation treats a Source revision and credential revision
 as separate immutable identities. Admission pins both and acquires a lease.
 Rotation, disable, and delete stop new admission and enter `draining`; normal
-retirement waits for zero leases. The authoritative lease ledger starts with a
-runtime-emitted acquisition event and exposes an exact active `leaseId`/`jobId`
-snapshot; the numeric count is only a derived cross-check. Every loaded snapshot
-is replayed from revision 1 by one combined state/lease model before it may be
-used as a prior revision. Admission may occur only in an enabled
-`leases_updated` revision strictly before its state snapshot; release/cancel
-events must belong to an allowed lease revision and also be strictly earlier
-than its state snapshot. Equal timestamps do not establish causal order and are
-rejected; multiple lease events in one revision are also strictly ordered.
+retirement waits for zero leases. Rotation completion activates the new
+credential only in a `disabled` Source, clears the old credential's verification
+projection, and requires a fresh disabled-state verification plus explicit
+Owner enable before admission resumes. The authoritative lease ledger starts
+with a runtime-emitted acquisition event and exposes an exact active
+`leaseId`/`jobId` snapshot; the numeric count is only a derived cross-check.
+Every loaded snapshot is replayed from revision 1 by one combined state/lease
+model before it may be used as a prior revision. Diagnosis admission may occur
+only in an enabled `leases_updated` revision strictly before its state snapshot;
+release/cancel events must belong to an allowed lease revision and also be
+strictly earlier than its state snapshot. Equal timestamps do not establish
+causal order and are rejected; multiple lease events in one revision are also
+strictly ordered. A revision cannot mix acquisition and release, so an acquired
+reservation is visible in a committed state snapshot before a later revision
+can release it.
 Entering drain preserves the active set. Each later normal release or forced
 cancellation names an acquired lease and job, removes exactly that identity,
 and appends an immutable lease event;
-forced cancellation also binds a prior Owner approval. The Source state event
-cannot precede the lease events recorded by the same revision. Delete removes
-the usable credential and retains only a non-queryable metadata tombstone. Every
-Source revision appends a chronological state event. Prior/proposed validation
+forced cancellation also binds an Owner approval captured strictly after the
+committed drain-admission event and no later than the cancellation. The Source
+state event cannot precede the lease events recorded by the same revision. Delete removes
+the usable credential and retains only a non-queryable metadata tombstone. The
+tombstone shape is exact: endpoint host becomes `deleted.invalid` and path is
+cleared; auth (including expiry), associations, scope, capabilities, active
+leases, live verification, and detected version support are cleared. Only
+non-queryable identity/operational metadata and append-only audit ledgers remain.
+Zero-lease `draft` and `verification_failed` Sources may also enter the same
+Owner-authored delete drain; a failed result is preserved through the drain and
+cleared only from the terminal live projection. Every Source revision appends a
+chronological state event. Prior/proposed validation
 rejects audit rewrite, revision or credentialRevision rollback, invented or
 silently erased leases in every state, operation/pending-operation mismatch,
 contradictory verification state, and drain completion that does not match its
 pending operation.
+Each transition also has a closed top-level field-mutation allowlist; only
+`revision`, `updatedAt`, the appended state event, and fields owned by that
+operation may change. `createdAt` must equal the registration event timestamp,
+and `updatedAt` must equal the latest state-event timestamp.
+
+The Source JSON is only a projection. `validate_source_semantics` therefore
+requires a trusted server-side audit resolver: every state/lease event must
+match an independently stored event digest, principal/service permission and
+timestamp, while the latest state record binds the complete current Source
+snapshot digest. The test-only fixture resolver in
+`vnext_source_audit.py` must never be built from caller input in runtime code.
+An Owner-authored record also requires a committed Source-write idempotency
+receipt; system identities are operation-specific rather than accepted from an
+embedded `role` string.
+The trusted resolver is also the transactional join boundary: it returns an
+audit record only when the referenced receipt exists in committed state and its
+receipt ID is globally unique to one Owner intent or verifier job across all
+Sources. Per-projection syntax checks do not replace that storage constraint.
+
+The unified active set distinguishes `diagnosis` and `verification` purposes
+and binds each reservation to its Source revision, credential revision, and
+canonical verification-input digest. Diagnosis remains enabled-only;
+verification may be reserved in draft/enabled/disabled/verification-failed
+states, counts toward the same concurrency budget, and is limited to one per
+Source. The reservation must commit before credential decryption. PASS/FAIL
+atomically releases that same reservation and may publish only against the
+exact reserved Source revision. After an intervening revision or drain, the
+terminated verifier may release its reservation but cannot publish a result.
+Drain operations wait for both purposes, and a cancellation may be recorded as
+released only after execution termination is trusted. A successful enabled
+reverification remains enabled; a failed one releases the verifier reservation
+and starts the existing diagnosis-lease drain. Completing that drain is
+lifecycle work and preserves the original verifier result timestamp.
+
+Source HTTP writes use the executable receipt model in
+`vnext_source_idempotency.py`. Raw Idempotency-Key and request secrets are never
+persisted: the server stores a public scope digest, a keyed HMAC-SHA-256 intent
+digest under a dedicated server-held key, and the redacted committed response
+plus its integrity digest. This prevents a stored request digest from becoming
+an offline oracle for a low-entropy credential. The key is stored outside the
+receipt database and remains available for every unexpired receipt; the replay
+body comes only from the closed public Source response serializer, never from a
+request or connector object. That serializer's route-specific schema is
+validated before receipt commit; the recursive sensitive-key scan is only an
+additional guard. Same-key/same-intent retries replay without side
+effects; same-key/different-intent and concurrent
+in-progress retries fail with stable conflicts. Every Source HTTP-write
+transaction commits its mutation with the matching receipt state and audit
+record; background diagnosis/lifecycle events use their own unique trusted
+ledger records rather than inventing an HTTP receipt. A verifier request first
+commits its in-progress receipt plus reservation before external execution, then atomically commits result,
+reservation release, and final receipt; no external retry can run the verifier
+twice. The receipt remains for at least 24 hours, including after Source
+deletion. All audit records belonging to one verifier execution reference the
+same receipt ID, and a receipt cannot be reused across distinct Owner intents
+or verifier jobs.
+Crash recovery does not erase an `in_progress` receipt or rerun its connector:
+after proving the old worker terminated, it releases the reservation and
+commits `VERIFICATION_INTERRUPTED` plus the final receipt. A later test uses a
+new key.
+Force-cancel records separately bind the cancelling command's idempotency
+receipt and the authenticated Owner approval attestation; neither is replaced
+by the original diagnosis/verifier execution receipt.
+
+Endpoint, `allowedSchemas`, authentication kind/username, and exact credential
+reference/revision are verification-bound inputs. A material endpoint or schema
+scope edit is forbidden while enabled; in any other editable state it clears
+version, capabilities, and verification. Editing a `verification_failed` Source
+therefore returns it to `draft`. Metadata-only edits preserve those projections
+exactly; reordering the unique `allowedSchemas` set is not a material change.
+Disabled retests remain non-admitted: success records
+`verified: disabled -> disabled`, failure records
+`verification_failed: disabled -> verification_failed`, and both require a
+fresh verifier-authored result rather than a caller-replayed Boolean or digest.
 
 AI text, the customer-facing decision, and customer actions are not free-form
 persistence fields. The model may select only an allowlisted template and typed
