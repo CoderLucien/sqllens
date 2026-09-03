@@ -54,6 +54,18 @@ class TestIndexAccess:
         )
         assert hit is None
 
+    def test_miss_when_no_filter_columns(self) -> None:
+        hit = index_access_hit(
+            table_name="index_orders",
+            scanned_rows=65_537,
+            result_rows=1,
+            filter_columns=(),
+            index_prefixes=(("id",),),
+            exec_count=20,
+            p95_ms=66,
+        )
+        assert hit is None
+
     def test_miss_when_scan_is_small(self) -> None:
         hit = index_access_hit(
             table_name="orders",
