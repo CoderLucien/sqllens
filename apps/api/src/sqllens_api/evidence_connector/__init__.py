@@ -32,6 +32,7 @@ from sqllens_api.evidence_connector.evidence import (
     build_managed_evidence,
 )
 from sqllens_api.evidence_connector.queries import (
+    MAX_M0_SELECT_BYTES,
     QueryBudget,
     QueryCardinality,
     QueryPriorityPolicy,
@@ -55,6 +56,7 @@ __all__ = [
     "CANONICAL_REVISION",
     "COLLECTOR_REVISION",
     "EXTRACTION_REVISION",
+    "MAX_M0_SELECT_BYTES",
     "MAX_SAFE_INTEGER",
     "CapabilityClass",
     "CapabilityDefinition",

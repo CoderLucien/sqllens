@@ -462,6 +462,42 @@ def test_m0_ordinary_explain_binder_accepts_one_base_table_through_cte() -> None
     assert query.sql == f"EXPLAIN FORMAT='brief' {canonical_sql}"
 
 
+def test_m0_ordinary_explain_binder_accepts_the_frozen_sql_body_range() -> None:
+    literal = "x" * 17_000
+    canonical_sql = f"SELECT id FROM orders WHERE note = '{literal}'"
+    value = ValidatedM0Select(
+        canonical_sql=canonical_sql,
+        sql_digest="0" * 64,
+        database="shop",
+        table_name="orders",
+    )
+
+    query = bind_m0_ordinary_explain(value)
+
+    assert len(canonical_sql.encode("utf-8")) <= 32_768
+    assert query.sql == f"EXPLAIN FORMAT='brief' {canonical_sql}"
+    validate_server_query(query)
+
+
+def test_larger_m0_sql_limit_does_not_widen_regular_registry_queries() -> None:
+    oversized = server_query(f"SELECT '{'x' * 17_000}' AS value")
+
+    with pytest.raises(UnsafeServerQueryError, match="too large"):
+        validate_server_query(oversized)
+
+
+def test_m0_ordinary_explain_binder_rejects_sql_beyond_the_frozen_body_range() -> None:
+    value = ValidatedM0Select(
+        canonical_sql=f"SELECT id FROM orders WHERE note = '{'x' * 32_768}'",
+        sql_digest="0" * 64,
+        database="shop",
+        table_name="orders",
+    )
+
+    with pytest.raises(UnsafeServerQueryError, match="empty or too large"):
+        bind_m0_ordinary_explain(value)
+
+
 @pytest.mark.parametrize(
     "value",
     [

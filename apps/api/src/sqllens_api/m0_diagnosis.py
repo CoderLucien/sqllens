@@ -16,6 +16,7 @@ from sqlglot.errors import ErrorLevel, SqlglotError
 from sqlglot.optimizer.scope import Scope, traverse_scope
 
 from sqllens_api.evidence_connector import (
+    MAX_M0_SELECT_BYTES,
     MAX_SAFE_INTEGER,
     JsonValue,
     QueryResult,
@@ -35,7 +36,6 @@ from sqllens_api.m0_connection import (
 
 M0_MIN_WINDOW_MINUTES = 5
 M0_MAX_WINDOW_MINUTES = 60
-M0_MAX_SQL_BYTES = 32_768
 M0_MAX_PREDICATE_COLUMNS = 32
 M0_DIAGNOSIS_TIMEOUT_SECONDS = 30.0
 M0_DIAGNOSIS_MAX_ROWS = 1_000
@@ -87,7 +87,7 @@ class M0DiagnosisInput(BaseModel):
             byte_length = len(value.encode("utf-8"))
         except UnicodeEncodeError:
             raise ValueError("SQL text must be valid UTF-8") from None
-        if not 1 <= byte_length <= M0_MAX_SQL_BYTES:
+        if not 1 <= byte_length <= MAX_M0_SELECT_BYTES:
             raise ValueError("SQL text must encode to between 1 and 32768 UTF-8 bytes")
         return value
 
@@ -171,7 +171,7 @@ def parse_m0_select(sql_text: str, *, database: str) -> ParsedM0Select:
     except (AttributeError, UnicodeEncodeError):
         raise M0DiagnosisValidationError from None
     if (
-        not 1 <= len(sql_bytes) <= M0_MAX_SQL_BYTES
+        not 1 <= len(sql_bytes) <= MAX_M0_SELECT_BYTES
         or not _bounded_identifier(database)
         or any(
             unicodedata.category(character).startswith("C") and character not in "\t\n\r"
@@ -228,7 +228,7 @@ def parse_m0_select(sql_text: str, *, database: str) -> ParsedM0Select:
         canonical_bytes = canonical_sql.encode("utf-8")
     except (SqlglotError, ValueError, UnicodeError, RecursionError):
         raise M0DiagnosisValidationError from None
-    if not 1 <= len(canonical_bytes) <= M0_MAX_SQL_BYTES:
+    if not 1 <= len(canonical_bytes) <= MAX_M0_SELECT_BYTES:
         raise M0DiagnosisValidationError
 
     predicate_columns: list[str] = []

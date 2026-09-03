@@ -15,6 +15,9 @@ from sqlglot.optimizer.scope import Scope, traverse_scope
 from sqllens_api.evidence_connector.capabilities import capability_matrix
 
 MAX_SERVER_QUERY_BYTES = 16_384
+MAX_M0_SELECT_BYTES = 32_768
+_M0_ORDINARY_EXPLAIN_PREFIX = "EXPLAIN FORMAT='brief' "
+MAX_M0_ORDINARY_QUERY_BYTES = MAX_M0_SELECT_BYTES + len(_M0_ORDINARY_EXPLAIN_PREFIX.encode("utf-8"))
 MAX_QUERY_TIMEOUT_MS = 30_000
 MAX_QUERY_ROWS = 1_000
 MAX_QUERY_RESULT_BYTES = 1_048_576
@@ -346,7 +349,7 @@ def bind_m0_ordinary_explain(value: ValidatedM0Select) -> ServerQuery:
     query = _query(
         "tidb-8.5",
         "ordinary_plan.validated_select",
-        f"EXPLAIN FORMAT='brief' {canonical_sql}",
+        f"{_M0_ORDINARY_EXPLAIN_PREFIX}{canonical_sql}",
         parameters=(),
         result_columns=_M0_ORDINARY_PLAN_COLUMNS,
         required_capability="ordinary_explain",
@@ -372,7 +375,16 @@ def _validate_metadata(query: ServerQuery) -> None:
         raise UnsafeServerQueryError("query identifier is invalid")
     if not query.query_revision.startswith(f"{query.pack_id}/{query.query_id}-"):
         raise UnsafeServerQueryError("query revision is invalid")
-    if not query.sql.strip() or len(query.sql.encode("utf-8")) > MAX_SERVER_QUERY_BYTES:
+    max_sql_bytes = (
+        MAX_M0_ORDINARY_QUERY_BYTES
+        if (
+            query.pack_id == "tidb-8.5"
+            and query.query_id == "ordinary_plan.validated_select"
+            and query.query_revision == "tidb-8.5/ordinary_plan.validated_select-v1"
+        )
+        else MAX_SERVER_QUERY_BYTES
+    )
+    if not query.sql.strip() or len(query.sql.encode("utf-8")) > max_sql_bytes:
         raise UnsafeServerQueryError("server query is empty or too large")
     if len(query.parameters) != len(set(query.parameters)) or any(
         not _PARAMETER.fullmatch(parameter) for parameter in query.parameters
@@ -430,7 +442,7 @@ def _validate_m0_identity(value: ValidatedM0Select) -> None:
             or any(unicodedata.category(character).startswith("C") for character in identity)
         ):
             raise UnsafeServerQueryError("M0 SELECT identity is invalid")
-    if not 1 <= len(value.canonical_sql.encode("utf-8")) <= 32_768:
+    if not 1 <= len(value.canonical_sql.encode("utf-8")) <= MAX_M0_SELECT_BYTES:
         raise UnsafeServerQueryError("M0 SELECT is empty or too large")
 
 
