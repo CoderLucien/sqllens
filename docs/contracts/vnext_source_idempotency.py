@@ -12,9 +12,15 @@ import hashlib
 import hmac
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
 
-from vnext_canonical_json import canonical_json_bytes, canonical_sha256
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError
+from vnext_canonical_json import (
+    canonical_json_bytes,
+    canonical_sha256,
+    strict_json_loads,
+)
 
 SOURCE_IDEMPOTENCY_RECEIPT_REVISION = "source-idempotency-receipt/v1"
 SOURCE_IDEMPOTENCY_RETENTION = timedelta(hours=24)
@@ -23,6 +29,19 @@ RECEIPT_ID = re.compile(r"^idem_[a-z0-9]{16,64}$")
 SOURCE_ID = re.compile(r"^src_[a-z0-9]{16,64}$")
 SHA256_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 HMAC_SHA256_DIGEST = re.compile(r"^hmac-sha256:[a-f0-9]{64}$")
+SOURCE_MEMBER_ROUTE = re.compile(
+    r"^/api/v1/sources/(?P<source_id>src_[a-z0-9]{16,64})"
+    r"(?:/(?P<action>tests|enablements|disablements|credential-rotations|lease-cancellations))?$"
+)
+SOURCE_SCHEMA = strict_json_loads(
+    Path(__file__).with_name("source-v1.schema.json").read_text(encoding="utf-8")
+)
+if not isinstance(SOURCE_SCHEMA, dict):
+    raise TypeError("Source/v1 schema must be a JSON object")
+Draft202012Validator.check_schema(SOURCE_SCHEMA)
+SOURCE_RESPONSE_VALIDATOR = Draft202012Validator(
+    SOURCE_SCHEMA, format_checker=FormatChecker()
+)
 SENSITIVE_RESPONSE_MARKERS = {
     "apikey",
     "authorization",
@@ -36,22 +55,119 @@ SENSITIVE_RESPONSE_MARKERS = {
 }
 
 
-def _is_canonical_source_route(route: str) -> bool:
-    if not isinstance(route, str):
-        return False
-    prefix = "/api/v1/sources"
-    if route == prefix:
-        return True
-    if not route.startswith(prefix + "/") or route.endswith("/"):
-        return False
+def _source_write_route(method: str, route: str) -> tuple[str | None, str]:
+    if not isinstance(method, str) or not isinstance(route, str):
+        raise TypeError("invalid Source idempotency scope")
     if any(character in route for character in "?#%\\") or any(
         character.isspace() for character in route
     ):
-        return False
-    segments = route[len(prefix) + 1 :].split("/")
-    return bool(segments) and all(
-        segment not in {"", ".", ".."} for segment in segments
+        raise ValueError("invalid Source idempotency scope")
+    normalized_method = method.upper()
+    if route == "/api/v1/sources":
+        if normalized_method != "POST":
+            raise ValueError("unsupported Source write route")
+        return None, "create"
+    match = SOURCE_MEMBER_ROUTE.fullmatch(route)
+    if match is None:
+        raise ValueError("invalid Source idempotency scope")
+    source_id = match.group("source_id")
+    action = match.group("action")
+    if action is None:
+        if normalized_method not in {"PATCH", "DELETE"}:
+            raise ValueError("unsupported Source write route")
+        return source_id, "edit" if normalized_method == "PATCH" else "delete"
+    if normalized_method != "POST":
+        raise ValueError("unsupported Source write route")
+    return source_id, action
+
+
+def _validate_closed_source_response(
+    *, method: str, canonical_route: str, http_status: int, body: dict[str, Any]
+) -> None:
+    source_id, operation = _source_write_route(method, canonical_route)
+    allowed_statuses = {
+        "create": {201},
+        "edit": {200},
+        "tests": {200},
+        "enablements": {200},
+        "disablements": {200, 202},
+        "credential-rotations": {200, 202},
+        "lease-cancellations": {200, 202},
+        "delete": {200, 202},
+    }
+    if http_status not in allowed_statuses[operation]:
+        raise ValueError(
+            "invalid Source idempotency receipt response body: "
+            "status is outside the closed Source response DTO"
+        )
+    try:
+        SOURCE_RESPONSE_VALIDATOR.validate(body)
+    except ValidationError as exc:
+        raise ValueError(
+            "invalid Source idempotency receipt response body: "
+            "not the closed Source response DTO"
+        ) from exc
+    if source_id is not None and body["sourceId"] != source_id:
+        raise ValueError(
+            "invalid Source idempotency receipt response body: "
+            "route and closed Source response DTO differ"
+        )
+    if operation == "create" and not (
+        body["revision"] == 1 and body["state"] == "draft"
+    ):
+        raise ValueError(
+            "invalid Source idempotency receipt response body: "
+            "create requires a new draft Source DTO"
+        )
+    if http_status == 202 and body["state"] != "draining":
+        raise ValueError(
+            "invalid Source idempotency receipt response body: "
+            "202 requires a draining Source DTO"
+        )
+    required_200_states = {
+        "enablements": {"enabled"},
+        "disablements": {"disabled"},
+        "credential-rotations": {"disabled"},
+        "delete": {"tombstoned"},
+    }
+    if (
+        http_status == 200
+        and operation in required_200_states
+        and body["state"] not in required_200_states[operation]
+    ):
+        raise ValueError(
+            "invalid Source idempotency receipt response body: "
+            "operation and closed Source response DTO differ"
+        )
+
+
+def source_idempotency_response_digest(
+    *,
+    method: str,
+    canonical_route: str,
+    http_status: int,
+    response_body: dict[str, Any],
+) -> str:
+    """Validate and hash the exact public DTO stored in a committed receipt.
+
+    Receipt writers call this before persistence; replay validation calls the
+    same function again. This makes the route/status-specific closed DTO the
+    primary boundary and leaves the sensitive-key scan as defense in depth.
+    """
+
+    if not isinstance(response_body, dict):
+        raise TypeError("invalid Source idempotency receipt response body")
+    _validate_redacted_response(response_body)
+    _validate_closed_source_response(
+        method=method,
+        canonical_route=canonical_route,
+        http_status=http_status,
+        body=response_body,
     )
+    try:
+        return canonical_sha256(response_body)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("invalid Source idempotency receipt response body") from exc
 
 
 def _parse_time(value: str) -> datetime:
@@ -85,14 +201,15 @@ def source_write_scope_digest(
         isinstance(owner_principal_id, str)
         and bool(owner_principal_id)
         and isinstance(method, str)
+        and isinstance(canonical_route, str)
         and isinstance(idempotency_key, str)
         and bool(IDEMPOTENCY_KEY.fullmatch(idempotency_key))
-        and _is_canonical_source_route(canonical_route)
     ):
         raise ValueError("invalid Source idempotency scope")
     normalized_method = method.upper()
     if normalized_method not in {"POST", "PATCH", "DELETE"}:
         raise ValueError("unsupported Source write method")
+    _source_write_route(normalized_method, canonical_route)
     return canonical_sha256(
         {
             "scopeRevision": "source-idempotency-scope/v1",
@@ -161,6 +278,8 @@ def evaluate_source_idempotency_receipt(
     *,
     scope_digest: str,
     intent_digest: str,
+    method: str,
+    canonical_route: str,
 ) -> Literal["reserve", "replay"]:
     """Return the only safe action for a Source write attempt.
 
@@ -170,6 +289,7 @@ def evaluate_source_idempotency_receipt(
     Stable ValueError messages are the corresponding public conflict codes.
     """
 
+    _source_write_route(method, canonical_route)
     if receipt is None:
         return "reserve"
 
@@ -248,11 +368,12 @@ def evaluate_source_idempotency_receipt(
         and receipt["resultRevision"] >= 1
     ):
         raise ValueError("committed Source idempotency receipt lacks a replay result")
-    _validate_redacted_response(receipt["responseBody"])
-    try:
-        expected_response_digest = canonical_sha256(receipt["responseBody"])
-    except (OverflowError, TypeError, ValueError) as exc:
-        raise ValueError("invalid Source idempotency receipt response body") from exc
+    expected_response_digest = source_idempotency_response_digest(
+        method=method,
+        canonical_route=canonical_route,
+        http_status=receipt["httpStatus"],
+        response_body=receipt["responseBody"],
+    )
     if not hmac.compare_digest(receipt["responseDigest"], expected_response_digest):
         raise ValueError("Source idempotency response digest mismatch")
     if (

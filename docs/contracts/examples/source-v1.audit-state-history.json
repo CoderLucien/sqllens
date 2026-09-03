@@ -1,0 +1,1297 @@
+[
+  {
+    "eventDigest": "sha256:d2f93be767211ec20ee891b0403a5e202dc29025136e666c8b20032a6e72b3dd",
+    "eventId": "sevt_0000000000000001",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [
+        "src_0000000000000002"
+      ],
+      "auth": {
+        "credentialRef": "cred_0000000000000001",
+        "credentialRevision": 2,
+        "expiresAt": "2026-12-01T00:00:00Z",
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.prod.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "生产订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "pingkaidb",
+      "revision": 1,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000001",
+      "state": "draft",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:00:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": null,
+        "status": "not_run",
+        "testedAt": null
+      },
+      "version": {
+        "detected": null,
+        "family": "unknown",
+        "supported": false
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:4da2831e0c2a8bd0804d3c2bbeec839282043859c29fc0c747cc16b263232b8b",
+    "eventId": "sevt_0000000000000002",
+    "snapshot": {
+      "activeLeases": [
+        {
+          "acquiredAt": "2026-09-02T09:09:00Z",
+          "acquiredRevision": 2,
+          "bindingDigest": "sha256:f9013e2d8cc5fe4fbc42bef79f0c7ea7c23b917aa4d53da2d5b1e830955ab2d2",
+          "credentialRevision": 2,
+          "jobId": "job_0000000000009001",
+          "leaseId": "lease_0000000000009001",
+          "purpose": "verification"
+        }
+      ],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [
+        "src_0000000000000002"
+      ],
+      "auth": {
+        "credentialRef": "cred_0000000000000001",
+        "credentialRevision": 2,
+        "expiresAt": "2026-12-01T00:00:00Z",
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 1,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.prod.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "生产订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "pingkaidb",
+      "revision": 2,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000001",
+      "state": "draft",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:10:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": null,
+        "status": "not_run",
+        "testedAt": null
+      },
+      "version": {
+        "detected": null,
+        "family": "unknown",
+        "supported": false
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:432ea627f0c84a7efc7d14e76659e0cee51b6ea0f1138aedfe2fdf3ecbabfb4d",
+    "eventId": "sevt_0000000000000003",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [
+        "src_0000000000000002"
+      ],
+      "auth": {
+        "credentialRef": "cred_0000000000000001",
+        "credentialRevision": 2,
+        "expiresAt": "2026-12-01T00:00:00Z",
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "PingKaiDB 7.1 version family matched.",
+          "name": "version",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Allowed schema metadata is readable.",
+          "name": "schema",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Cluster statement summary is readable with approved PROCESS.",
+          "name": "statement_summary",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Ordinary EXPLAIN passed; EXPLAIN ANALYZE remains prohibited.",
+          "name": "ordinary_explain",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.prod.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "生产订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "pingkaidb",
+      "revision": 3,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000001",
+      "state": "draft",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:15:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:15:00Z"
+      },
+      "version": {
+        "detected": "7.1.5",
+        "family": "pingkaidb-7.1",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:76275f5e9236eef33bc0be5910fb9296b0a2f317e2ebf845723a2ec29be4c65a",
+    "eventId": "sevt_0000000000000004",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [
+        "src_0000000000000002"
+      ],
+      "auth": {
+        "credentialRef": "cred_0000000000000001",
+        "credentialRevision": 2,
+        "expiresAt": "2026-12-01T00:00:00Z",
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "PingKaiDB 7.1 version family matched.",
+          "name": "version",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Allowed schema metadata is readable.",
+          "name": "schema",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Cluster statement summary is readable with approved PROCESS.",
+          "name": "statement_summary",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Ordinary EXPLAIN passed; EXPLAIN ANALYZE remains prohibited.",
+          "name": "ordinary_explain",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.prod.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "生产订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "pingkaidb",
+      "revision": 4,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000001",
+      "state": "enabled",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:20:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:15:00Z"
+      },
+      "version": {
+        "detected": "7.1.5",
+        "family": "pingkaidb-7.1",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:9244f45c61521011e2065c1aeb9446d19eddfd208212469915daeefef5448d77",
+    "eventId": "sevt_0000000000000091",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": null,
+        "credentialRevision": null,
+        "expiresAt": null,
+        "kind": "none",
+        "username": null
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "none"
+      },
+      "endpoint": {
+        "host": "prometheus.internal",
+        "path": null,
+        "port": 9090,
+        "scheme": "http",
+        "tlsMode": "disabled"
+      },
+      "name": "准备删除的内网监控",
+      "owner": {
+        "displayName": "监控平台团队",
+        "reference": "MON-2026-0902"
+      },
+      "product": "prometheus",
+      "revision": 1,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000098",
+      "state": "draft",
+      "type": "prometheus",
+      "updatedAt": "2026-09-02T09:00:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": null,
+        "status": "not_run",
+        "testedAt": null
+      },
+      "version": {
+        "detected": null,
+        "family": "unknown",
+        "supported": false
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:da6f354ef8e3b21378f76470d043fbd40febccc7c9b2e78662760897047d35f3",
+    "eventId": "sevt_0000000000000092",
+    "snapshot": {
+      "activeLeases": [
+        {
+          "acquiredAt": "2026-09-02T09:03:00Z",
+          "acquiredRevision": 2,
+          "bindingDigest": "sha256:31950e0be73045d52f1baa44ef249beb6cb20b9285c7acf919cd387e19862421",
+          "credentialRevision": null,
+          "jobId": "job_0000000000000081",
+          "leaseId": "lease_0000000000000081",
+          "purpose": "verification"
+        }
+      ],
+      "allowedSchemas": [],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": null,
+        "credentialRevision": null,
+        "expiresAt": null,
+        "kind": "none",
+        "username": null
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 1,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "none"
+      },
+      "endpoint": {
+        "host": "prometheus.internal",
+        "path": null,
+        "port": 9090,
+        "scheme": "http",
+        "tlsMode": "disabled"
+      },
+      "name": "准备删除的内网监控",
+      "owner": {
+        "displayName": "监控平台团队",
+        "reference": "MON-2026-0902"
+      },
+      "product": "prometheus",
+      "revision": 2,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000098",
+      "state": "draft",
+      "type": "prometheus",
+      "updatedAt": "2026-09-02T09:04:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": null,
+        "status": "not_run",
+        "testedAt": null
+      },
+      "version": {
+        "detected": null,
+        "family": "unknown",
+        "supported": false
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:7ecc85b7621ac7af6776ca075a907ec99132a45f14faaaa5f91ab22aa115fc57",
+    "eventId": "sevt_0000000000000093",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": null,
+        "credentialRevision": null,
+        "expiresAt": null,
+        "kind": "none",
+        "username": null
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "Bounded Query and Query Range access was verified before drain.",
+          "name": "prom_query",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "none"
+      },
+      "endpoint": {
+        "host": "prometheus.internal",
+        "path": null,
+        "port": 9090,
+        "scheme": "http",
+        "tlsMode": "disabled"
+      },
+      "name": "准备删除的内网监控",
+      "owner": {
+        "displayName": "监控平台团队",
+        "reference": "MON-2026-0902"
+      },
+      "product": "prometheus",
+      "revision": 3,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000098",
+      "state": "draft",
+      "type": "prometheus",
+      "updatedAt": "2026-09-02T09:06:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "2.54.1",
+        "family": "prometheus",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:5a739ab8b8b027a38083af994ac89d10891c45e1310407abc90e19f09e740f77",
+    "eventId": "sevt_0000000000000094",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": null,
+        "credentialRevision": null,
+        "expiresAt": null,
+        "kind": "none",
+        "username": null
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "Bounded Query and Query Range access was verified before drain.",
+          "name": "prom_query",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "none"
+      },
+      "endpoint": {
+        "host": "prometheus.internal",
+        "path": null,
+        "port": 9090,
+        "scheme": "http",
+        "tlsMode": "disabled"
+      },
+      "name": "准备删除的内网监控",
+      "owner": {
+        "displayName": "监控平台团队",
+        "reference": "MON-2026-0902"
+      },
+      "product": "prometheus",
+      "revision": 4,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000098",
+      "state": "enabled",
+      "type": "prometheus",
+      "updatedAt": "2026-09-02T09:10:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "2.54.1",
+        "family": "prometheus",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:851b070e8307855ec45a428716af9f974a54b5dd0c3105f26be161c52dd9264a",
+    "eventId": "sevt_0000000000000095",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": null,
+        "credentialRevision": null,
+        "expiresAt": null,
+        "kind": "none",
+        "username": null
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "Bounded Query and Query Range access was verified before drain.",
+          "name": "prom_query",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "none"
+      },
+      "endpoint": {
+        "host": "prometheus.internal",
+        "path": null,
+        "port": 9090,
+        "scheme": "http",
+        "tlsMode": "disabled"
+      },
+      "name": "准备删除的内网监控",
+      "owner": {
+        "displayName": "监控平台团队",
+        "reference": "MON-2026-0902"
+      },
+      "product": "prometheus",
+      "revision": 5,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000098",
+      "state": "enabled",
+      "type": "prometheus",
+      "updatedAt": "2026-09-02T09:30:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "2.54.1",
+        "family": "prometheus",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:0339f040d54ac47d78f4d43bb2580be8e7771f0f9103a6efbf88431b2de460e7",
+    "eventId": "sevt_0000000000000096",
+    "snapshot": {
+      "activeLeases": [
+        {
+          "acquiredAt": "2026-09-02T09:48:00Z",
+          "acquiredRevision": 6,
+          "bindingDigest": "sha256:31950e0be73045d52f1baa44ef249beb6cb20b9285c7acf919cd387e19862421",
+          "credentialRevision": null,
+          "jobId": "job_0000000000000091",
+          "leaseId": "lease_0000000000000091",
+          "purpose": "diagnosis"
+        }
+      ],
+      "allowedSchemas": [],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": null,
+        "credentialRevision": null,
+        "expiresAt": null,
+        "kind": "none",
+        "username": null
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "Bounded Query and Query Range access was verified before drain.",
+          "name": "prom_query",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 1,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "none"
+      },
+      "endpoint": {
+        "host": "prometheus.internal",
+        "path": null,
+        "port": 9090,
+        "scheme": "http",
+        "tlsMode": "disabled"
+      },
+      "name": "准备删除的内网监控",
+      "owner": {
+        "displayName": "监控平台团队",
+        "reference": "MON-2026-0902"
+      },
+      "product": "prometheus",
+      "revision": 6,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000098",
+      "state": "enabled",
+      "type": "prometheus",
+      "updatedAt": "2026-09-02T09:50:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "2.54.1",
+        "family": "prometheus",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:7027ce951a798aa5693cdabcf1cb69446b0ad8a4c900e8c3187e544f25b52caf",
+    "eventId": "sevt_0000000000000097",
+    "snapshot": {
+      "activeLeases": [
+        {
+          "acquiredAt": "2026-09-02T09:48:00Z",
+          "acquiredRevision": 6,
+          "bindingDigest": "sha256:31950e0be73045d52f1baa44ef249beb6cb20b9285c7acf919cd387e19862421",
+          "credentialRevision": null,
+          "jobId": "job_0000000000000091",
+          "leaseId": "lease_0000000000000091",
+          "purpose": "diagnosis"
+        }
+      ],
+      "allowedSchemas": [],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": null,
+        "credentialRevision": null,
+        "expiresAt": null,
+        "kind": "none",
+        "username": null
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "Bounded Query and Query Range access was verified before drain.",
+          "name": "prom_query",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 1,
+        "pendingOperation": "delete",
+        "retireAfter": "2026-09-02T10:10:00Z",
+        "state": "retiring"
+      },
+      "endpoint": {
+        "host": "prometheus.internal",
+        "path": null,
+        "port": 9090,
+        "scheme": "http",
+        "tlsMode": "disabled"
+      },
+      "name": "准备删除的内网监控",
+      "owner": {
+        "displayName": "监控平台团队",
+        "reference": "MON-2026-0902"
+      },
+      "product": "prometheus",
+      "revision": 7,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000098",
+      "state": "draining",
+      "type": "prometheus",
+      "updatedAt": "2026-09-02T10:00:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "2.54.1",
+        "family": "prometheus",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:f3a5810b2cb92a4f3260db21d0f68a840fcf9a9847497689152021fa22910982",
+    "eventId": "sevt_0000000000000081",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": "cred_0000000000000081",
+        "credentialRevision": 1,
+        "expiresAt": null,
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.archive.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "已删除的历史订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "tidb",
+      "revision": 1,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000099",
+      "state": "draft",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:00:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": null,
+        "status": "not_run",
+        "testedAt": null
+      },
+      "version": {
+        "detected": null,
+        "family": "unknown",
+        "supported": false
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:319b3cac8b73afd6f84d4c1d6b5c2fa49a3b363790d099f84a09faff44bdd902",
+    "eventId": "sevt_0000000000000082",
+    "snapshot": {
+      "activeLeases": [
+        {
+          "acquiredAt": "2026-09-02T09:03:00Z",
+          "acquiredRevision": 2,
+          "bindingDigest": "sha256:27a923a88488c2824c23438f7beb59b4cd653158c1ec9a0ca9b0e25c0cc9475a",
+          "credentialRevision": 1,
+          "jobId": "job_0000000000000071",
+          "leaseId": "lease_0000000000000071",
+          "purpose": "verification"
+        }
+      ],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": "cred_0000000000000081",
+        "credentialRevision": 1,
+        "expiresAt": null,
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 1,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.archive.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "已删除的历史订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "tidb",
+      "revision": 2,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000099",
+      "state": "draft",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:04:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": null,
+        "status": "not_run",
+        "testedAt": null
+      },
+      "version": {
+        "detected": null,
+        "family": "unknown",
+        "supported": false
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:e638350d2e63229615caeb69b7f193a66b8c24d944f1d17212fb86996163f249",
+    "eventId": "sevt_0000000000000083",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": "cred_0000000000000081",
+        "credentialRevision": 1,
+        "expiresAt": null,
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "TiDB 8.5 version family matched.",
+          "name": "version",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Allowed schema metadata is readable.",
+          "name": "schema",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.archive.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "已删除的历史订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "tidb",
+      "revision": 3,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000099",
+      "state": "draft",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:06:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "8.5.2",
+        "family": "tidb-8.5",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:29bcde2fad83da15b365a3c31a47fd3b2e86b11b70a1c40c234d99193e540673",
+    "eventId": "sevt_0000000000000084",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": "cred_0000000000000081",
+        "credentialRevision": 1,
+        "expiresAt": null,
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "TiDB 8.5 version family matched.",
+          "name": "version",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Allowed schema metadata is readable.",
+          "name": "schema",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.archive.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "已删除的历史订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "tidb",
+      "revision": 4,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000099",
+      "state": "enabled",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:10:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "8.5.2",
+        "family": "tidb-8.5",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:09cd26897866114d9cdda5eb582c7a42de3b34a7eea034793c4090f24aa89715",
+    "eventId": "sevt_0000000000000085",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": "cred_0000000000000081",
+        "credentialRevision": 1,
+        "expiresAt": null,
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "TiDB 8.5 version family matched.",
+          "name": "version",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Allowed schema metadata is readable.",
+          "name": "schema",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "active"
+      },
+      "endpoint": {
+        "host": "tidb.archive.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "已删除的历史订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "tidb",
+      "revision": 5,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000099",
+      "state": "enabled",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:30:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "8.5.2",
+        "family": "tidb-8.5",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:32e1b270141d7326aa2bab9d80479b67c8941275c556d01114791dd71aa4eacd",
+    "eventId": "sevt_0000000000000086",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [
+        "order_center"
+      ],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": "cred_0000000000000081",
+        "credentialRevision": 1,
+        "expiresAt": null,
+        "kind": "password",
+        "username": "sqllens_ro"
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [
+        {
+          "detail": "TiDB 8.5 version family matched.",
+          "name": "version",
+          "required": true,
+          "status": "available"
+        },
+        {
+          "detail": "Allowed schema metadata is readable.",
+          "name": "schema",
+          "required": true,
+          "status": "available"
+        }
+      ],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": "delete",
+        "retireAfter": "2026-09-02T09:50:00Z",
+        "state": "retiring"
+      },
+      "endpoint": {
+        "host": "tidb.archive.internal",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "已删除的历史订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "tidb",
+      "revision": 6,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000099",
+      "state": "draining",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T09:50:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "status": "passed",
+        "testedAt": "2026-09-02T09:06:00Z"
+      },
+      "version": {
+        "detected": "8.5.2",
+        "family": "tidb-8.5",
+        "supported": true
+      }
+    }
+  },
+  {
+    "eventDigest": "sha256:6b6f5efb90a3f04ea748350bd36b6e9cd026682e998660089a64766798523093",
+    "eventId": "sevt_0000000000000087",
+    "snapshot": {
+      "activeLeases": [],
+      "allowedSchemas": [],
+      "associatedSourceIds": [],
+      "auth": {
+        "credentialRef": null,
+        "credentialRevision": null,
+        "expiresAt": null,
+        "kind": "none",
+        "username": null
+      },
+      "budgets": {
+        "maxConcurrency": 2,
+        "maxRows": 5000,
+        "ratePerMinute": 30,
+        "timeoutMs": 5000
+      },
+      "capabilities": [],
+      "createdAt": "2026-09-02T09:00:00Z",
+      "credentialLifecycle": {
+        "activeLeaseCount": 0,
+        "pendingOperation": null,
+        "retireAfter": null,
+        "state": "tombstoned"
+      },
+      "endpoint": {
+        "host": "deleted.invalid",
+        "path": null,
+        "port": 4000,
+        "scheme": "mysql",
+        "tlsMode": "verify_identity"
+      },
+      "name": "已删除的历史订单集群",
+      "owner": {
+        "displayName": "数据库运维团队",
+        "reference": "IAM-2026-0902"
+      },
+      "product": "tidb",
+      "revision": 7,
+      "schemaVersion": "source/v1",
+      "sourceId": "src_0000000000000099",
+      "state": "tombstoned",
+      "type": "tidb",
+      "updatedAt": "2026-09-02T10:00:00Z",
+      "verification": {
+        "errorCode": null,
+        "identityDigest": null,
+        "status": "not_run",
+        "testedAt": null
+      },
+      "version": {
+        "detected": null,
+        "family": "unknown",
+        "supported": false
+      }
+    }
+  }
+]

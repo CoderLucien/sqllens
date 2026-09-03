@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
+
+from vnext_source_audit import source_verification_binding_digest
 
 LEASE_STATE_OPERATIONS = {
     "leases_updated",
@@ -23,7 +25,9 @@ DRAIN_START_OPERATIONS = {
 
 
 def replay_source_history(
-    source: dict[str, Any], parse_time: Callable[[str], datetime]
+    source: dict[str, Any],
+    parse_time: Callable[[str], datetime],
+    trusted_snapshots: Mapping[int, dict[str, Any]] | None = None,
 ) -> None:
     """Replay both ledgers by revision and reject any poisoned snapshot."""
 
@@ -60,9 +64,28 @@ def replay_source_history(
     seen_jobs: set[str] = set()
     prior_state_at: datetime | None = None
     drain_started_at: datetime | None = None
+    verified_binding: tuple[int | None, str] | None = None
+    prior_snapshot: dict[str, Any] | None = None
 
     for revision in range(1, expected_revision_count + 1):
         state_event = state_by_revision[revision]
+        snapshot = (
+            trusted_snapshots.get(revision) if trusted_snapshots is not None else None
+        )
+        if trusted_snapshots is not None:
+            if not isinstance(snapshot, dict):
+                raise ValueError("Source replay lacks a trusted revision snapshot")
+            if not (
+                snapshot["sourceId"] == source["sourceId"]
+                and snapshot["revision"] == revision
+                and snapshot["state"] == state_event["toState"]
+                and snapshot["updatedAt"] == state_event["createdAt"]
+                and snapshot["auth"]["credentialRevision"]
+                == state_event["credentialRevision"]
+            ):
+                raise ValueError(
+                    "Source trusted revision snapshot differs from its state event"
+                )
         state_at = parse_time(state_event["createdAt"])
         if prior_state_at is not None and state_at <= prior_state_at:
             raise ValueError("Source state revisions must have increasing timestamps")
@@ -117,9 +140,42 @@ def replay_source_history(
                         raise ValueError(
                             "diagnosis lease acquisition is outside enabled admission"
                         )
+                    if snapshot is not None:
+                        binding = source_verification_binding_digest(snapshot)
+                        expected = (
+                            snapshot["auth"]["credentialRevision"],
+                            binding,
+                        )
+                        if (
+                            snapshot["verification"]["status"] != "passed"
+                            or verified_binding != expected
+                        ):
+                            raise ValueError(
+                                "diagnosis reservation requires a previously verified binding"
+                            )
+                        if (
+                            lease_event["credentialRevision"],
+                            lease_event["bindingDigest"],
+                        ) != expected:
+                            raise ValueError(
+                                "diagnosis reservation differs from its trusted Source revision"
+                            )
                 elif current_state in {"draining", "tombstoned"}:
                     raise ValueError(
                         "verification reservation is outside a testable Source state"
+                    )
+                if (
+                    snapshot is not None
+                    and lease_event["purpose"] == "verification"
+                    and (
+                        lease_event["credentialRevision"]
+                        != snapshot["auth"]["credentialRevision"]
+                        or lease_event["bindingDigest"]
+                        != source_verification_binding_digest(snapshot)
+                    )
+                ):
+                    raise ValueError(
+                        "verification reservation differs from its trusted Source revision"
                     )
                 if lease_id in seen_leases or job_id in seen_jobs:
                     raise ValueError("lease acquisition reuses an audit identity")
@@ -224,12 +280,135 @@ def replay_source_history(
                 raise ValueError(
                     "verification result revision must release one reservation"
                 )
+            release = released_verifications[0]
+            # The active entry has already been removed above, so recover the
+            # immutable acquisition revision from the release's matching ledger
+            # event rather than trusting the current projection.
+            acquisitions = [
+                event
+                for event in lease_events
+                if event["leaseId"] == release["leaseId"]
+                and event["operation"] == "lease_acquired"
+            ]
+            if len(acquisitions) != 1:
+                raise ValueError(
+                    "verification result lacks one reservation acquisition"
+                )
+            acquisition_revision = acquisitions[0]["sourceRevision"]
+            if acquisition_revision != revision - 1:
+                raise ValueError(
+                    "verification result crossed its reserved Source revision"
+                )
+            if snapshot is not None:
+                expected = (
+                    snapshot["auth"]["credentialRevision"],
+                    source_verification_binding_digest(snapshot),
+                )
+                if (
+                    release["credentialRevision"],
+                    release["bindingDigest"],
+                ) != expected:
+                    raise ValueError(
+                        "verification result differs from its trusted Source revision"
+                    )
+                expected_status = "passed" if operation == "verified" else "failed"
+                if not (
+                    snapshot["verification"]["status"] == expected_status
+                    and snapshot["verification"]["testedAt"] == state_event["createdAt"]
+                ):
+                    raise ValueError(
+                        "verification result differs from its trusted snapshot"
+                    )
+                verified_binding = expected if expected_status == "passed" else None
+
+        if snapshot is not None:
+            snapshot_active = {
+                item["leaseId"]: item for item in snapshot["activeLeases"]
+            }
+            if len(snapshot_active) != len(snapshot["activeLeases"]):
+                raise ValueError(
+                    "Source revision snapshot repeats an active reservation"
+                )
+            if snapshot_active != active:
+                raise ValueError(
+                    "Source revision snapshot differs from replayed active reservations"
+                )
+            if snapshot["credentialLifecycle"]["activeLeaseCount"] != len(active):
+                raise ValueError(
+                    "Source revision activeLeaseCount differs from full replay"
+                )
+            max_concurrency = snapshot["budgets"]["maxConcurrency"]
+            if (
+                not isinstance(max_concurrency, int)
+                or isinstance(max_concurrency, bool)
+                or max_concurrency < len(active)
+            ):
+                raise ValueError(
+                    "Source revision reservations exceed its trusted concurrency budget"
+                )
+
+            if prior_snapshot is None:
+                if not (
+                    operation == "registered"
+                    and snapshot["verification"]["status"] == "not_run"
+                ):
+                    raise ValueError(
+                        "registered Source revision must begin without verification"
+                    )
+                verified_binding = None
+            elif operation == "edited":
+                prior_binding = source_verification_binding_digest(prior_snapshot)
+                current_binding = source_verification_binding_digest(snapshot)
+                if prior_binding == current_binding:
+                    if snapshot["verification"] != prior_snapshot["verification"]:
+                        raise ValueError(
+                            "metadata-only historical edit rewrites verification"
+                        )
+                elif snapshot["verification"]["status"] != "not_run":
+                    raise ValueError(
+                        "verification-bound historical edit retains stale verification"
+                    )
+                else:
+                    verified_binding = None
+            elif operation in {"rotation_completed", "tombstoned"}:
+                if snapshot["verification"]["status"] != "not_run":
+                    raise ValueError(
+                        "credential/delete completion retains stale verification"
+                    )
+                verified_binding = None
+            elif not direct_verification_result:
+                if snapshot["verification"] != prior_snapshot["verification"]:
+                    raise ValueError(
+                        "historical Source operation rewrites verification without a verifier result"
+                    )
+
+            if operation == "enabled":
+                expected = (
+                    snapshot["auth"]["credentialRevision"],
+                    source_verification_binding_digest(snapshot),
+                )
+                if (
+                    snapshot["verification"]["status"] != "passed"
+                    or verified_binding != expected
+                ):
+                    raise ValueError(
+                        "enabled Source revision lacks a previously verified binding"
+                    )
+
+        if (
+            current_state == "draining"
+            and state_event["toState"] != "draining"
+            and active
+        ):
+            raise ValueError("drain completion requires zero active reservations")
         current_state = state_event["toState"]
         if operation in DRAIN_START_OPERATIONS:
             drain_started_at = state_at
         elif current_state != "draining":
             drain_started_at = None
         prior_state_at = state_at
+        if snapshot is not None:
+            prior_snapshot = snapshot
 
     if current_state != source["state"]:
         raise ValueError("replayed Source state differs from snapshot")

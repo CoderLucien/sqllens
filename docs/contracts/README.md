@@ -56,7 +56,9 @@ models instead of accumulating conditions in the fixture runner:
 - `vnext_source_ledger.py` performs one full-history replay of Source state and
   lease events;
 - `vnext_source_audit.py` resolves Source projections against server-owned
-  event attestations and the latest committed snapshot digest;
+  event attestations and a complete immutable state snapshot for every
+  revision (`source-v1.audit-state-history.json` is the test-only private-store
+  fixture);
 - `vnext_source_idempotency.py` owns the Source-write receipt scope, intent,
   replay, conflict, and retention boundary.
 
@@ -137,9 +139,14 @@ and `updatedAt` must equal the latest state-event timestamp.
 The Source JSON is only a projection. `validate_source_semantics` therefore
 requires a trusted server-side audit resolver: every state/lease event must
 match an independently stored event digest, principal/service permission and
-timestamp, while the latest state record binds the complete current Source
-snapshot digest. The test-only fixture resolver in
-`vnext_source_audit.py` must never be built from caller input in runtime code.
+timestamp, while every state record binds that revision's complete immutable
+Source state snapshot and digest. The ledgers remain separately attested; full
+replay resolves all snapshots and requires the final one to equal the current
+projection, while every adjacent pair is rechecked with the same closed
+transition/mutation rules used at commit time. The test-only fixture resolver in
+`vnext_source_audit.py` and
+`examples/source-v1.audit-state-history.json` must never be built from caller
+input in runtime code.
 An Owner-authored record also requires a committed Source-write idempotency
 receipt; system identities are operation-specific rather than accepted from an
 embedded `role` string.
@@ -157,8 +164,12 @@ Source. The reservation must commit before credential decryption. PASS/FAIL
 atomically releases that same reservation and may publish only against the
 exact reserved Source revision. After an intervening revision or drain, the
 terminated verifier may release its reservation but cannot publish a result.
-Drain operations wait for both purposes, and a cancellation may be recorded as
-released only after execution termination is trusted. A successful enabled
+Historical diagnosis acquisition is checked against the PASS, credential,
+binding and budget of its exact trusted revision even after release; a later
+PASS cannot authorize earlier work. Drain operations wait for both purposes,
+and every terminal drain completion is rejected unless the replayed active set
+is already empty; a cancellation may be recorded as released only after
+execution termination is trusted. A successful enabled
 reverification remains enabled; a failed one releases the verifier reservation
 and starts the existing diagnosis-lease drain. Completing that drain is
 lifecycle work and preserves the original verifier result timestamp.
@@ -171,9 +182,12 @@ plus its integrity digest. This prevents a stored request digest from becoming
 an offline oracle for a low-entropy credential. The key is stored outside the
 receipt database and remains available for every unexpired receipt; the replay
 body comes only from the closed public Source response serializer, never from a
-request or connector object. That serializer's route-specific schema is
-validated before receipt commit; the recursive sensitive-key scan is only an
-additional guard. Same-key/same-intent retries replay without side
+request or connector object. Receipt commit obtains the digest through
+`source_idempotency_response_digest`, which validates method, canonical route,
+status, route Source identity, and the closed Source/v1 DTO; replay invokes the
+same validator again. Undeclared fields are rejected regardless of value or key
+name, and the recursive sensitive-key scan is only an additional guard.
+Same-key/same-intent retries replay without side
 effects; same-key/different-intent and concurrent
 in-progress retries fail with stable conflicts. Every Source HTTP-write
 transaction commits its mutation with the matching receipt state and audit

@@ -180,7 +180,7 @@
       "jobId": "job_0000000000000071",
       "purpose": "verification",
       "credentialRevision": 1,
-      "bindingDigest": "sha256:b7701f9c16aadaa978e233c027fc19a23c74a6f9256f65d14e643f656519d77e",
+      "bindingDigest": "sha256:27a923a88488c2824c23438f7beb59b4cd653158c1ec9a0ca9b0e25c0cc9475a",
       "fromLeaseCount": 0,
       "toLeaseCount": 1,
       "actor": {
@@ -201,7 +201,7 @@
       "jobId": "job_0000000000000071",
       "purpose": "verification",
       "credentialRevision": 1,
-      "bindingDigest": "sha256:b7701f9c16aadaa978e233c027fc19a23c74a6f9256f65d14e643f656519d77e",
+      "bindingDigest": "sha256:27a923a88488c2824c23438f7beb59b4cd653158c1ec9a0ca9b0e25c0cc9475a",
       "fromLeaseCount": 1,
       "toLeaseCount": 0,
       "actor": {

@@ -36,6 +36,7 @@ from vnext_outcome_policy import (
 from vnext_source_audit import source_verification_binding
 from vnext_source_idempotency import (
     evaluate_source_idempotency_receipt,
+    source_idempotency_response_digest,
     source_write_intent_digest,
     source_write_scope_digest,
 )
@@ -741,15 +742,17 @@ class OutcomePolicyTests(unittest.TestCase):
 class SourceIdempotencyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.digest_key = b"source-intent-digest-test-key-32"
+        self.method = "PATCH"
+        self.canonical_route = "/api/v1/sources/src_0000000000000001"
         self.scope_digest = source_write_scope_digest(
             owner_principal_id="owner",
-            method="POST",
-            canonical_route="/api/v1/sources",
-            idempotency_key="source-create-key-0001",
+            method=self.method,
+            canonical_route=self.canonical_route,
+            idempotency_key="source-edit-key-0001",
         )
         self.intent_digest = source_write_intent_digest(
-            source_id=None,
-            expected_revision=None,
+            source_id="src_0000000000000001",
+            expected_revision=3,
             request_body={"name": "订单库", "secret": "never-persist-this"},
             digest_key=self.digest_key,
         )
@@ -757,7 +760,9 @@ class SourceIdempotencyTests(unittest.TestCase):
     def _receipt(self, *, state: str = "committed") -> dict[str, Any]:
         committed = state == "committed"
         response_body = (
-            {"sourceId": "src_0000000000000001", "revision": 1} if committed else None
+            contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+            if committed
+            else None
         )
         return {
             "receiptRevision": "source-idempotency-receipt/v1",
@@ -765,18 +770,33 @@ class SourceIdempotencyTests(unittest.TestCase):
             "scopeDigest": self.scope_digest,
             "intentDigest": self.intent_digest,
             "state": state,
-            "httpStatus": 201 if committed else None,
+            "httpStatus": 200 if committed else None,
             "responseDigest": (canonical_sha256(response_body) if committed else None),
             "responseBody": response_body,
             "resultSourceId": "src_0000000000000001" if committed else None,
-            "resultRevision": 1 if committed else None,
+            "resultRevision": response_body["revision"] if committed else None,
             "createdAt": "2026-09-03T00:00:00Z",
             "expiresAt": "2026-09-04T00:00:00Z",
         }
 
+    def _evaluate(
+        self,
+        receipt: dict[str, Any] | None,
+        *,
+        scope_digest: Any,
+        intent_digest: Any,
+    ) -> str:
+        return evaluate_source_idempotency_receipt(
+            receipt,
+            scope_digest=scope_digest,
+            intent_digest=intent_digest,
+            method=self.method,
+            canonical_route=self.canonical_route,
+        )
+
     def test_missing_receipt_reserves_and_committed_receipt_replays(self) -> None:
         self.assertEqual(
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 None,
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -785,7 +805,7 @@ class SourceIdempotencyTests(unittest.TestCase):
         )
         receipt = self._receipt()
         self.assertEqual(
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 receipt,
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -802,7 +822,7 @@ class SourceIdempotencyTests(unittest.TestCase):
             digest_key=self.digest_key,
         )
         with self.assertRaisesRegex(ValueError, "IDEMPOTENCY_KEY_REUSED"):
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 self._receipt(),
                 scope_digest=self.scope_digest,
                 intent_digest=different,
@@ -810,7 +830,7 @@ class SourceIdempotencyTests(unittest.TestCase):
 
     def test_in_progress_receipt_never_reexecutes(self) -> None:
         with self.assertRaisesRegex(ValueError, "IDEMPOTENCY_IN_PROGRESS"):
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 self._receipt(state="in_progress"),
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -820,7 +840,7 @@ class SourceIdempotencyTests(unittest.TestCase):
         short = self._receipt()
         short["expiresAt"] = "2026-09-03T23:59:59Z"
         with self.assertRaisesRegex(ValueError, "below 24 hours"):
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 short,
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -829,7 +849,7 @@ class SourceIdempotencyTests(unittest.TestCase):
         leaked = self._receipt()
         leaked["rawIdempotencyKey"] = "source-create-key-0001"
         with self.assertRaisesRegex(ValueError, "receipt shape"):
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 leaked,
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -838,7 +858,7 @@ class SourceIdempotencyTests(unittest.TestCase):
         invalid_time = self._receipt()
         invalid_time["createdAt"] = None
         with self.assertRaisesRegex(ValueError, "receipt time"):
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 invalid_time,
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -857,7 +877,7 @@ class SourceIdempotencyTests(unittest.TestCase):
                 self.subTest(field=field, value=value),
                 self.assertRaisesRegex(ValueError, "receipt"),
             ):
-                evaluate_source_idempotency_receipt(
+                self._evaluate(
                     receipt,
                     scope_digest=self.scope_digest,
                     intent_digest=self.intent_digest,
@@ -866,7 +886,7 @@ class SourceIdempotencyTests(unittest.TestCase):
         malformed_response = self._receipt()
         malformed_response["responseBody"][7] = "not a JSON object key"
         with self.assertRaisesRegex(ValueError, "redacted response"):
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 malformed_response,
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -875,7 +895,7 @@ class SourceIdempotencyTests(unittest.TestCase):
         noncanonical_response = self._receipt()
         noncanonical_response["responseBody"]["ratio"] = 0.5
         with self.assertRaisesRegex(ValueError, "receipt response body"):
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 noncanonical_response,
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -892,7 +912,7 @@ class SourceIdempotencyTests(unittest.TestCase):
                 ),
                 self.assertRaisesRegex(ValueError, "idempotency digest"),
             ):
-                evaluate_source_idempotency_receipt(
+                self._evaluate(
                     self._receipt(),
                     scope_digest=scope_digest,
                     intent_digest=intent_digest,
@@ -977,7 +997,7 @@ class SourceIdempotencyTests(unittest.TestCase):
         tampered = self._receipt()
         tampered["responseBody"]["revision"] = 2
         with self.assertRaisesRegex(ValueError, "response digest"):
-            evaluate_source_idempotency_receipt(
+            self._evaluate(
                 tampered,
                 scope_digest=self.scope_digest,
                 intent_digest=self.intent_digest,
@@ -999,10 +1019,67 @@ class SourceIdempotencyTests(unittest.TestCase):
                 self.subTest(index=index),
                 self.assertRaisesRegex(ValueError, "redacted response"),
             ):
-                evaluate_source_idempotency_receipt(
+                self._evaluate(
                     secret_response,
                     scope_digest=self.scope_digest,
                     intent_digest=self.intent_digest,
+                )
+
+    def test_replay_body_rejects_value_leaks_outside_closed_response_dto(self) -> None:
+        for leak in (
+            {"detail": "password=supersecret"},
+            {"data": {"value": "supersecret"}},
+        ):
+            receipt = self._receipt()
+            receipt["responseBody"].update(leak)
+            receipt["responseDigest"] = canonical_sha256(receipt["responseBody"])
+            with (
+                self.subTest(boundary="writer", leak=leak),
+                self.assertRaisesRegex(ValueError, "closed Source response DTO"),
+            ):
+                source_idempotency_response_digest(
+                    method=self.method,
+                    canonical_route=self.canonical_route,
+                    http_status=receipt["httpStatus"],
+                    response_body=receipt["responseBody"],
+                )
+            with (
+                self.subTest(boundary="replay", leak=leak),
+                self.assertRaisesRegex(ValueError, "closed Source response DTO"),
+            ):
+                self._evaluate(
+                    receipt,
+                    scope_digest=self.scope_digest,
+                    intent_digest=self.intent_digest,
+                )
+
+    def test_response_dto_is_bound_to_route_status_and_source(self) -> None:
+        body = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        cases = (
+            {
+                "method": "PATCH",
+                "canonical_route": "/api/v1/sources/src_0000000000000999",
+                "http_status": 200,
+            },
+            {
+                "method": "POST",
+                "canonical_route": ("/api/v1/sources/src_0000000000000001/enablements"),
+                "http_status": 202,
+            },
+            {
+                "method": "DELETE",
+                "canonical_route": "/api/v1/sources/src_0000000000000001",
+                "http_status": 200,
+            },
+        )
+        for case in cases:
+            with (
+                self.subTest(case=case),
+                self.assertRaisesRegex(ValueError, "closed Source response DTO"),
+            ):
+                source_idempotency_response_digest(
+                    **case,
+                    response_body=body,
                 )
 
 
@@ -1092,6 +1169,8 @@ class SourceLedgerTests(unittest.TestCase):
                 "reason": f"测试 {operation} 生命周期边界",
             }
         )
+        contracts.register_fixture_source_snapshot(source)
+        contracts.register_fixture_source_snapshot(proposed)
         return proposed
 
     @classmethod
@@ -1881,8 +1960,16 @@ class SourceLedgerTests(unittest.TestCase):
         self,
     ) -> None:
         source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
-        source["budgets"]["maxConcurrency"] = 3
-        leased, _, _ = contracts.build_source_lease_drain(source)
+        expanded = self._revision(
+            source,
+            operation="edited",
+            to_state="enabled",
+            event_id="sevt_0000000000003499",
+            event_at="2026-09-02T09:20:30Z",
+            actor=self.OWNER,
+        )
+        expanded["budgets"]["maxConcurrency"] = 3
+        leased, _, _ = contracts.build_source_lease_drain(expanded)
         reserved = self._verification_reserved(
             leased,
             event_id="sevt_0000000000003501",
@@ -1897,7 +1984,8 @@ class SourceLedgerTests(unittest.TestCase):
             event_at="2026-09-02T09:24:00Z",
         )
 
-        self._validate_transition(source, leased)
+        self._validate_transition(source, expanded)
+        self._validate_transition(expanded, leased)
         self._validate_transition(leased, reserved)
         self._validate_transition(reserved, failed)
         self.assertEqual(failed["state"], "draining")
@@ -2420,6 +2508,335 @@ class SourceLedgerTests(unittest.TestCase):
         revision_events[1]["createdAt"] = revision_events[0]["createdAt"]
         with self.assertRaisesRegex(ValueError, "strictly ordered"):
             replay_source_history(drained, contracts.parse_time)
+
+    def test_full_history_rejects_diagnosis_before_first_verification(self) -> None:
+        draft = self._draft()
+        enabled = self._revision(
+            draft,
+            operation="enabled",
+            to_state="enabled",
+            event_id="sevt_0000000000004101",
+            event_at="2026-09-02T09:01:00Z",
+            actor=self.OWNER,
+        )
+        supported = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        enabled["version"] = copy.deepcopy(supported["version"])
+        enabled["capabilities"] = copy.deepcopy(supported["capabilities"])
+        enabled["verification"] = {
+            "status": "passed",
+            "testedAt": "2026-09-02T09:00:30Z",
+            "identityDigest": self._verification_binding_digest(enabled),
+            "errorCode": None,
+        }
+        diagnosed = self._revision(
+            enabled,
+            operation="leases_updated",
+            to_state="enabled",
+            event_id="sevt_0000000000004102",
+            event_at="2026-09-02T09:03:00Z",
+            actor={
+                "kind": "system",
+                "role": "system",
+                "id": "diagnosis-job",
+                "displayName": "诊断任务",
+            },
+        )
+        binding_digest = self._verification_binding_digest(diagnosed)
+        lease = {
+            "leaseId": "lease_0000000000004101",
+            "jobId": "job_0000000000004101",
+            "purpose": "diagnosis",
+            "credentialRevision": diagnosed["auth"]["credentialRevision"],
+            "bindingDigest": binding_digest,
+            "acquiredRevision": diagnosed["revision"],
+            "acquiredAt": "2026-09-02T09:02:00Z",
+        }
+        diagnosed["activeLeases"] = [copy.deepcopy(lease)]
+        diagnosed["credentialLifecycle"]["activeLeaseCount"] = 1
+        diagnosed["leaseEvents"].append(
+            {
+                "eventId": "levt_0000000000004101",
+                "sourceRevision": diagnosed["revision"],
+                "operation": "lease_acquired",
+                **{
+                    key: lease[key]
+                    for key in (
+                        "leaseId",
+                        "jobId",
+                        "purpose",
+                        "credentialRevision",
+                        "bindingDigest",
+                    )
+                },
+                "fromLeaseCount": 0,
+                "toLeaseCount": 1,
+                "actor": copy.deepcopy(diagnosed["transitionEvents"][-1]["actor"]),
+                "ownerApproval": None,
+                "createdAt": lease["acquiredAt"],
+                "reason": "未验证即取得诊断 reservation",
+            }
+        )
+        released = self._revision(
+            diagnosed,
+            operation="leases_updated",
+            to_state="enabled",
+            event_id="sevt_0000000000004103",
+            event_at="2026-09-02T09:05:00Z",
+            actor=diagnosed["transitionEvents"][-1]["actor"],
+        )
+        released["activeLeases"] = []
+        released["credentialLifecycle"]["activeLeaseCount"] = 0
+        released["leaseEvents"].append(
+            {
+                "eventId": "levt_0000000000004102",
+                "sourceRevision": released["revision"],
+                "operation": "lease_released",
+                **{
+                    key: lease[key]
+                    for key in (
+                        "leaseId",
+                        "jobId",
+                        "purpose",
+                        "credentialRevision",
+                        "bindingDigest",
+                    )
+                },
+                "fromLeaseCount": 1,
+                "toLeaseCount": 0,
+                "actor": copy.deepcopy(released["transitionEvents"][-1]["actor"]),
+                "ownerApproval": None,
+                "createdAt": "2026-09-02T09:04:00Z",
+                "reason": "未验证诊断完成并释放 reservation",
+            }
+        )
+        reserved = self._verification_reserved(
+            released,
+            event_id="sevt_0000000000004104",
+            event_at="2026-09-02T09:07:00Z",
+            lease_id="lease_0000000000004103",
+            job_id="job_0000000000004103",
+        )
+        verified = self._verification_result(
+            reserved,
+            passed=True,
+            event_id="sevt_0000000000004105",
+            event_at="2026-09-02T09:09:00Z",
+        )
+        resolver = self._audit_resolver(
+            draft, enabled, diagnosed, released, reserved, verified
+        )
+
+        with self.assertRaisesRegex(ValueError, "only the verifier"):
+            contracts.validate_source_semantics(verified, resolver)
+
+    def test_full_history_rejects_released_diagnosis_with_forged_binding(self) -> None:
+        source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        diagnosed = self._revision(
+            source,
+            operation="leases_updated",
+            to_state="enabled",
+            event_id="sevt_0000000000004111",
+            event_at="2026-09-02T09:22:00Z",
+            actor={
+                "kind": "system",
+                "role": "system",
+                "id": "diagnosis-job",
+                "displayName": "诊断任务",
+            },
+        )
+        lease = {
+            "leaseId": "lease_0000000000004111",
+            "jobId": "job_0000000000004111",
+            "purpose": "diagnosis",
+            "credentialRevision": 999,
+            "bindingDigest": "sha256:" + "f" * 64,
+            "acquiredRevision": diagnosed["revision"],
+            "acquiredAt": "2026-09-02T09:21:00Z",
+        }
+        diagnosed["activeLeases"] = [copy.deepcopy(lease)]
+        diagnosed["credentialLifecycle"]["activeLeaseCount"] = 1
+        diagnosed["leaseEvents"].append(
+            {
+                "eventId": "levt_0000000000004111",
+                "sourceRevision": diagnosed["revision"],
+                "operation": "lease_acquired",
+                **{
+                    key: lease[key]
+                    for key in (
+                        "leaseId",
+                        "jobId",
+                        "purpose",
+                        "credentialRevision",
+                        "bindingDigest",
+                    )
+                },
+                "fromLeaseCount": 0,
+                "toLeaseCount": 1,
+                "actor": copy.deepcopy(diagnosed["transitionEvents"][-1]["actor"]),
+                "ownerApproval": None,
+                "createdAt": lease["acquiredAt"],
+                "reason": "伪造绑定的历史诊断 reservation",
+            }
+        )
+        released = self._revision(
+            diagnosed,
+            operation="leases_updated",
+            to_state="enabled",
+            event_id="sevt_0000000000004112",
+            event_at="2026-09-02T09:24:00Z",
+            actor=diagnosed["transitionEvents"][-1]["actor"],
+        )
+        released["activeLeases"] = []
+        released["credentialLifecycle"]["activeLeaseCount"] = 0
+        released["leaseEvents"].append(
+            {
+                "eventId": "levt_0000000000004112",
+                "sourceRevision": released["revision"],
+                "operation": "lease_released",
+                **{
+                    key: lease[key]
+                    for key in (
+                        "leaseId",
+                        "jobId",
+                        "purpose",
+                        "credentialRevision",
+                        "bindingDigest",
+                    )
+                },
+                "fromLeaseCount": 1,
+                "toLeaseCount": 0,
+                "actor": copy.deepcopy(released["transitionEvents"][-1]["actor"]),
+                "ownerApproval": None,
+                "createdAt": "2026-09-02T09:23:00Z",
+                "reason": "释放伪造绑定的历史诊断 reservation",
+            }
+        )
+        resolver = self._audit_resolver(source, diagnosed, released)
+
+        with self.assertRaisesRegex(
+            ValueError, "diagnosis reservation differs from its trusted Source revision"
+        ):
+            contracts.validate_source_semantics(released, resolver)
+
+    def test_full_history_rejects_verifier_result_after_intervening_revision(
+        self,
+    ) -> None:
+        draft = self._draft()
+        reserved = self._verification_reserved(
+            draft,
+            event_id="sevt_0000000000004121",
+            event_at="2026-09-02T09:02:00Z",
+            lease_id="lease_0000000000004121",
+            job_id="job_0000000000004121",
+        )
+        edited = self._edit_source(
+            reserved,
+            event_id="sevt_0000000000004122",
+            event_at="2026-09-02T09:03:00Z",
+        )
+        edited["name"] = "校验期间发生的 Owner 编辑"
+        stale_result = self._verification_result(
+            edited,
+            passed=True,
+            event_id="sevt_0000000000004123",
+            event_at="2026-09-02T09:04:00Z",
+        )
+        resolver = self._audit_resolver(draft, reserved, edited, stale_result)
+
+        with self.assertRaisesRegex(
+            ValueError, "verification result crossed its reserved Source revision"
+        ):
+            contracts.validate_source_semantics(stale_result, resolver)
+
+    def test_full_history_rejects_drain_completion_before_release(self) -> None:
+        source = contracts.load(contracts.EXAMPLES / "source-v1.valid.json")
+        leased, draining, _ = contracts.build_source_lease_drain(source)
+        completed = self._revision(
+            draining,
+            operation="rotation_completed",
+            to_state="disabled",
+            event_id="sevt_0000000000004131",
+            event_at="2026-09-02T09:26:00Z",
+            actor=self.LIFECYCLE,
+        )
+        completed["auth"]["credentialRef"] = "cred_0000000000004131"
+        completed["auth"]["credentialRevision"] = 3
+        completed["transitionEvents"][-1]["credentialRevision"] = 3
+        self._invalidate(completed)
+        completed["credentialLifecycle"] = {
+            "state": "active",
+            "activeLeaseCount": 2,
+            "pendingOperation": None,
+            "retireAfter": None,
+        }
+
+        released = self._revision(
+            completed,
+            operation="leases_updated",
+            to_state="disabled",
+            event_id="sevt_0000000000004132",
+            event_at="2026-09-02T09:29:00Z",
+            actor={
+                "kind": "system",
+                "role": "system",
+                "id": "diagnosis-job",
+                "displayName": "诊断任务",
+            },
+        )
+        released["activeLeases"] = []
+        released["credentialLifecycle"]["activeLeaseCount"] = 0
+        for index, lease in enumerate(completed["activeLeases"], start=1):
+            released["leaseEvents"].append(
+                {
+                    "eventId": f"levt_000000000000413{index}",
+                    "sourceRevision": released["revision"],
+                    "operation": "lease_released",
+                    **{
+                        key: lease[key]
+                        for key in (
+                            "leaseId",
+                            "jobId",
+                            "purpose",
+                            "credentialRevision",
+                            "bindingDigest",
+                        )
+                    },
+                    "fromLeaseCount": 3 - index,
+                    "toLeaseCount": 2 - index,
+                    "actor": copy.deepcopy(released["transitionEvents"][-1]["actor"]),
+                    "ownerApproval": None,
+                    "createdAt": f"2026-09-02T09:2{6 + index}:00Z",
+                    "reason": "drain 完成后才出现的历史释放",
+                }
+            )
+        resolver = self._audit_resolver(source, leased, draining, completed, released)
+
+        with self.assertRaisesRegex(
+            ValueError, "drain completion requires zero active reservations"
+        ):
+            contracts.validate_source_semantics(released, resolver)
+
+    def test_full_history_rechecks_hidden_revision_mutations(self) -> None:
+        source = contracts.load(
+            contracts.EXAMPLES / "source-v1.no-auth-draining.valid.json"
+        )
+        trusted = self._audit_resolver(source)
+
+        def poisoned_history(record_id: str) -> dict[str, Any] | None:
+            record = trusted(record_id)
+            if (
+                record is not None
+                and record.get("eventKind") == "state"
+                and record.get("sourceRevision") == 4
+            ):
+                record["sourceSnapshot"]["budgets"]["maxRows"] = 4_000
+                record["sourceSnapshotDigest"] = canonical_sha256(
+                    record["sourceSnapshot"]
+                )
+            return record
+
+        with self.assertRaisesRegex(ValueError, "enabled operation rewrites"):
+            contracts.validate_source_semantics(source, poisoned_history)
 
 
 if __name__ == "__main__":

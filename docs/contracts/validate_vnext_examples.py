@@ -4,6 +4,7 @@ import copy
 import re
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,8 @@ from vnext_source_audit import (
     SourceAuditResolver,
     build_fixture_source_audit_resolver,
     canonical_string_set,
+    register_fixture_source_snapshot,
+    register_fixture_source_state_history,
     source_verification_binding_digest,
     validate_trusted_source_audit,
 )
@@ -298,6 +301,14 @@ def load(path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise TypeError(f"JSON contract document must be an object: {path}")
     return loaded
+
+
+SOURCE_FIXTURE_STATE_HISTORY = strict_json_loads(
+    (EXAMPLES / "source-v1.audit-state-history.json").read_text(encoding="utf-8")
+)
+if not isinstance(SOURCE_FIXTURE_STATE_HISTORY, list):
+    raise TypeError("Source fixture state history must be an array")
+register_fixture_source_state_history(SOURCE_FIXTURE_STATE_HISTORY)
 
 
 SCHEMAS = {name: load(ROOT / name) for name in SCHEMA_NAMES}
@@ -1454,7 +1465,33 @@ def validate_source_semantics(
         if source["auth"]["credentialRef"] is not None:
             raise ValueError("tombstoned Source cannot retain a credential reference")
 
-    validate_trusted_source_audit(source, resolve_source_audit)
+    trusted_snapshots = validate_trusted_source_audit(source, resolve_source_audit)
+    source_validator = schema_validator("source-v1.schema.json")
+    historical_projections: list[dict[str, Any]] = []
+    for revision in sorted(trusted_snapshots):
+        snapshot = trusted_snapshots[revision]
+        historical_projection = {
+            **copy.deepcopy(snapshot),
+            "transitionEvents": [
+                copy.deepcopy(event)
+                for event in source["transitionEvents"]
+                if event["sourceRevision"] <= revision
+            ],
+            "leaseEvents": [
+                copy.deepcopy(event)
+                for event in source["leaseEvents"]
+                if event["sourceRevision"] <= revision
+            ],
+        }
+        error = next(source_validator.iter_errors(historical_projection), None)
+        if error is not None:
+            raise ValueError(
+                "trusted Source revision snapshot violates Source/v1 schema"
+            ) from error
+        historical_projections.append(historical_projection)
+    for prior, proposed in pairwise(historical_projections):
+        _validate_source_transition_delta(prior, proposed)
+    replay_source_history(source, parse_time, trusted_snapshots)
 
 
 def validate_source_verification_revision(
@@ -1773,10 +1810,8 @@ def validate_source_operation_fields(
         raise ValueError("Source deletion must produce a metadata-only tombstone")
 
 
-def validate_source_transition(
-    prior: dict[str, Any],
-    proposed: dict[str, Any],
-    resolve_source_audit: SourceAuditResolver | None = None,
+def _validate_source_transition_delta(
+    prior: dict[str, Any], proposed: dict[str, Any]
 ) -> None:
     if prior["sourceId"] != proposed["sourceId"]:
         raise ValueError("Source transition cannot change sourceId")
@@ -2075,6 +2110,14 @@ def validate_source_transition(
         prior, proposed, state_event, new_lease_events
     )
     validate_source_operation_fields(prior, proposed, str(state_event["operation"]))
+
+
+def validate_source_transition(
+    prior: dict[str, Any],
+    proposed: dict[str, Any],
+    resolve_source_audit: SourceAuditResolver | None = None,
+) -> None:
+    _validate_source_transition_delta(prior, proposed)
     validate_source_semantics(prior, resolve_source_audit)
     validate_source_semantics(proposed, resolve_source_audit)
 
@@ -2155,6 +2198,9 @@ def build_source_rotation(
             "reason": "旧租约归零并切换新凭据；保持禁用直至重新验证",
         }
     )
+    register_fixture_source_snapshot(source)
+    register_fixture_source_snapshot(draining)
+    register_fixture_source_snapshot(rotated)
     return draining, rotated
 
 
@@ -2354,6 +2400,10 @@ def build_source_lease_drain(
             },
         ]
     )
+    register_fixture_source_snapshot(source)
+    register_fixture_source_snapshot(leased)
+    register_fixture_source_snapshot(draining)
+    register_fixture_source_snapshot(drained)
     return leased, draining, drained
 
 
@@ -2420,6 +2470,8 @@ def build_source_verification_reservation(source: dict[str, Any]) -> dict[str, A
             "reason": "持久化 verification reservation",
         }
     )
+    register_fixture_source_snapshot(source)
+    register_fixture_source_snapshot(reserved)
     return reserved
 
 
@@ -2498,6 +2550,8 @@ def build_source_verification_failure_drain(source: dict[str, Any]) -> dict[str,
             "reason": "失败结果持久化并原子释放 verification reservation",
         }
     )
+    register_fixture_source_snapshot(source)
+    register_fixture_source_snapshot(draining)
     return draining
 
 
@@ -2544,6 +2598,8 @@ def build_source_verification_failure_completion(
             "reason": "所有 reservation 已终止；完成 verification failure drain",
         }
     )
+    register_fixture_source_snapshot(source)
+    register_fixture_source_snapshot(completed)
     return completed
 
 

@@ -26,13 +26,16 @@ credential owner, expiry, last test, and audit events.
 Source/v1 JSON is a projection, not an authorization authority. Runtime
 validation resolves every embedded state and reservation event ID from a
 server-owned transactional audit ledger. That record binds the canonical event
-digest, authenticated principal/service permission, and captured time; the
-latest state record additionally binds the complete current Source snapshot
-digest. The loaded current snapshot must equal that latest trusted digest. A
-missing resolver/record, caller-authored Owner or service identity, unaudited
-verification result, or rewritten endpoint/scope/credential fails closed. The
-checked-in example resolver is test-only and must never be populated from an
-API request.
+digest, authenticated principal/service permission, captured time, and—for
+every state revision—the complete immutable Source state snapshot plus its
+digest. State and reservation event arrays remain separately attested rather
+than recursively embedded in each private snapshot. Full replay resolves all
+revision snapshots, not only the latest one; the loaded current snapshot must
+equal the final trusted digest. A missing resolver/record/revision,
+caller-authored Owner or service identity, unaudited verification result, or
+rewritten endpoint/scope/credential fails closed. The checked-in example
+resolver and `source-v1.audit-state-history.json` are test-only models of that
+private store and must never be populated from an API request.
 
 The Web UI supports add, test, edit, enable, disable, rotate, and delete.
 Diagnosis admission snapshots the source revision. Later edits affect only new
@@ -58,9 +61,15 @@ registration, edit, enable, and drain-admission decisions.
 
 A Source snapshot is trusted only after one full-history replay combines state
 and lease ledgers by `sourceRevision` and timestamp. The replay starts at
-revision 1, requires exactly one state snapshot per revision, and derives the
-active lease set after each event. Diagnosis acquisition is legal only in an
-enabled Source with passed verification. Verification reservation is legal in
+revision 1, requires exactly one trusted state snapshot per revision, and
+derives the active lease set after each event. At every revision it compares
+that set and the concurrency budget with the trusted immutable snapshot, and
+reapplies the same closed transition/mutation policy used for a live commit to
+every adjacent historical pair.
+Diagnosis acquisition is legal only when that exact historical revision is
+enabled and its credential revision plus verification-input digest equal a
+prior trusted PASS. Released reservations remain subject to the same historical
+check; a later PASS cannot authorize earlier work. Verification reservation is legal in
 `draft`, `enabled`, `disabled`, or `verification_failed`; both use a
 state-preserving `leases_updated` revision and must be strictly earlier than
 that revision's state snapshot. Release/cancel is legal only in its declared
@@ -68,7 +77,13 @@ lease revision and must also be strictly earlier than the snapshot. Equal
 timestamps across the two arrays are ambiguous and fail closed; lease events
 within one revision are strictly ordered as well. A single revision cannot mix
 reservation acquisition and release, so every committed acquisition remains
-visible in its state snapshot before a later revision can release it.
+visible in its state snapshot before a later revision can release it. A
+verifier result must be the immediate next Source revision after its exact
+reservation and must match that reservation's lease/job, credential and
+binding; any intervening edit makes publication invalid. Any
+`draining -> disabled|verification_failed|tombstoned` completion requires the
+replayed active set to be empty in that completion revision—later releases
+cannot repair an already unsafe completion.
 Prior/proposed validation
 never accepts an already poisoned prior merely because the newest transition
 is locally valid.
@@ -144,9 +159,13 @@ Receipt IDs and their bound Owner-intent/verifier-job subjects are globally
 unique in the transactional receipt store, not merely within one Source
 projection. A runtime Source-audit resolver may return a record only after
 joining that record to the matching committed receipt and enforcing this
-global uniqueness constraint. The receipt writer schema-validates the response
-through the closed public DTO for that route before persisting it; a key-name
-redaction scan is defense in depth, not the response schema.
+global uniqueness constraint. The receipt writer computes its response digest
+only through `source_idempotency_response_digest`, which validates the exact
+HTTP method, canonical route, status, route Source identity, and closed
+Source/v1 public DTO before persistence. Replay invokes the same validator
+before returning the stored body. Undeclared fields are rejected even when
+their key names look benign; the recursive sensitive-key scan is defense in
+depth, not the response schema.
 
 An `in_progress` receipt is never deleted or treated as permission to rerun the
 connector after a crash. Recovery first proves the original process/isolated

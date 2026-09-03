@@ -2,9 +2,9 @@
 
 The Source JSON document is a projection, not an authorization authority.  A
 runtime validator must resolve every embedded event ID against an independent,
-server-owned audit ledger.  The latest state record additionally binds the
-complete current Source projection so persisted fields cannot be rewritten
-without a new revision.
+server-owned audit ledger. Every state record additionally binds its complete
+immutable Source state projection so historical work cannot be authorized by a
+later rewritten revision.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from vnext_canonical_json import canonical_sha256
@@ -21,8 +21,41 @@ SOURCE_AUDIT_ATTESTATION_REVISION = "server-source-audit/v1"
 SOURCE_VERIFICATION_BINDING_REVISION = "source-verification-input/v1"
 IDEMPOTENCY_RECEIPT_ID = re.compile(r"^idem_[a-z0-9]{16,64}$")
 AUTHORIZATION_RECEIPT_ID = re.compile(r"^authz_[a-z0-9]{16,64}$")
+SHA256_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 SourceAuditResolver = Callable[[str], dict[str, Any] | None]
+
+SOURCE_STATE_SNAPSHOT_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "sourceId",
+        "revision",
+        "type",
+        "name",
+        "state",
+        "product",
+        "version",
+        "endpoint",
+        "auth",
+        "credentialLifecycle",
+        "activeLeases",
+        "associatedSourceIds",
+        "allowedSchemas",
+        "capabilities",
+        "budgets",
+        "owner",
+        "verification",
+        "createdAt",
+        "updatedAt",
+    }
+)
+
+# Test-only state snapshots keyed by their never-reused state event ID. Runtime
+# resolvers read the same data from the transactional Source revision store. The
+# registry exists only so generated contract fixtures can model that store
+# without adding private audit rows to the public Source/v1 JSON projection.
+_FIXTURE_STATE_SNAPSHOTS: dict[tuple[str, str], dict[str, Any]] = {}
+_FIXTURE_PINNED_STATE_KEYS: set[tuple[str, str]] = set()
 
 SOURCE_EVENT_PERMISSIONS = {
     "registered": "register_source",
@@ -113,6 +146,76 @@ def source_verification_binding_digest(source: dict[str, Any]) -> str:
     return canonical_sha256(source_verification_binding(source))
 
 
+def source_state_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the complete state projection bound by one state audit record.
+
+    Append-only state/lease events are attested independently. Keeping those
+    ledgers outside this value avoids recursively embedding the audit history in
+    every private revision row while still binding every mutable Source field.
+    """
+
+    if not isinstance(source, Mapping) or not SOURCE_STATE_SNAPSHOT_FIELDS.issubset(
+        source
+    ):
+        raise ValueError("Source revision lacks its complete state snapshot")
+    return {
+        field: copy.deepcopy(source[field]) for field in SOURCE_STATE_SNAPSHOT_FIELDS
+    }
+
+
+def register_fixture_source_snapshot(source: Mapping[str, Any]) -> None:
+    """Register one explicit test-only Source revision state snapshot."""
+
+    snapshot = source_state_snapshot(source)
+    events = source.get("transitionEvents")
+    if not isinstance(events, list) or not events:
+        raise ValueError("fixture Source revision lacks a state event")
+    event = events[-1]
+    if (
+        not isinstance(event, dict)
+        or event.get("sourceRevision") != snapshot["revision"]
+    ):
+        raise ValueError("fixture Source revision does not end at its state event")
+    event_id = event.get("eventId")
+    if not isinstance(event_id, str):
+        raise TypeError("fixture Source revision has no state event ID")
+    key = (event_id, canonical_sha256(event))
+    if key not in _FIXTURE_PINNED_STATE_KEYS:
+        _FIXTURE_STATE_SNAPSHOTS[key] = snapshot
+
+
+def register_fixture_source_state_history(
+    entries: Iterable[Mapping[str, Any]],
+) -> None:
+    """Register explicit private state rows for checked-in JSON fixtures."""
+
+    seen: set[tuple[str, str]] = set()
+    for entry in entries:
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "eventId",
+            "eventDigest",
+            "snapshot",
+        }:
+            raise ValueError("invalid fixture Source state history entry")
+        event_id = entry["eventId"]
+        snapshot = entry["snapshot"]
+        if not isinstance(event_id, str) or not isinstance(snapshot, Mapping):
+            raise TypeError("invalid fixture Source state history entry")
+        if set(snapshot) != SOURCE_STATE_SNAPSHOT_FIELDS:
+            raise ValueError("fixture Source state snapshot is not complete")
+        event_digest = entry.get("eventDigest")
+        if not isinstance(event_digest, str):
+            raise TypeError("fixture Source state history lacks its event digest")
+        if not SHA256_DIGEST.fullmatch(event_digest):
+            raise ValueError("fixture Source state history has an invalid event digest")
+        key = (event_id, event_digest)
+        if key in seen:
+            raise ValueError("fixture Source state history repeats an audit identity")
+        seen.add(key)
+        _FIXTURE_STATE_SNAPSHOTS[key] = copy.deepcopy(dict(snapshot))
+        _FIXTURE_PINNED_STATE_KEYS.add(key)
+
+
 def _required_resolver(
     resolver: SourceAuditResolver | None,
 ) -> SourceAuditResolver:
@@ -162,56 +265,88 @@ def build_fixture_source_audit_resolver(
     trust boundary without shipping a database alongside JSON fixtures.
     """
 
-    records: dict[str, dict[str, Any]] = {}
+    if not snapshots:
+        raise ValueError("fixture Source audit resolver requires a Source revision")
+    final = max(snapshots, key=lambda item: item["revision"])
+    source_id = final["sourceId"]
+    local_state_snapshots: dict[tuple[str, str], dict[str, Any]] = {}
     for snapshot in snapshots:
-        snapshot_digest = canonical_sha256(snapshot)
-        latest_event_id = snapshot["transitionEvents"][-1]["eventId"]
-        verification_receipt_by_revision = {
-            event["sourceRevision"]: f"idem_{event['jobId'].split('_', 1)[1]}"
-            for event in snapshot["leaseEvents"]
-            if event["purpose"] == "verification"
-        }
-        for event_kind, events in (
-            ("state", snapshot["transitionEvents"]),
-            ("lease", snapshot["leaseEvents"]),
-        ):
-            for event in events:
-                record = {
-                    **_expected_record(snapshot, event, event_kind),
-                    "sourceSnapshotDigest": None,
+        if snapshot["sourceId"] != source_id:
+            raise ValueError("fixture Source audit resolver mixes Source identities")
+        final_revision = snapshot["revision"]
+        if final["transitionEvents"][:final_revision] != snapshot["transitionEvents"]:
+            raise ValueError("fixture Source state histories are not one prefix chain")
+        expected_lease_prefix = [
+            event
+            for event in final["leaseEvents"]
+            if event["sourceRevision"] <= final_revision
+        ]
+        if expected_lease_prefix != snapshot["leaseEvents"]:
+            raise ValueError("fixture Source lease histories are not one prefix chain")
+        latest_event = snapshot["transitionEvents"][-1]
+        event_id = latest_event["eventId"]
+        local_state_snapshots[(event_id, canonical_sha256(latest_event))] = (
+            source_state_snapshot(snapshot)
+        )
+        register_fixture_source_snapshot(snapshot)
+
+    verification_receipt_by_revision = {
+        event["sourceRevision"]: f"idem_{event['jobId'].split('_', 1)[1]}"
+        for event in final["leaseEvents"]
+        if event["purpose"] == "verification"
+    }
+    records: dict[str, dict[str, Any]] = {}
+    for event_kind, events in (
+        ("state", final["transitionEvents"]),
+        ("lease", final["leaseEvents"]),
+    ):
+        for event in events:
+            record = _expected_record(final, event, event_kind)
+            if event_kind == "state":
+                event_key = (event["eventId"], canonical_sha256(event))
+                state_snapshot = local_state_snapshots.get(
+                    event_key, _FIXTURE_STATE_SNAPSHOTS.get(event_key)
+                )
+                if state_snapshot is None:
+                    raise ValueError(
+                        "fixture Source audit resolver lacks every revision snapshot"
+                    )
+                state_snapshot = copy.deepcopy(state_snapshot)
+                record.update(
+                    sourceSnapshot=state_snapshot,
+                    sourceSnapshotDigest=canonical_sha256(state_snapshot),
+                )
+            if event["actor"]["kind"] == "user":
+                record["idempotencyReceiptId"] = (
+                    f"idem_{event['eventId'].split('_', 1)[1]}"
+                )
+            verification_receipt = verification_receipt_by_revision.get(
+                event["sourceRevision"]
+            )
+            if verification_receipt is not None and (
+                (event_kind == "lease" and event["purpose"] == "verification")
+                or event["operation"]
+                in {
+                    "leases_updated",
+                    "verified",
+                    "verification_failure_started",
+                    "verification_failed",
                 }
-                if event["actor"]["kind"] == "user":
-                    record["idempotencyReceiptId"] = (
+            ):
+                record["idempotencyReceiptId"] = verification_receipt
+            if event_kind == "lease":
+                if event["operation"] == "lease_acquired":
+                    record["committedBeforeCredentialUse"] = True
+                else:
+                    record["executionTerminated"] = True
+                if event["operation"] == "lease_force_cancelled":
+                    record["commandReceiptId"] = (
                         f"idem_{event['eventId'].split('_', 1)[1]}"
                     )
-                verification_receipt = verification_receipt_by_revision.get(
-                    event["sourceRevision"]
-                )
-                if verification_receipt is not None and (
-                    (event_kind == "lease" and event["purpose"] == "verification")
-                    or event["operation"]
-                    in {
-                        "leases_updated",
-                        "verified",
-                        "verification_failure_started",
-                        "verification_failed",
-                    }
-                ):
-                    record["idempotencyReceiptId"] = verification_receipt
-                if event_kind == "lease":
-                    if event["operation"] == "lease_acquired":
-                        record["committedBeforeCredentialUse"] = True
-                    else:
-                        record["executionTerminated"] = True
-                    if event["operation"] == "lease_force_cancelled":
-                        record["commandReceiptId"] = (
-                            f"idem_{event['eventId'].split('_', 1)[1]}"
-                        )
-                        record["ownerApprovalReceiptId"] = (
-                            f"authz_{event['eventId'].split('_', 1)[1]}"
-                        )
-                records.setdefault(event["eventId"], record)
-        records[latest_event_id]["sourceSnapshotDigest"] = snapshot_digest
+                    record["ownerApprovalReceiptId"] = (
+                        f"authz_{event['eventId'].split('_', 1)[1]}"
+                    )
+            records[event["eventId"]] = record
 
     def resolve(record_id: str) -> dict[str, Any] | None:
         record = records.get(record_id)
@@ -234,7 +369,7 @@ def _validate_event_authority(event: dict[str, Any]) -> None:
 def validate_trusted_source_audit(
     source: dict[str, Any],
     resolve_source_audit: SourceAuditResolver | None,
-) -> None:
+) -> dict[int, dict[str, Any]]:
     """Resolve embedded audit identities through a server-owned ledger.
 
     The resolver must never be supplied by an API caller.  Runtime code obtains
@@ -247,6 +382,7 @@ def validate_trusted_source_audit(
     verification_jobs_by_revision: dict[int, set[str]] = defaultdict(set)
     verification_receipts_by_job: dict[str, set[str]] = defaultdict(set)
     receipt_subject_by_id: dict[str, tuple[str, str]] = {}
+    state_snapshots: dict[int, dict[str, Any]] = {}
 
     def bind_receipt(receipt_id: str, subject: tuple[str, str]) -> None:
         existing = receipt_subject_by_id.setdefault(receipt_id, subject)
@@ -275,14 +411,13 @@ def validate_trusted_source_audit(
                     "Source event differs from its trusted Source audit record"
                 )
             receipt_id = record.get("idempotencyReceiptId")
-            if event["actor"]["kind"] == "user" and (
-                not isinstance(receipt_id, str)
-                or not IDEMPOTENCY_RECEIPT_ID.fullmatch(receipt_id)
-            ):
-                raise ValueError(
-                    "Source Owner action lacks a committed idempotency receipt"
-                )
             if event["actor"]["kind"] == "user":
+                if not isinstance(
+                    receipt_id, str
+                ) or not IDEMPOTENCY_RECEIPT_ID.fullmatch(receipt_id):
+                    raise ValueError(
+                        "Source Owner action lacks a committed idempotency receipt"
+                    )
                 bind_receipt(receipt_id, ("owner", event["eventId"]))
             verification_jobs: set[str] = set()
             if event_kind == "lease" and event["purpose"] == "verification":
@@ -342,6 +477,33 @@ def validate_trusted_source_audit(
                         )
             else:
                 state_records.append((event, record))
+                snapshot = record.get("sourceSnapshot")
+                snapshot_digest = record.get("sourceSnapshotDigest")
+                if (
+                    not isinstance(snapshot, dict)
+                    or set(snapshot) != SOURCE_STATE_SNAPSHOT_FIELDS
+                ):
+                    raise ValueError(
+                        "Source state audit lacks a complete revision snapshot"
+                    )
+                if snapshot_digest != canonical_sha256(snapshot):
+                    raise ValueError(
+                        "Source revision snapshot digest differs from audit"
+                    )
+                if not (
+                    snapshot["sourceId"] == source["sourceId"]
+                    and snapshot["revision"] == event["sourceRevision"]
+                    and snapshot["state"] == event["toState"]
+                    and snapshot["updatedAt"] == event["createdAt"]
+                    and snapshot["auth"]["credentialRevision"]
+                    == event["credentialRevision"]
+                ):
+                    raise ValueError(
+                        "Source revision snapshot differs from its state event"
+                    )
+                if event["sourceRevision"] in state_snapshots:
+                    raise ValueError("Source audit repeats a revision snapshot")
+                state_snapshots[event["sourceRevision"]] = copy.deepcopy(snapshot)
             if event_kind == "state" and event is source["transitionEvents"][-1]:
                 latest_state_record = copy.deepcopy(record)
 
@@ -350,7 +512,12 @@ def validate_trusted_source_audit(
 
     if latest_state_record is None:
         raise ValueError("Source projection lacks a trusted latest state record")
-    if latest_state_record.get("sourceSnapshotDigest") != canonical_sha256(source):
+    if sorted(state_snapshots) != list(range(1, source["revision"] + 1)):
+        raise ValueError("Source audit lacks every revision snapshot")
+    latest_snapshot = state_snapshots[source["revision"]]
+    if latest_state_record.get("sourceSnapshotDigest") != canonical_sha256(
+        source_state_snapshot(source)
+    ) or latest_snapshot != source_state_snapshot(source):
         raise ValueError("Source snapshot digest differs from trusted audit")
 
     status = source["verification"]["status"]
@@ -401,3 +568,4 @@ def validate_trusted_source_audit(
             raise ValueError(
                 "Source verification projection is stale for its current bound input"
             )
+    return state_snapshots
