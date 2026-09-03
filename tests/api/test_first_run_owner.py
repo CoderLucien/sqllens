@@ -32,18 +32,19 @@ class FixedClock:
 
 @pytest.fixture
 def clock() -> FixedClock:
-    return FixedClock(datetime(2026, 9, 2, 10, 0, tzinfo=UTC))
+    return FixedClock(datetime(2026, 9, 3, 6, 0, tzinfo=UTC))
 
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         data_dir=tmp_path / "data",
-        secrets_dir=tmp_path / "secrets",
         first_owner_nonce_ttl_seconds=60,
         first_owner_max_attempts=3,
         first_owner_rate_window_seconds=60,
         owner_session_ttl_seconds=300,
+        owner_login_max_attempts=3,
+        owner_login_lock_seconds=60,
         cookie_secure=False,
     )
 
@@ -69,7 +70,7 @@ def create_owner(
     )
 
 
-def test_fresh_instance_starts_with_local_owner_creation(
+def test_fresh_m0_instance_issues_only_the_local_owner_proof(
     settings: Settings,
     clock: FixedClock,
 ) -> None:
@@ -83,23 +84,12 @@ def test_fresh_instance_starts_with_local_owner_creation(
     assert isinstance(setup_nonce, str)
     assert len(setup_nonce) >= 32
     assert body == {
+        "edition": "m0_private_preview",
         "state": "owner_required",
         "initialized": False,
         "owner_configured": False,
-        "bootstrap_hash_persisted": False,
-        "model_mode": None,
-        "external_model": {
-            "credential_available": False,
-            "egress_enabled": False,
-        },
+        "configured_mode": "rules",
         "csrf_token": None,
-        "recovery": {"required": False, "action": None, "reason": None},
-        "local_model": {
-            "available": False,
-            "verified": False,
-            "code": "LOCAL_RUNTIME_UNAVAILABLE",
-            "message": "No qualified local model runtime is exposed to this service.",
-        },
     }
     assert client.cookies.get(SETUP_COOKIE_NAME) is not None
     set_cookie = response.headers["set-cookie"].lower()
@@ -108,7 +98,7 @@ def test_fresh_instance_starts_with_local_owner_creation(
     assert "path=/api/v1/setup" in set_cookie
 
 
-def test_local_owner_creation_issues_session_and_protects_remaining_setup(
+def test_owner_creation_atomically_enters_ready_rules_mode(
     settings: Settings,
     clock: FixedClock,
     caplog: pytest.LogCaptureFixture,
@@ -118,12 +108,16 @@ def test_local_owner_creation_issues_session_and_protects_remaining_setup(
     response = create_owner(client)
 
     assert response.status_code == 201
-    assert response.json() == {
-        "state": "security_policy_required",
+    body = response.json()
+    csrf_token = body.pop("csrf_token")
+    assert isinstance(csrf_token, str)
+    assert csrf_token
+    assert body == {
+        "edition": "m0_private_preview",
+        "state": "ready",
         "authenticated": True,
-        "csrf_token": response.json()["csrf_token"],
+        "configured_mode": "rules",
     }
-    assert response.json()["csrf_token"]
     assert client.cookies.get(OWNER_COOKIE_NAME) is not None
     set_cookie = response.headers["set-cookie"].lower()
     assert "httponly" in set_cookie
@@ -133,87 +127,47 @@ def test_local_owner_creation_issues_session_and_protects_remaining_setup(
     assert OWNER_PASSWORD not in caplog.text
     assert OWNER_PASSWORD.encode() not in settings.database_path.read_bytes()
 
-    missing_csrf = client.put(
-        "/api/v1/setup/security-policy",
-        json={
-            "external_model_egress": False,
-            "allowed_provider_hosts": [],
-            "send_sql_text": False,
-        },
-    )
-    assert missing_csrf.status_code == 403
-    assert missing_csrf.json()["error"]["code"] == "CSRF_INVALID"
+    snapshot = SetupStore(settings).snapshot()
+    assert snapshot.stage == "ready"
+    assert snapshot.initialized is True
+    assert snapshot.owner_configured is True
+    assert snapshot.model_mode == "rules"
 
-    csrf_token = response.json()["csrf_token"]
-    accepted = client.put(
-        "/api/v1/setup/security-policy",
-        headers={"X-CSRF-Token": csrf_token},
-        json={
-            "external_model_egress": False,
-            "allowed_provider_hosts": [],
-            "send_sql_text": False,
-        },
-    )
-    assert accepted.status_code == 200
-    assert accepted.json() == {"state": "model_required"}
+    status = client.get("/api/v1/setup/status")
+    assert status.json() == {
+        "edition": "m0_private_preview",
+        "state": "ready",
+        "initialized": True,
+        "owner_configured": True,
+        "configured_mode": "rules",
+        "csrf_token": csrf_token,
+        "setup_nonce": None,
+    }
 
 
-def test_setup_mutations_other_than_owner_are_unavailable_before_authentication(
+def test_owner_models_reject_extra_fields_and_short_passwords(
     settings: Settings,
     clock: FixedClock,
 ) -> None:
     client = local_client(create_app(settings=settings, clock=clock))
+    nonce = client.get("/api/v1/setup/status").json()["setup_nonce"]
 
-    policy = client.put(
-        "/api/v1/setup/security-policy",
-        json={
-            "external_model_egress": False,
-            "allowed_provider_hosts": [],
-            "send_sql_text": False,
-        },
+    extra = client.post(
+        "/api/v1/setup/owner",
+        headers={"Origin": LOCAL_ORIGIN, "X-Setup-Nonce": nonce},
+        json={"password": OWNER_PASSWORD, "model": "forbidden"},
     )
-    model = client.post(
-        "/api/v1/setup/model-probes",
-        json={"mode": "local", "model": "untrusted"},
-    )
-    finalize = client.post("/api/v1/setup/finalize", json={"mode": "rules"})
-
-    assert [policy.status_code, model.status_code, finalize.status_code] == [401, 401, 401]
-    assert policy.json()["error"]["code"] == "SETUP_SESSION_REQUIRED"
-    assert SetupStore(settings).snapshot().stage == "owner_required"
-
-
-def test_existing_owner_finalizes_without_reentering_or_replacing_password(
-    settings: Settings,
-    clock: FixedClock,
-) -> None:
-    client = local_client(create_app(settings=settings, clock=clock))
-    created = create_owner(client)
-    csrf = created.json()["csrf_token"]
-    assert (
-        client.put(
-            "/api/v1/setup/security-policy",
-            headers={"X-CSRF-Token": csrf},
-            json={
-                "external_model_egress": False,
-                "allowed_provider_hosts": [],
-                "send_sql_text": False,
-            },
-        ).status_code
-        == 200
+    short = client.post(
+        "/api/v1/setup/owner",
+        headers={"Origin": LOCAL_ORIGIN, "X-Setup-Nonce": nonce},
+        json={"password": "too-short"},
     )
 
-    finalized = client.post(
-        "/api/v1/setup/finalize",
-        headers={"X-CSRF-Token": csrf},
-        json={"mode": "rules"},
-    )
-
-    assert finalized.status_code == 200
-    assert finalized.json()["state"] == "ready"
-    store = SetupStore(settings)
-    assert store.authenticate_owner(OWNER_PASSWORD, clock()).status == "authenticated"
-    assert store.authenticate_owner("replacement-password-123", clock()).status == "invalid"
+    assert extra.status_code == 422
+    assert short.status_code == 422
+    assert extra.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert short.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert SetupStore(settings).snapshot().owner_configured is False
 
 
 def test_first_owner_requires_matching_cookie_bound_nonce(
@@ -243,7 +197,6 @@ def test_first_owner_requires_matching_cookie_bound_nonce(
     assert mismatch.json()["error"]["code"] == "SETUP_NONCE_INVALID"
     assert SetupStore(settings).snapshot().owner_configured is False
 
-    # A mismatch does not turn the nonce into an oracle or consume the correct proof.
     accepted = create_owner(intended, nonce=nonce)
     assert accepted.status_code == 201
 
@@ -317,30 +270,15 @@ def test_noncanonical_status_never_issues_first_owner_proof(
 @pytest.mark.parametrize(
     ("base_url", "headers"),
     [
-        (
-            "http://sqllens.internal:18080",
-            {"Origin": "http://sqllens.internal:18080"},
-        ),
-        (
-            LOCAL_ORIGIN,
-            {"Origin": "https://attacker.example"},
-        ),
-        (
-            LOCAL_ORIGIN,
-            {"Origin": LOCAL_ORIGIN, "X-Forwarded-For": "127.0.0.1"},
-        ),
+        ("http://sqllens.internal:18080", {"Origin": "http://sqllens.internal:18080"}),
+        (LOCAL_ORIGIN, {"Origin": "https://attacker.example"}),
+        (LOCAL_ORIGIN, {"Origin": LOCAL_ORIGIN, "X-Forwarded-For": "127.0.0.1"}),
         (
             LOCAL_ORIGIN,
             {"Origin": LOCAL_ORIGIN, "Forwarded": "for=127.0.0.1;host=localhost"},
         ),
-        (
-            LOCAL_ORIGIN,
-            {"Origin": LOCAL_ORIGIN, "X-Forwarded-Host": "localhost:18080"},
-        ),
-        (
-            LOCAL_ORIGIN,
-            {},
-        ),
+        (LOCAL_ORIGIN, {"Origin": LOCAL_ORIGIN, "X-Forwarded-Host": "localhost:18080"}),
+        (LOCAL_ORIGIN, {}),
     ],
 )
 def test_first_owner_rejects_remote_origin_and_proxy_spoofing(
@@ -411,18 +349,17 @@ def test_owner_creation_replay_cannot_replace_password_or_session_epoch(
     assert "set-cookie" not in replay.headers
     assert client.cookies.get(OWNER_COOKIE_NAME) == cookie
     after = SetupStore(settings).snapshot()
-    assert after.stage == "security_policy_required"
+    assert after.stage == "ready"
     assert after.owner_session_epoch == before.owner_session_epoch
-    assert (
-        SetupStore(settings).authenticate_owner(OWNER_PASSWORD, clock()).status == "authenticated"
+    assert SetupStore(settings).authenticate_owner(OWNER_PASSWORD, clock()).status == (
+        "authenticated"
     )
-    assert (
-        SetupStore(settings).authenticate_owner("replacement-password-123", clock()).status
-        == "invalid"
-    )
+    assert SetupStore(settings).authenticate_owner(
+        "replacement-password-123", clock()
+    ).status == "invalid"
 
 
-def test_owner_login_survives_restart_before_setup_is_complete(
+def test_owner_login_and_session_survive_restart_but_expire(
     settings: Settings,
     clock: FixedClock,
 ) -> None:
@@ -434,13 +371,76 @@ def test_owner_login_survives_restart_before_setup_is_complete(
 
     assert login.status_code == 200
     assert login.json()["authenticated"] is True
+    assert restarted.get("/api/v1/auth/session").json() == login.json()
     status = restarted.get("/api/v1/setup/status")
-    assert status.json()["state"] == "security_policy_required"
-    assert status.json()["initialized"] is False
+    assert status.json()["state"] == "ready"
+    assert status.json()["initialized"] is True
     assert status.json()["owner_configured"] is True
+    assert status.json()["configured_mode"] == "rules"
     assert status.json()["csrf_token"] == login.json()["csrf_token"]
-    replay = create_owner(restarted, "replacement-password-123")
-    assert replay.status_code == 409
+
+    clock.advance(seconds=settings.owner_session_ttl_seconds + 1)
+    assert restarted.get("/api/v1/auth/session").json() == {
+        "authenticated": False,
+        "csrf_token": None,
+    }
+
+
+def test_owner_login_is_rate_limited_without_leaking_credential_state(
+    settings: Settings,
+    clock: FixedClock,
+) -> None:
+    setup_client = local_client(create_app(settings=settings, clock=clock))
+    assert create_owner(setup_client).status_code == 201
+    client = local_client(create_app(settings=settings, clock=clock))
+
+    for _ in range(settings.owner_login_max_attempts):
+        denied = client.post("/api/v1/auth/login", json={"password": "wrong-password"})
+        assert denied.status_code == 401
+        assert denied.json()["error"]["code"] == "AUTH_INVALID"
+
+    limited = client.post("/api/v1/auth/login", json={"password": OWNER_PASSWORD})
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "AUTH_TEMPORARILY_UNAVAILABLE"
+
+    clock.advance(seconds=settings.owner_login_lock_seconds + 1)
+    recovered = client.post("/api/v1/auth/login", json={"password": OWNER_PASSWORD})
+    assert recovered.status_code == 200
+
+
+def test_logout_requires_csrf_closes_connection_and_revokes_owner_sessions(
+    settings: Settings,
+    clock: FixedClock,
+) -> None:
+    app = create_app(settings=settings, clock=clock)
+    cleanup_calls = 0
+
+    async def clear_connection() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+
+    app.state.clear_m0_connection = clear_connection
+    client = local_client(app)
+    created = create_owner(client)
+    csrf = created.json()["csrf_token"]
+
+    missing_csrf = client.post("/api/v1/auth/logout")
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["error"]["code"] == "CSRF_INVALID"
+    assert cleanup_calls == 0
+
+    logged_out = client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert logged_out.status_code == 200
+    assert logged_out.json() == {"authenticated": False}
+    assert cleanup_calls == 1
+    assert client.get("/api/v1/auth/session").json() == {
+        "authenticated": False,
+        "csrf_token": None,
+    }
 
 
 def test_runtime_disables_proxy_header_trust(monkeypatch: pytest.MonkeyPatch) -> None:

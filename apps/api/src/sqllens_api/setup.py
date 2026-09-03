@@ -478,7 +478,11 @@ class SetupStore:
                     setup_state.c.finalized_at.is_(None),
                 )
                 .values(
-                    stage="security_policy_required",
+                    stage="ready",
+                    external_model_egress=False,
+                    allowed_provider_hosts="[]",
+                    send_sql_text=False,
+                    model_mode="rules",
                     owner_password_hash=owner_hash,
                     owner_password_salt=_b64(owner_salt),
                     owner_session_epoch=setup_state.c.owner_session_epoch + 1,
@@ -486,6 +490,7 @@ class SetupStore:
                     owner_locked_until=None,
                     first_owner_attempts=0,
                     first_owner_window_started_at=None,
+                    finalized_at=now_value,
                     updated_at=now_value,
                 )
             )
