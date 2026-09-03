@@ -351,7 +351,6 @@ def create_app(
     register_plan_replayer_routes(
         app,
         store=plan_replayer_store,
-        require_owner_session=require_owner_session,
     )
 
     web_dist = runtime_settings.web_dist_dir

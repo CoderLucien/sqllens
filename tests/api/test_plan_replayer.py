@@ -9,6 +9,7 @@ import pytest
 
 from sqllens_api.plan_replayer import (
     PlanReplayerError,
+    bundle_to_evidence_v3,
     parse_plan_replayer_zip,
     plan_replayer_summary,
 )
@@ -71,3 +72,33 @@ def test_reject_empty_payload() -> None:
 def test_reject_missing_recognizable_content() -> None:
     with pytest.raises(PlanReplayerError):
         parse_plan_replayer_zip(_make_zip({"unknown.bin": "x"}))
+
+
+def test_evidence_v3_mapping() -> None:
+    bundle = parse_plan_replayer_zip(
+        _make_zip(
+            {
+                "meta.txt": "TiDB Version: v8.5.8\ndatabase: order_center\n",
+                "schema.txt": (
+                    "CREATE TABLE orders (id int primary key, order_date date, "
+                    "tenant_id int, status varchar(16));\n"
+                    "CREATE INDEX idx_tenant_created ON orders(tenant_id, created_at);"
+                ),
+                "stats.txt": '{"orders": {"row_count": 1260000, "healthy": 92}}',
+                "sql/1.sql": "SELECT * FROM orders WHERE tenant_id = ? "
+                "AND status = 'open' ORDER BY order_date;",
+                "explain.txt": "TableFullScan orders estRows:1263814",
+            }
+        )
+    )
+    ev = bundle_to_evidence_v3(bundle)
+    assert ev["schema_version"] == "evidence/v3"
+    assert ev["sql"]["database"] == "order_center"
+    assert ev["sql"]["table_name"] == "orders"
+    assert len(ev["sql"]["sql_digest"]) == 64
+    assert ev["plan"]["operator_rows"][0]["operator"] == "TableFullScan"
+    assert ev["stats"]["row_count"] == 1260000
+    assert ev["stats"]["healthy"] == 92
+    indexes = {i["name"]: i["columns"] for i in ev["schema"]["indexes"]}
+    assert indexes["idx_tenant_created"] == ["tenant_id", "created_at"]
+    assert "tenant_id" in ev["schema"]["filter_columns"]

@@ -1,31 +1,29 @@
-"""Plan Replayer 离线上传接口。
+"""Plan Replayer 离线上传接口（v4 loopback MVP，无鉴权）。
 
-``POST /api/v1/m0/plan-replayer`` 接收 zip 诊断包，解析后仅驻留会话内存
-（不写磁盘、不写日志、不写响应原文），返回不含 SQL 原文的轻量摘要。
+``POST /api/v1/v4/plan-replayer`` 接收 zip 诊断包，解析为 evidence/v3 结构，
+仅驻留会话内存（不写磁盘、不写日志、不写响应原文）。与 v4 诊断内核
+（``POST /api/v1/v4/diagnose``）共用同一入口契约。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
-from fastapi import FastAPI, Header, Request
+from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse, Response
 
 from sqllens_api.errors import ApiError
 from sqllens_api.plan_replayer import (
     PlanReplayerBundle,
     PlanReplayerError,
+    bundle_to_evidence_v3,
     parse_plan_replayer_zip,
     plan_replayer_summary,
 )
 
 _UPLOAD_BODY_LIMIT = 32 * 1024 * 1024  # 与解析器总上限一致
 
-type RequireOwnerSession = Callable[[Request, str | None], str]
-
 
 class PlanReplayerStore:
-    """会话内存内的 Plan Replayer 证据视图，仅保留最近一次上传。"""
+    """会话内存内的 Plan Replayer evidence/v3 视图，仅保留最近一次上传。"""
 
     def __init__(self) -> None:
         self._bundle: PlanReplayerBundle | None = None
@@ -45,17 +43,11 @@ def register_plan_replayer_routes(
     app: FastAPI,
     *,
     store: PlanReplayerStore,
-    require_owner_session: RequireOwnerSession,
 ) -> None:
-    """注册 Plan Replayer 离线上传接口（只读、会话内存）。"""
+    """注册 Plan Replayer 离线上传接口（只读、会话内存、无鉴权 loopback MVP）。"""
 
-    @app.post("/api/v1/m0/plan-replayer")
-    async def upload_plan_replayer(
-        request: Request,
-        x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
-    ) -> JSONResponse:
-        require_owner_session(request, x_csrf_token)
-
+    @app.post("/api/v1/v4/plan-replayer")
+    async def upload_plan_replayer(request: Request) -> JSONResponse:
         body = await _read_upload_body(request)
         try:
             bundle = parse_plan_replayer_zip(body)
@@ -63,22 +55,22 @@ def register_plan_replayer_routes(
             raise ApiError(422, "PLAN_REPLAYER_INVALID", str(exc)) from None
 
         await store.replace(bundle)
-        return JSONResponse(content=plan_replayer_summary(bundle))
+        # 返回 evidence/v3 结构（供诊断内核 / 前端继续消费），另附轻量摘要。
+        payload = bundle_to_evidence_v3(bundle)
+        payload["_summary"] = plan_replayer_summary(bundle)
+        return JSONResponse(content=payload)
 
-    @app.get("/api/v1/m0/plan-replayer")
-    async def get_plan_replayer(request: Request) -> JSONResponse:
-        require_owner_session(request, None)
+    @app.get("/api/v1/v4/plan-replayer")
+    async def get_plan_replayer() -> JSONResponse:
         bundle = await store.view()
         if bundle is None:
             return JSONResponse(content={"available": False})
-        return JSONResponse(content=plan_replayer_summary(bundle))
+        payload = bundle_to_evidence_v3(bundle)
+        payload["_summary"] = plan_replayer_summary(bundle)
+        return JSONResponse(content=payload)
 
-    @app.delete("/api/v1/m0/plan-replayer", status_code=204)
-    async def clear_plan_replayer(
-        request: Request,
-        x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
-    ) -> Response:
-        require_owner_session(request, x_csrf_token)
+    @app.delete("/api/v1/v4/plan-replayer", status_code=204)
+    async def clear_plan_replayer() -> Response:
         await store.clear()
         return Response(status_code=204)
 
