@@ -2174,6 +2174,16 @@ SELECT ... ;</div></div></div>
           <div class="page-actions"><button class="button" type="button">导出 PDF</button><button class="button" type="button">生成变更建议单</button></div>
         </div>
 
+        <div class="section report-sample-switch">
+          <div class="section-header"><div><h2>报告样例</h2><p>三份样例与冻结契约 fixtures（docs/contracts/examples）事实一致，用于客户价值验收。</p></div><span class="badge info">#t20 交付物</span></div>
+          <div class="segmented" role="group" aria-label="报告样例切换">
+            <button class="segment report-sample-tab" type="button" data-report-sample="index-access" aria-pressed="true">样例一 · 索引访问</button>
+            <button class="segment report-sample-tab" type="button" data-report-sample="statistics" aria-pressed="false">样例二 · 统计信息</button>
+            <button class="segment report-sample-tab" type="button" data-report-sample="runtime" aria-pressed="false">样例三 · 资源关联</button>
+          </div>
+        </div>
+
+        <div class="report-sample" data-report-sample-pane="index-access">
         <section class="section">
           <div class="report-hero">
             <div class="report-headline">
@@ -2263,6 +2273,163 @@ SELECT ... ;</div></div></div>
             <div class="trace-item"><b>缺失证据</b><span>优化后对照运行；当前建议仍标记“待验证”</span></div>
           </div>
         </section>
+
+        </div>
+
+        <div class="report-sample" data-report-sample-pane="statistics" hidden>
+          <section class="section">
+            <div class="report-hero">
+              <div class="report-headline">
+                <div><div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px"><span class="badge warn">P1 · 建议本周处理</span><span class="badge success">规则确认</span><span class="badge info">AI 已降级 · 模型超时</span></div><h1>统计信息偏差导致 Join 顺序失真，先验证统计而不是直接加索引</h1><p>影响 billing 对账任务，15:20 - 15:35 内运行时间从 4 分钟升至 27 分钟，已接近批处理窗口上限。</p></div>
+                <div class="report-meta"><span class="badge info">E3 证据</span><span class="badge">v8.5.2</span><span class="badge">15:42 生成</span></div>
+              </div>
+            </div>
+            <div class="audience-pane active"><strong>DBA / SRE 摘要：</strong>核心表估算 120 行、实际 18 万行，估算偏差足以改变 Join 顺序；应先在隔离环境刷新并验证统计，而不是直接加索引。本轮 AI 调用超时，报告由确定性规则生成，事实、动作和证据不受影响。</div>
+            <div class="report-kpis">
+              <div class="report-kpi"><span>业务影响</span><b>4→27 分钟</b><small>对账批处理耗时，接近窗口上限</small></div>
+              <div class="report-kpi"><span>估算偏差</span><b>≈1500 倍</b><small>estRows 120 / 实际 180,000 行</small></div>
+              <div class="report-kpi"><span>Join 顺序</span><b>失真</b><small>统计早于最近大批量导入</small></div>
+              <div class="report-kpi"><span>处置优先级</span><b>本周</b><small>先验证统计，再谈索引</small></div>
+            </div>
+          </section>
+
+          <div class="layout-balanced">
+            <section class="section">
+              <div class="section-header"><div><h2>关键证据</h2><p>每条事实可追溯到冻结证据</p></div><span class="badge success">无冲突证据</span></div>
+              <div class="section-body evidence-list">
+                <div class="evidence-row"><b>EV-RUNTIME-11</b><p>estRows 120，运行时实际 180,000 行，偏差约 1500 倍。</p><span>Statement Summary · 同时间窗</span></div>
+                <div class="evidence-row"><b>EV-STATS-11</b><p>目标表统计更新时间早于最近一次大批量导入。</p><span>Stats · 早于数据变更</span></div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header"><div><h2>判断依据</h2><p>规则确认与 AI 降级原因分开显示</p></div></div>
+              <div class="section-body">
+                <div class="check-list">
+                  <div class="check-row passed"><span class="check-mark">✓</span><span class="check-copy"><strong>STATS_ESTIMATION_001 · 估算偏差超阈值</strong><span>估算/实际行数偏差超过版本规则阈值，且统计早于数据变更。</span></span><span class="badge success">确认</span></div>
+                  <div class="check-row warn"><span class="check-mark">AI</span><span class="check-copy"><strong>中文解释与动作排序</strong><span>外部模型超时（MODEL_TIMEOUT），本报告使用确定性规则生成。</span></span><span class="badge info">已降级</span></div>
+                </div>
+                <div class="notice info" style="margin-top:10px"><div><strong>当前结论边界</strong><p>尚未取得生产峰值窗口的资源余量，不能直接安排生产 ANALYZE。</p></div></div>
+              </div>
+            </section>
+          </div>
+
+          <section class="section">
+            <div class="section-header"><div><h2>当前统计与运行实际</h2><p>估算偏差是 Join 顺序失真的直接证据。</p></div><span class="badge warn">需验证统计</span></div>
+            <div class="section-body plan-compare">
+              <div class="plan-column">
+                <div class="plan-title"><strong>计划内估算</strong><span class="badge danger">estRows 120</span></div>
+                <div class="plan-node">Join · billing_order × billing_item</div>
+                <div class="plan-node">优化器按 120 行选择小表驱动顺序</div>
+                <div class="compare-bar"><div class="compare-label"><span>估算行数</span><b>120</b></div><div class="bar-track"><div class="bar-fill" style="width:2%"></div></div></div>
+              </div>
+              <div class="plan-column">
+                <div class="plan-title"><strong>实际运行</strong><span class="badge success">rows 180,000</span></div>
+                <div class="plan-node">同一 Join 实际处理 18 万行，顺序不再最优</div>
+                <div class="plan-node">对账任务耗时 4 → 27 分钟</div>
+                <div class="compare-bar"><div class="compare-label"><span>实际行数</span><b>180,000</b></div><div class="bar-track"><div class="bar-fill good" style="width:100%"></div></div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><div><h2>建议动作</h2><p>按预期收益、实施风险和验证成本排序。</p></div><span class="badge danger">不自动执行</span></div>
+            <div class="section-body action-list">
+              <div class="action-item"><span class="action-rank">1</span><div><h3>在隔离环境验证统计刷新后的计划</h3><p>复现当前统计和执行计划；按版本文档刷新统计并对比 Join 顺序与任务耗时。前提：准备 Plan Replayer 或测试集群，确认受控 ANALYZE 的资源窗口和采样策略。</p></div><div class="action-side"><b>预期收益</b><span>估算偏差低于 10 倍</span><b>风险</b><span>中等：资源窗口与采样策略</span><b>依据</b><span>STATS_ESTIMATION_001 · SQL 调优文档</span></div></div>
+              <div class="action-item"><span class="action-rank">2</span><div><h3>验证达标后在低峰窗口执行受控统计刷新</h3><p>记录原统计与计划证据作为回滚依据；Join 顺序稳定、批处理耗时回到 6 分钟以内才可确认。</p></div><div class="action-side"><b>目标</b><span>批处理回到 6 分钟以内</span><b>回滚</b><span>不在生产刷新统计，保留原统计与计划证据</span><b>审批人</b><span>DBA + 业务负责人</span></div></div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><div><h2>可追溯信息</h2><p>避免只展示“AI 认为”。</p></div></div>
+            <div class="section-body trace-grid">
+              <div class="trace-item"><b>规则与版本</b><span>STATS_ESTIMATION_001 v1.0 · 适用 TiDB v8.5.x</span></div>
+              <div class="trace-item"><b>官方来源</b><span>SQL 性能调优、统计信息、Join 顺序</span></div>
+              <div class="trace-item"><b>AI 运行记录</b><span>超时未产出（MODEL_TIMEOUT）· 报告按规则模式生成</span></div>
+              <div class="trace-item"><b>发布校验</b><span>9 / 9 通过 · 无无证据结论</span></div>
+              <div class="trace-item"><b>案例身份</b><span>SQL-20260902-0152 · Evidence Set v1</span></div>
+              <div class="trace-item"><b>缺失证据</b><span>生产峰值窗口资源余量；生产 ANALYZE 未安排</span></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="report-sample" data-report-sample-pane="runtime" hidden>
+          <section class="section">
+            <div class="report-hero">
+              <div class="report-headline">
+                <div><div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px"><span class="badge danger">P0 · 建议立即处理</span><span class="badge success">规则确认</span><span class="badge ai">AI 已用于中文归纳</span></div><h1>SQL 延迟与 TiKV 热点时间窗一致，优先处置热点而不是改写 SQL</h1><p>影响 payment 支付确认接口，14:03 - 14:16 错误率升至 2.1%、P99 达 6.4 秒；告警窗口内 SQL 计划与扫描量稳定，TiKV 延迟与热点指标同步升高。</p></div>
+                <div class="report-meta"><span class="badge info">E4 证据</span><span class="badge">v8.5.2</span><span class="badge">14:20 生成</span></div>
+              </div>
+            </div>
+            <div class="audience-pane active"><strong>值班负责人 / 管理者摘要：</strong>支付确认链路 P0 告警；证据更支持 TiKV 热点，而不是 SQL 结构退化。先按应急手册缓解热点并观察三项指标，避免同时改动 SQL 引入第二变量。</div>
+            <div class="report-kpis">
+              <div class="report-kpi"><span>业务影响</span><b>2.1%</b><small>支付确认接口错误率</small></div>
+              <div class="report-kpi"><span>P99 延迟</span><b>6.4s</b><small>影响线上交易</small></div>
+              <div class="report-kpi"><span>SQL 稳定性</span><b>稳定</b><small>计划、扫描量与基线接近</small></div>
+              <div class="report-kpi"><span>处置优先级</span><b>立即</b><small>资源热点优先于 SQL 改写</small></div>
+            </div>
+          </section>
+
+          <div class="layout-balanced">
+            <section class="section">
+              <div class="section-header"><div><h2>关键证据</h2><p>每条事实可追溯到冻结证据</p></div><span class="badge success">无冲突证据</span></div>
+              <div class="section-body evidence-list">
+                <div class="evidence-row"><b>EV-SQL-21</b><p>计划摘要、扫描行数和调用量与前一基线窗口接近，SQL 结构无退化迹象。</p><span>Statement Summary · 同时间窗</span></div>
+                <div class="evidence-row"><b>EV-PROM-23</b><p>同一时间窗 TiKV 请求延迟与 Region 热点指标显著升高。</p><span>Prometheus · 14:03 - 14:16</span></div>
+                <div class="evidence-row"><b>EV-TEM-25</b><p>TEM 告警的集群、组件与异常时间窗匹配。</p><span>TEM 告警 · 只读关联</span></div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header"><div><h2>判断依据</h2><p>规则确认与 AI 贡献分开显示</p></div></div>
+              <div class="section-body">
+                <div class="check-list">
+                  <div class="check-row passed"><span class="check-mark">✓</span><span class="check-copy"><strong>RUNTIME_HOTSPOT_001 · 时间窗资源相关性</strong><span>SQL 基线稳定，TiKV 热点和延迟在同一窗口共同异常。</span></span><span class="badge success">确认</span></div>
+                  <div class="check-row warn"><span class="check-mark">AI</span><span class="check-copy"><strong>中文解释与动作排序</strong><span>AI 归纳时间窗关系并解释“相关性不等于物理因果”；未新增事实。</span></span><span class="badge ai">已使用</span></div>
+                </div>
+                <div class="notice info" style="margin-top:10px"><div><strong>当前结论边界</strong><p>时间窗相关性不等于根因已被物理证明，仍需 Region/Store 级确认；TEM 只读能力由连接预检确认，本报告未执行任何告警修改。</p></div></div>
+              </div>
+            </section>
+          </div>
+
+          <section class="section">
+            <div class="section-header"><div><h2>基线窗口与告警窗口</h2><p>同一时间窗内资源指标与告警同步异常。</p></div><span class="badge danger">相关性确认</span></div>
+            <div class="section-body plan-compare">
+              <div class="plan-column">
+                <div class="plan-title"><strong>基线窗口</strong><span class="badge success">13:30 - 13:43</span></div>
+                <div class="plan-node">TiKV P99 ≈ 18ms · Region 热点无</div>
+                <div class="plan-node">错误率 0.1% · SQL 计划与扫描量正常</div>
+                <div class="compare-bar"><div class="compare-label"><span>资源负载</span><b>低</b></div><div class="bar-track"><div class="bar-fill good" style="width:12%"></div></div></div>
+              </div>
+              <div class="plan-column">
+                <div class="plan-title"><strong>告警窗口</strong><span class="badge danger">14:03 - 14:16</span></div>
+                <div class="plan-node">TiKV P99 ≈ 220ms · Region 热点高</div>
+                <div class="plan-node">错误率 2.1% · SQL 计划与扫描量保持稳定</div>
+                <div class="compare-bar"><div class="compare-label"><span>资源负载</span><b>高</b></div><div class="bar-track"><div class="bar-fill" style="width:94%"></div></div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><div><h2>建议动作</h2><p>按预期收益、实施风险和验证成本排序。</p></div><span class="badge danger">不自动执行</span></div>
+            <div class="section-body action-list">
+              <div class="action-item"><span class="action-rank">1</span><div><h3>由 SRE/DBA 先验证并缓解 TiKV 热点</h3><p>核对热点 Region、Store 与业务 Key 范围，取得生产资源处置审批；按既有应急手册选择低风险缓解动作，保持 SQL 与计划不变以避免同时引入第二变量。</p></div><div class="action-side"><b>预期收益</b><span>三项指标 15 分钟内共同回落</span><b>风险</b><span>高：生产资源处置需审批</span><b>依据</b><span>RUNTIME_HOTSPOT_001 · 应急手册</span></div></div>
+              <div class="action-item"><span class="action-rank">2</span><div><h3>缓解后复核 SQL 证据</h3><p>确认 SQL 基线未变、热点指标回落后，再决定是否进入 SQL 调优流程；保留 Region、Store 与时间窗证据。</p></div><div class="action-side"><b>目标</b><span>P99 / 错误率回到客户基线阈值</span><b>回滚</b><span>若副作用超阈值，按客户应急手册立即回滚</span><b>证据升级</b><span>Region/Store 确认后闭环</span></div></div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><div><h2>可追溯信息</h2><p>避免只展示“AI 认为”。</p></div></div>
+            <div class="section-body trace-grid">
+              <div class="trace-item"><b>规则与版本</b><span>RUNTIME_HOTSPOT_001 v1.0 · 适用 TiDB v8.5.x</span></div>
+              <div class="trace-item"><b>官方来源</b><span>SQL 性能调优、TiKV 热点排查、TEM 告警</span></div>
+              <div class="trace-item"><b>AI 运行记录</b><span>gpt-5.6-sol · 脱敏输入摘要 sha256:cccc...</span></div>
+              <div class="trace-item"><b>发布校验</b><span>9 / 9 通过 · 无无证据结论</span></div>
+              <div class="trace-item"><b>案例身份</b><span>SQL-20260902-1420 · Evidence Set v1</span></div>
+              <div class="trace-item"><b>缺失证据</b><span>Region/Store 级物理确认；缓解动作后的对照指标</span></div>
+            </div>
+          </section>
+        </div>
 
         <div class="page-footer"><p>报告默认 DBA/SRE 视角；管理者和研发视角只改变表达层，不改变事实和证据。</p><div class="footer-actions"><button class="button prev-page" data-prev="analysis" type="button">← 查看分析过程</button><button class="button primary next-page" data-next="verify" type="button">进入验证闭环 →</button></div></div>
       </section>
@@ -2681,6 +2848,12 @@ SELECT ... ;</div></div></div>
         }, index * 720));
       });
     });
+
+    function selectReportSample(key) {
+      document.querySelectorAll(".report-sample-tab").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.reportSample === key)));
+      document.querySelectorAll(".report-sample").forEach((pane) => { pane.hidden = pane.dataset.reportSamplePane !== key; });
+    }
+    document.querySelectorAll(".report-sample-tab").forEach((button) => button.addEventListener("click", () => selectReportSample(button.dataset.reportSample)));
 
     window.addEventListener("hashchange", () => {
       const hashPage = location.hash ? location.hash.slice(1) : "install";
