@@ -86,14 +86,42 @@ def test_slow_query_registry_collects_result_rows(pack_id: str) -> None:
     queries = query_pack(pack_id)
 
     assert queries["slow_query.current_user"].pack_revision == (f"{pack_id}/queries-v2")
+    revision = 3 if pack_id == "tidb-8.5" else 2
     assert queries["slow_query.current_user"].query_revision == (
-        f"{pack_id}/slow_query.current_user-v2"
+        f"{pack_id}/slow_query.current_user-v{revision}"
     )
     assert "result_rows" in queries["slow_query.current_user"].result_columns
     assert queries["slow_query.cross_user"].query_revision == (
-        f"{pack_id}/slow_query.cross_user-v2"
+        f"{pack_id}/slow_query.cross_user-v{revision}"
     )
     assert "result_rows" in queries["slow_query.cross_user"].result_columns
+
+
+def test_tidb_observation_queries_project_timestamp_columns_as_utc_rfc3339() -> None:
+    queries = query_pack("tidb-8.5")
+    utc_format = "'%%Y-%%m-%%dT%%H:%%i:%%s.%%fZ'"
+
+    current_user = queries["slow_query.current_user"]
+    assert (
+        "DATE_FORMAT(CONVERT_TZ(time, @@session.time_zone, '+00:00'), "
+        f"{utc_format}) AS observed_at"
+    ) in current_user.sql
+    assert current_user.query_revision == "tidb-8.5/slow_query.current_user-v3"
+
+    cross_user = queries["slow_query.cross_user"]
+    assert (
+        "DATE_FORMAT(CONVERT_TZ(time, @@session.time_zone, '+00:00'), "
+        f"{utc_format}) AS observed_at"
+    ) in cross_user.sql
+    assert cross_user.query_revision == "tidb-8.5/slow_query.cross_user-v3"
+
+    statement_summary = queries["statement_summary.cross_user"]
+    for column in ("summary_begin_time", "summary_end_time", "first_seen", "last_seen"):
+        assert (
+            f"DATE_FORMAT(CONVERT_TZ({column}, @@session.time_zone, '+00:00'), "
+            f"{utc_format}) AS {column}"
+        ) in statement_summary.sql
+    assert statement_summary.query_revision == "tidb-8.5/statement_summary.cross_user-v2"
 
 
 @pytest.mark.parametrize("pack_id", ["tidb-8.5", "pingkaidb-7.1"])

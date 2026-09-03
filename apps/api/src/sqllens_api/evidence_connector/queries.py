@@ -189,6 +189,10 @@ _M0_STATISTICS_SQL = (
 _M0_STATISTICS_BOUND_PREFIX = "SHOW STATS_HEALTHY WHERE db_name = "
 _M0_STATISTICS_BOUND_MIDDLE = " AND table_name = "
 _M0_STATISTICS_BOUND_SUFFIX = " AND partition_name = ''"
+_UTC_RFC3339_DRIVER_FORMAT = "%%Y-%%m-%%dT%%H:%%i:%%s.%%fZ"
+_STATEMENT_SUMMARY_TIMESTAMP_COLUMNS = frozenset(
+    {"summary_begin_time", "summary_end_time", "first_seen", "last_seen"}
+)
 
 
 def validate_server_query(query: ServerQuery) -> None:
@@ -567,8 +571,22 @@ def _query(
     )
 
 
+def _utc_timestamp_projection(column: str, *, alias: str | None = None) -> str:
+    output_name = alias or column
+    return (
+        f"DATE_FORMAT(CONVERT_TZ({column}, @@session.time_zone, '+00:00'), "
+        f"'{_UTC_RFC3339_DRIVER_FORMAT}') AS {output_name}"
+    )
+
+
 def _build_query_pack(pack_id: str) -> Mapping[str, ServerQuery]:
-    statement_columns = ",\n        ".join(_STATEMENT_SUMMARY_COLUMNS)
+    projects_utc_timestamps = pack_id == "tidb-8.5"
+    statement_columns = ",\n        ".join(
+        _utc_timestamp_projection(column)
+        if projects_utc_timestamps and column in _STATEMENT_SUMMARY_TIMESTAMP_COLUMNS
+        else column
+        for column in _STATEMENT_SUMMARY_COLUMNS
+    )
     common_queries = (
         _query(
             pack_id,
@@ -589,13 +607,17 @@ SELECT
         _query(
             pack_id,
             "slow_query.current_user",
-            _slow_query_sql("slow_query", current_user_only=True),
+            _slow_query_sql(
+                "slow_query",
+                current_user_only=True,
+                project_utc_timestamp=projects_utc_timestamps,
+            ),
             parameters=("window_start", "window_end", "schema_name", "sql_digest"),
             result_columns=_SLOW_QUERY_COLUMNS,
             required_capability=None,
             cardinality=QueryCardinality.BOUNDED_ROWS,
             budget=_budget(timeout_ms=5_000, max_rows=200, max_bytes=524_288),
-            revision=2,
+            revision=3 if projects_utc_timestamps else 2,
         ),
         _query(
             pack_id,
@@ -616,17 +638,22 @@ LIMIT 200
             required_capability="process",
             cardinality=QueryCardinality.BOUNDED_ROWS,
             budget=_budget(timeout_ms=8_000, max_rows=200, max_bytes=524_288),
+            revision=2 if projects_utc_timestamps else 1,
         ),
         _query(
             pack_id,
             "slow_query.cross_user",
-            _slow_query_sql("cluster_slow_query", current_user_only=False),
+            _slow_query_sql(
+                "cluster_slow_query",
+                current_user_only=False,
+                project_utc_timestamp=projects_utc_timestamps,
+            ),
             parameters=("window_start", "window_end", "schema_name", "sql_digest"),
             result_columns=("instance", *_SLOW_QUERY_COLUMNS),
             required_capability="process",
             cardinality=QueryCardinality.BOUNDED_ROWS,
             budget=_budget(timeout_ms=8_000, max_rows=200, max_bytes=524_288),
-            revision=2,
+            revision=3 if projects_utc_timestamps else 2,
         ),
     )
     m0_queries: tuple[ServerQuery, ...] = ()
@@ -725,14 +752,24 @@ LIMIT 20
 """
 
 
-def _slow_query_sql(table: str, *, current_user_only: bool) -> str:
+def _slow_query_sql(
+    table: str,
+    *,
+    current_user_only: bool,
+    project_utc_timestamp: bool,
+) -> str:
     instance_projection = "    instance,\n" if table == "cluster_slow_query" else ""
+    observed_at_projection = (
+        _utc_timestamp_projection("time", alias="observed_at")
+        if project_utc_timestamp
+        else "time AS observed_at"
+    )
     current_user_predicate = (
         "  AND user = SUBSTRING_INDEX(CURRENT_USER(), '@', 1)\n" if current_user_only else ""
     )
     return f"""\
 SELECT
-{instance_projection}    time AS observed_at,
+{instance_projection}    {observed_at_projection},
     db AS schema_name,
     digest,
     plan_digest,
