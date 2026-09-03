@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQLLens 诊断工具原型 · 范围 v4</title>
+<style>
+:root{
+  --bg:#f4f7f6;--card:#fff;--ink:#1a2420;--muted:#5b6962;--line:#d8e2dd;
+  --pri:#176b4b;--pri-soft:#e2f1e9;--warn:#8a5a00;--warn-soft:#fdf3dc;
+  --err:#b3261e;--err-soft:#fdecea;--blue:#2d6290;--blue-soft:#e7f0f8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.6;font-size:14px}
+.topbar{background:var(--card);border-bottom:1px solid var(--line);padding:10px 24px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:5}
+.logo{font-weight:700;font-size:15px;color:var(--pri)}
+.steps{display:flex;gap:6px;flex:1}
+.step{padding:5px 14px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--muted);cursor:pointer;background:#fff}
+.step.active{background:var(--pri);color:#fff;border-color:var(--pri)}
+.step.done{color:var(--pri);border-color:var(--pri)}
+.wrap{max-width:960px;margin:20px auto;padding:0 16px}
+.screen{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:26px;margin-bottom:18px;display:none}
+.screen.active{display:block}
+.screen>h2{font-size:16px;margin-bottom:4px}
+.screen .sub{color:var(--muted);font-size:12.5px;margin-bottom:16px}
+.sec-title{font-size:14px;font-weight:600;margin:18px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+label{display:block;font-size:12.5px;margin:10px 0 4px;color:var(--muted)}
+input,textarea,select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;font-family:inherit;background:#fff;color:var(--ink)}
+textarea{resize:vertical}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.row>div{flex:1;min-width:160px}
+.tabs{display:flex;gap:8px;margin:14px 0 0}
+.tab{padding:6px 14px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:13px;background:#fff;color:var(--muted)}
+.tab.active{background:var(--pri);color:#fff;border-color:var(--pri)}
+.panel{display:none;margin-top:10px}
+.panel.active{display:block}
+.btn{display:inline-block;background:var(--pri);color:#fff;border:none;border-radius:6px;padding:9px 20px;font-size:13.5px;cursor:pointer}
+.btn:hover{background:#10583d}
+.btn.ghost{background:#fff;color:var(--pri);border:1px solid var(--pri)}
+.btn.small{padding:5px 12px;font-size:12px}
+.btn.row-actions{margin-top:14px}
+.code{background:#0f1f18;color:#c9e8d8;border-radius:6px;padding:10px 12px;font-family:Menlo,Consolas,monospace;font-size:12px;overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:break-all}
+.code.inline{display:inline-block;padding:2px 8px;margin:0 2px}
+.hint{font-size:12px;color:var(--muted);margin-top:6px}
+.alert{padding:10px 12px;border-radius:6px;font-size:13px;margin:10px 0}
+.alert.ok{background:var(--pri-soft);color:var(--pri)}
+.alert.err{background:var(--err-soft);color:var(--err)}
+.alert.warn{background:var(--warn-soft);color:var(--warn)}
+.alert.info{background:var(--blue-soft);color:var(--blue)}
+.badge{display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;margin-right:6px;vertical-align:middle}
+.badge.p1{background:#fde8e8;color:#b3261e}
+.badge.p2{background:var(--warn-soft);color:var(--warn)}
+.badge.src{background:var(--pri-soft);color:var(--pri)}
+.badge.ai{background:#eee9f6;color:#68518c}
+.badge.mode{background:var(--blue-soft);color:var(--blue)}
+table{width:100%;border-collapse:collapse;font-size:12.5px;margin:10px 0}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:#f8fbf9;font-weight:600}
+.ev{color:var(--pri);cursor:pointer;text-decoration:underline;text-decoration-style:dotted}
+.four{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0;background:#fbfdfc}
+.four .kv{display:flex;gap:8px;font-size:13px;margin:5px 0;align-items:flex-start}
+.four .kv b{min-width:88px;color:var(--pri);font-weight:600;flex-shrink:0}
+.four .kv .formula{font-size:11px;color:var(--muted)}
+.kv-line{display:flex;gap:8px;font-size:13px;margin:4px 0}
+.kv-line b{min-width:88px;color:var(--muted);font-weight:600}
+.note{font-size:12px;color:var(--muted);border-left:3px solid var(--line);padding-left:10px;margin-top:14px}
+.footer-actions{display:flex;gap:10px;margin-top:18px;justify-content:space-between}
+.modal-bg{position:fixed;inset:0;background:rgba(15,25,20,.45);display:none;align-items:center;justify-content:center;z-index:20;padding:20px}
+.modal-bg.visible{display:flex}
+.modal{background:#fff;border-radius:12px;max-width:720px;width:100%;max-height:80vh;overflow:auto;padding:20px}
+.modal h3{font-size:15px;margin-bottom:8px}
+.modal .close{float:right;border:none;background:none;font-size:18px;cursor:pointer;color:var(--muted)}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#18231e;color:#fff;padding:9px 18px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:30}
+.toast.visible{opacity:1}
+.mono{font-family:Menlo,Consolas,monospace;font-size:12px}
+.rpt-switch{display:flex;gap:8px;margin:14px 0 4px}
+.rpt-tab{padding:6px 14px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:13px;background:#fff;color:var(--muted)}
+.rpt-tab.active{background:var(--pri);color:#fff;border-color:var(--pri)}
+.rpt-sample{display:none}
+.rpt-sample.active{display:block}
+.h-seg{font-size:14px;font-weight:700;margin:16px 0 6px;display:flex;align-items:center;gap:8px}
+.h-seg .no{color:var(--pri);background:var(--pri-soft);border-radius:4px;padding:0 7px;font-size:12px}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:10px 0}
+.kpi{background:#f8fbf9;border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.kpi b{display:block;font-size:17px;color:var(--ink)}
+.kpi span{font-size:11.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="logo">SQLLens</span>
+  <div class="steps">
+    <div class="step active" data-step="input" onclick="go(0)">① 开始诊断</div>
+    <div class="step" data-step="ai" onclick="go(1)">② AI 增强配置（可选）</div>
+    <div class="step" data-step="report" onclick="go(2)">③ 诊断报告</div>
+  </div>
+  <span style="font-size:11px;color:var(--muted)">范围 v4 原型 · 规则内核 + AI 可选</span>
+</div>
+
+<div class="wrap">
+
+  <!-- ============ 屏 1：开始诊断 ============ -->
+  <section class="screen active" id="scr-input">
+    <h2>开始诊断</h2>
+    <div class="sub">连接 TiDB 只读源或上传 Plan Replayer 诊断包；连接与 AI 配置保存在本机加密缓存，诊断数据仅会话内存、不落盘。</div>
+
+    <div class="sec-title">TiDB 连接（只读账户）</div>
+    <div class="row">
+      <div><label>Host</label><input id="host" value="127.0.0.1"></div>
+      <div><label>Port</label><input id="port" value="4000"></div>
+      <div><label>User</label><input id="user" value="sqllens_ro"></div>
+      <div><label>Password</label><input id="pass" type="password" placeholder="仅保存在本机加密缓存"></div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn small" onclick="testConn()">测试连接</button>
+      <button class="btn small ghost" onclick="genAccountScript()">生成只读账号脚本</button>
+      <button class="btn small ghost" onclick="clearCache()">清除缓存配置</button>
+      <span id="connMsg"></span>
+    </div>
+    <div id="acctScript" style="display:none">
+      <div class="hint">以下脚本在 TiDB 客户端执行一次即可（<span class="mono">PROCESS</span> 用于跨用户慢查询视图，可省略；生产环境建议把 <span class="mono">'%'</span> 替换为应用主机 IP）：</div>
+      <div class="code" id="acctScriptCode"></div>
+      <button class="btn small" onclick="copyText('acctScriptCode','账号脚本已复制')">复制脚本</button>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" onclick="inTab(0)">在线模式 · 抓取慢 SQL</div>
+      <div class="tab" onclick="inTab(1)">离线模式 · Plan Replayer</div>
+    </div>
+
+    <div class="panel active" id="inp0">
+      <label>已连接的慢查询（选择一条，或粘贴 SQL 文本）</label>
+      <div id="slowList">
+        <div class="slow-row" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;cursor:pointer" onclick="pickSlow(this)">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><span class="badge p2">P2</span><b class="mono">SELECT ... FROM index_orders WHERE customer_id=? AND state=?</b><span style="color:var(--muted);font-size:12px">20 次/分钟 · 全表扫描 · 65,537 keys/次</span></div>
+        </div>
+        <div class="slow-row" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;cursor:pointer" onclick="pickSlow(this)">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><span class="badge p2">P2</span><b class="mono">SELECT ... FROM stats_orders WHERE sku=4242</b><span style="color:var(--muted);font-size:12px">统计信息滞后 · 估算 32,768 行 / 实际 65,536 行</span></div>
+        </div>
+      </div>
+      <textarea rows="3" placeholder="未连接时可粘贴 SQL 文本，例如：SELECT * FROM orders WHERE user_id = ? AND order_date > '2026-01-01';"></textarea>
+      <div class="hint">在线模式通过只读连接执行：慢查询摘要 → 选择 SQL → 采集执行计划 / 统计信息 / Schema。</div>
+    </div>
+
+    <div class="panel" id="inp1">
+      <label>方式一 · 上传诊断包（zip）</label>
+      <input type="file" accept=".zip" onchange="toast('（原型示意）已选择诊断包，正式版在此接入解析')">
+      <label>方式二 · 复制脚本到 TiDB 客户端执行（自动生成）</label>
+      <div class="code" id="dumpScript">PLAN REPLAYER DUMP EXPLAIN ANALYZE
+SELECT * FROM orders WHERE user_id = ? AND order_date &gt; '2026-01-01';</div>
+      <button class="btn small" onclick="copyText('dumpScript','DUMP 脚本已复制')">复制脚本</button>
+      <div class="hint">执行后按提示获取 <span class="mono">tidb_last_plan_replayer_token</span> 指向的 zip 文件，回到本页上传即可。</div>
+    </div>
+
+    <div class="footer-actions">
+      <span class="hint">连接信息与 AI 配置存于本机加密缓存（AES），下次打开自动带出；诊断数据（SQL / 证据 / 报告）仅会话内存。</span>
+      <button class="btn" onclick="go(1)">下一步：AI 配置（可选）→</button>
+    </div>
+  </section>
+
+  <!-- ============ 屏 2：AI 配置（可选） ============ -->
+  <section class="screen" id="scr-ai">
+    <h2>AI 增强配置（可选）</h2>
+    <div class="sub">不配置则使用纯规则模式（零外部依赖、零数据出本机）。配置后 AI 仅做归纳润色与多轮追问，不新增诊断结论。</div>
+
+    <div class="row">
+      <div><label>接口协议</label><select id="proto"><option>OpenAI 兼容</option><option>Anthropic 兼容</option></select></div>
+      <div style="flex:2"><label>Base URL</label><input id="baseUrl" value="https://api.deepseek.com/v1" placeholder="或公司私有部署地址（vLLM / One-API 等，兼容 OpenAI 约束接口）"></div>
+    </div>
+    <div class="row">
+      <div><label>API Key</label><input id="apiKey" type="password" placeholder="sk-...（客户自带 Key，仅本机加密缓存）"></div>
+      <div><label>模型名</label><input id="model" placeholder="deepseek-chat / 或点击「识别模型」选择"></div>
+    </div>
+
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn small" onclick="aiTest()">连接测试</button>
+      <button class="btn small ghost" onclick="aiList()">识别模型</button>
+      <select id="simScene" title="原型演示：模拟不同故障场景" style="width:auto">
+        <option value="ok">演示场景：成功</option>
+        <option value="net">演示场景：网络不可达</option>
+        <option value="401">演示场景：401 Key 无效</option>
+        <option value="403">演示场景：403 权限不足</option>
+        <option value="model">演示场景：模型不存在</option>
+        <option value="proto">演示场景：协议不兼容</option>
+      </select>
+      <span class="hint" style="margin:0">（正式版为真实请求；此处下拉用于快速验收错误分类展示）</span>
+    </div>
+    <div id="aiMsg"></div>
+
+    <div class="hint">覆盖：DeepSeek / Qwen / Kimi / GPT / Claude，以及公司内部私有大模型（非标准 base_url，适配通用约束接口）。连接测试通过后才允许保存启用；调用失败自动降级规则模式。</div>
+
+    <div class="footer-actions">
+      <button class="btn ghost" onclick="go(0)">← 返回</button>
+      <div style="display:flex;gap:10px">
+        <button class="btn ghost" onclick="useRules()">跳过，使用规则模式（默认）</button>
+        <button class="btn" onclick="go(2)">开始诊断 →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 屏 3：诊断报告 ============ -->
+  <section class="screen" id="scr-report">
+    <h2>SQL 优化诊断报告</h2>
+    <div class="sub">专业六段 · 结论均由规则引擎基于真实证据产生（可复现、可审计）；AI 仅归纳润色。</div>
+    <div class="alert info" id="reportMode">当前为规则模式输出（未配置 AI）。配置 AI 后可获得归纳润色与多轮追问；AI 故障时同样降级为本模式。</div>
+
+    <div class="rpt-switch">
+      <div class="rpt-tab active" onclick="rptTab(0)">样例一 · 索引访问</div>
+      <div class="rpt-tab" onclick="rptTab(1)">样例二 · 统计偏差</div>
+      <div class="rpt-tab" onclick="rptTab(2)">样例三 · 热点重复</div>
+    </div>
+
+    <!-- 样例一 · 索引访问 -->
+    <div class="rpt-sample active" id="rpt0">
+      <div class="h-seg"><span class="no">一</span>结论 <span class="badge p2">P2</span><span class="badge src">规则确认</span></div>
+      <p>该查询因谓词不可 Sargable（<span class="mono">date(order_date)</span> 包裹列），导致 <span class="mono">orders</span> 表全表扫描：10 分钟窗口 <b>842 次调用、平均扫描 126 万行、P95 2.8s</b>，扫描/返回比 3150:1。现有索引未覆盖过滤顺序，建议优先在隔离环境验证复合索引候选。<span class="hint">P 级判定（M0 契约）：默认 P2；仅 p95 ≥ 5s 且 24h 执行 ≥ 20 次升 P1。本样例 842 次 ≥ 20 次，但 P95 2.8s 未达 5s，故为 P2。</span></p>
+
+      <div class="h-seg"><span class="no">二</span>证据（点击查看原始证据）</div>
+      <table>
+        <tr><th>证据</th><th>内容</th><th>来源</th></tr>
+        <tr><td>运行表现</td><td>842 次调用 · P95 2.8s · 平均扫描 1,263,814 行 · 返回约 400 行</td><td><span class="ev" onclick="showEv('ev1')">Slow Query · 10 分钟窗口 →</span></td></tr>
+        <tr><td>执行计划</td><td><span class="mono">TableFullScan(orders)</span> · 扫描/返回比 3150:1 · 无索引访问路径</td><td><span class="ev" onclick="showEv('ev2')">Plan Replayer / EXPLAIN →</span></td></tr>
+        <tr><td>索引覆盖</td><td>现有索引未匹配 <span class="mono">tenant_id, status, created_at</span> 过滤顺序</td><td><span class="ev" onclick="showEv('ev3')">Schema 元数据 →</span></td></tr>
+      </table>
+
+      <div class="h-seg"><span class="no">三</span>问题分析</div>
+      <p>谓词对 <span class="mono">order_date</span> 左列施加函数（<span class="mono">DATE()</span>），优化器无法利用 <span class="mono">idx_tenant_created(tenant_id, created_at)</span> 形成范围扫描，回退为全表扫描；扫描 126 万行仅返回约 400 行（3150:1）。当前没有证据表明需要扩容——瓶颈在访问路径，不在资源。</p>
+
+      <div class="h-seg"><span class="no">四</span>变更建议 <span class="badge src">规则 + 确定性估算</span></div>
+      <div class="four">
+        <div class="kv"><b>变更操作</b><span>在隔离环境验证复合索引候选：<span class="code inline">CREATE INDEX idx_tenant_status_created ON orders(tenant_id, status, created_at);</span> 并对比新旧计划的扫描行数与 P95。</span></div>
+        <div class="kv"><b>风险提示</b><span>TiDB 在线 DDL，不阻塞读写；写入期间有写放大与临时空间开销，建议业务低峰执行；索引写入路径将承担 1 次/行的额外写入成本。</span></div>
+        <div class="kv"><b>成本预估</b><span>预计 <b>15~30 秒</b>（126 万行 × 约 32B/行 ≈ 40MB 索引存储；构建速率按 5 万行/秒保守档）。<span class="formula">公式：行数 ÷ 保守构建速率；存储 = Σ索引列字节宽 × 行数 × 1.5</span></span></div>
+        <div class="kv"><b>收益预估</b><span>扫描行数 <b>126 万 → 约 842 行</b>（-99.9%，按过滤基数估算）；P95 预估 <b>2.8s → &lt; 0.5s</b>。<span class="formula">公式：索引后扫描 ≈ 返回行数 × 回表系数；同构真实 A/B 实测（2026-09-03 TiDB v8.5.8 证据包）：65,537 keys → 2 keys，P95 66ms → 4ms</span></span></div>
+      </div>
+
+      <div class="h-seg"><span class="no">五</span>验证方法</div>
+      <p>隔离环境对相同参数分布运行普通 <span class="mono">EXPLAIN</span> 与压测：确认访问方式由 <span class="mono">TableFullScan</span> 变为 <span class="mono">IndexRangeScan</span>；扫描行数下降 ≥ 90%、P95 &lt; 500ms、写入回归 ≤ 5% 为达标。</p>
+
+      <div class="h-seg"><span class="no">六</span>回滚步骤</div>
+      <p><span class="mono">DROP INDEX idx_tenant_status_created ON orders;</span>（仅当收益或写入开销不达标时在隔离环境执行；生产环境不执行任何自动变更）。</p>
+    </div>
+
+    <!-- 样例二 · 统计偏差 -->
+    <div class="rpt-sample" id="rpt1">
+      <div class="h-seg"><span class="no">一</span>结论 <span class="badge p2">P2</span><span class="badge src">规则确认</span><span class="badge ai">AI 已降级 · 模型超时</span></div>
+      <p>执行计划对核心表估算 120 行，实际运行证据为 <b>18 万行</b>（偏差约 1500 倍），足以改变 Join 顺序：对账任务运行时间从 4 分钟升至 <b>27 分钟</b>，已接近批处理窗口上限。应先验证统计，而不是直接加索引。<span class="hint">P2 判定：批处理场景无 p95 延迟口径，按 M0 契约默认 P2。本轮 AI 调用超时，报告由确定性规则生成，事实与动作不受影响。</span></p>
+
+      <div class="h-seg"><span class="no">二</span>证据（点击查看原始证据）</div>
+      <table>
+        <tr><th>证据</th><th>内容</th><th>来源</th></tr>
+        <tr><td>估算偏差</td><td><span class="mono">estRows 120</span> vs 运行时 <span class="mono">rows 180,000</span> · 偏差约 1500 倍</td><td><span class="ev" onclick="showEv('ev4')">EXPLAIN + 运行统计 →</span></td></tr>
+        <tr><td>统计健康</td><td>目标表统计更新时间早于最近一次大批量导入</td><td><span class="ev" onclick="showEv('ev5')">STATS_HEALTHY / STATS_META →</span></td></tr>
+        <tr><td>业务影响</td><td>对账任务 4 → 27 分钟，接近批处理窗口上限</td><td><span class="ev" onclick="showEv('ev6')">任务运行日志 →</span></td></tr>
+      </table>
+
+      <div class="h-seg"><span class="no">三</span>问题分析</div>
+      <p>统计信息在最近一次大批量导入前生成：优化器按过期基数选择小表驱动 Join，而实际行数是估算的 1500 倍，Join 顺序与中间结果规模全面失真。该场景根因在统计时效，不在索引缺失——直接建索引会掩盖问题且难以验证收益归因。</p>
+
+      <div class="h-seg"><span class="no">四</span>变更建议 <span class="badge src">规则 + 确定性估算</span></div>
+      <div class="four">
+        <div class="kv"><b>变更操作</b><span>在隔离环境执行：<span class="code inline">ANALYZE TABLE billing_order;</span> 复现当前统计与计划后刷新并对比 Join 顺序与任务耗时。</span></div>
+        <div class="kv"><b>风险提示</b><span>ANALYZE 为在线操作，占用 1 个 TiKV 读线程采样；建议避开业务高峰；先隔离验证，不直接在生产刷新。</span></div>
+        <div class="kv"><b>成本预估</b><span>预计 <b>1~3 分钟</b>（18 万行级表 + 采样开销；同构真实实测：13.1 万行 ANALYZE 耗时 0.8s）。<span class="formula">公式：ANALYZE 时长 ≈ 行数 ÷ 采样速率 × 列数系数</span></span></div>
+        <div class="kv"><b>收益预估</b><span>估算偏差 <b>1500 倍 → &lt; 10 倍</b>；Join 顺序稳定后批处理耗时预估回到 <b>6 分钟以内</b>。<span class="formula">依据：真实证据包 stats_orders 实验——ANALYZE 后 Healthy 0→100，估算与实际行数一致</span></span></div>
+      </div>
+
+      <div class="h-seg"><span class="no">五</span>验证方法</div>
+      <p>刷新后对比 <span class="mono">EXPLAIN</span> 的 estRows 与实际行数、Join 顺序与批处理耗时：估算偏差 &lt; 10 倍、Join 顺序稳定、批处理回到 6 分钟以内为达标。</p>
+
+      <div class="h-seg"><span class="no">六</span>回滚步骤</div>
+      <p>若计划退化，不在生产执行统计刷新；保留原统计与计划证据并重新评估绑定候选（无需数据回滚，统计刷新可重做）。</p>
+    </div>
+
+    <!-- 样例三 · 热点重复 -->
+    <div class="rpt-sample" id="rpt2">
+      <div class="h-seg"><span class="no">一</span>结论 <span class="badge p2">P2</span><span class="badge src">规则确认 · 真实证据</span></div>
+      <p>同一 SQL Digest 在一分钟窗口内 <b>执行 20 次</b>，每次全表扫描 <b>65,537 keys</b>，加权扫描量 1,310,740 keys；属于高频重复扫描（热点重复），单次延迟不高但累计消耗显著。<span class="hint">P2 判定：p95 66ms 未达 5s 阈值；若生产窗口 p95 ≥ 5s 且执行 ≥ 20 次将自动升 P1。</span></p>
+
+      <div class="h-seg"><span class="no">二</span>证据（点击查看原始证据）</div>
+      <table>
+        <tr><th>证据</th><th>内容</th><th>来源</th></tr>
+        <tr><td>执行频次</td><td>digest <span class="mono">8c27725d…</span> 一分钟窗口 exec_count=20 · 加权 1,310,740 keys</td><td><span class="ev" onclick="showEv('ev7')">Statement Summary →</span></td></tr>
+        <tr><td>扫描量</td><td>avg_total_keys 65,537 / 次 · plan_digest <span class="mono">493f7861…</span>（全表扫描计划）</td><td><span class="ev" onclick="showEv('ev8')">Statement Summary →</span></td></tr>
+        <tr><td>调用削减实测</td><td>窗口内调用 20 → 5 次后，加权扫描 1,310,740 → 327,685（-75%）</td><td><span class="ev" onclick="showEv('ev9')">A/B 实测 · 真实 TiDB v8.5.8 →</span></td></tr>
+      </table>
+
+      <div class="h-seg"><span class="no">三</span>问题分析</div>
+      <p>该 SQL 单次执行仅 66ms（p95），但访问路径为全表扫描（每次 65,537 keys），且被应用以循环方式高频调用（典型 N+1 模式）：同一分钟窗口 20 次，加权扫描 131 万 keys。延迟问题不大，但重复扫描放大 CPU/IO 消耗，且随业务量线性恶化。</p>
+
+      <div class="h-seg"><span class="no">四</span>变更建议 <span class="badge src">规则 + 实测参考</span></div>
+      <div class="four">
+        <div class="kv"><b>变更操作</b><span>应用层把循环单条查询合并为批量查询：<span class="code inline">SELECT ... FROM index_orders WHERE customer_id IN (?, ?, ...) AND state=?</span>（或复用 Prepared Statement 连接）；可选配合索引 <span class="code inline">idx_customer_state(customer_id, state)</span> 消除全表扫描。</span></div>
+        <div class="kv"><b>风险提示</b><span>应用代码改动，需业务方确认批量语义一致（返回顺序、空集处理）；批量上限控制参数数量，防语句超长。</span></div>
+        <div class="kv"><b>成本预估</b><span>预计 <b>1~2 个研发工时</b>（代码改动 + 回归测试）；若仅加索引则 15~30 秒在线 DDL。<span class="formula">公式：工时估算按改动点数量（循环调用点 1 处 + 测试）；索引成本同样例一公式</span></span></div>
+        <div class="kv"><b>收益预估</b><span>扫描量 <b>-75%（实测，20→5 次调用）</b>；若合并为 1 次批量查询 + 索引，预估 <b>-95%</b>。<span class="formula">依据：真实证据包 17-repeated-scan 实测 1,310,740 → 327,685 keys</span></span></div>
+      </div>
+
+      <div class="h-seg"><span class="no">五</span>验证方法</div>
+      <p>改造后在同等窗口对比 Statement Summary 的 exec_count 与加权 keys：目标窗口加权扫描量下降 ≥ 75%，且单次 P95 不回退；业务回归测试确认结果集一致。</p>
+
+      <div class="h-seg"><span class="no">六</span>回滚步骤</div>
+      <p>应用代码回滚到原循环查询版本即可（无 DDL 变更时零数据风险）；如已加索引，<span class="mono">DROP INDEX idx_customer_state;</span>。</p>
+    </div>
+
+    <div class="footer-actions">
+      <button class="btn ghost" onclick="go(1)">← 返回 AI 配置</button>
+      <button class="btn ghost" onclick="go(0)">← 返回开始诊断</button>
+    </div>
+  </section>
+</div>
+
+<!-- 证据弹层 -->
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeEv()">
+  <div class="modal">
+    <button class="close" onclick="closeEv()">×</button>
+    <h3 id="evTitle">原始证据</h3>
+    <div class="code" id="evBody" style="max-height:52vh;overflow:auto"></div>
+    <div class="hint" id="evMeta"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('visible');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('visible'),2200);}
+function copyText(id,msg){var el=document.getElementById(id);var txt=el.textContent;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(()=>toast(msg)).catch(()=>toast('浏览器未开放剪贴板权限，请手动复制'));}else{toast('浏览器未开放剪贴板权限，请手动复制');}}
+function go(i){
+  var screens=[document.getElementById('scr-input'),document.getElementById('scr-ai'),document.getElementById('scr-report')];
+  screens.forEach((s,x)=>s.classList.toggle('active',x===i));
+  document.querySelectorAll('.step').forEach((s,x)=>{s.classList.toggle('active',x===i);s.classList.toggle('done',x<i);});
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function inTab(i){
+  document.querySelectorAll('#scr-input .tab').forEach((t,x)=>t.classList.toggle('active',x===i));
+  document.getElementById('inp0').classList.toggle('active',i===0);
+  document.getElementById('inp1').classList.toggle('active',i===1);
+}
+function pickSlow(row){
+  document.querySelectorAll('.slow-row').forEach(r=>r.style.borderColor='var(--line)');
+  row.style.borderColor='var(--pri)';
+  toast('已选择该慢 SQL，点击「下一步」进入诊断（原型示意）');
+}
+function testConn(){
+  var host=document.getElementById('host').value.trim();
+  var port=document.getElementById('port').value.trim();
+  var msg=document.getElementById('connMsg');
+  if(!host||!port){msg.innerHTML='<span class="alert err" style="display:inline-block;padding:4px 10px;margin:0">连接失败：请填写 Host 与 Port</span>';return;}
+  msg.innerHTML='<span class="alert ok" style="display:inline-block;padding:4px 10px;margin:0">连接成功：TiDB v8.5.8（原型示意）· 只读权限验证通过</span>';
+  toast('连接测试通过（原型示意）');
+}
+function genAccountScript(){
+  var user=document.getElementById('user').value.trim()||'sqllens_ro';
+  var host=document.getElementById('host').value.trim()||'<sqllens-host>';
+  var code="CREATE USER '"+user+"'@'%' IDENTIFIED BY '<设置强密码>';\nGRANT SELECT ON *.* TO '"+user+"'@'%';\nGRANT PROCESS ON *.* TO '"+user+"'@'%';\nSHOW GRANTS FOR '"+user+"'@'%';";
+  document.getElementById('acctScriptCode').textContent=code;
+  document.getElementById('acctScript').style.display='block';
+}
+function clearCache(){document.getElementById('pass').value='';document.getElementById('apiKey').value='';toast('已清除本机缓存配置（原型示意）');}
+function useRules(){document.getElementById('reportMode').className='alert info';document.getElementById('reportMode').innerHTML='当前为规则模式输出（未配置 AI）。配置 AI 后可获得归纳润色与多轮追问；AI 故障时同样降级为本模式。';go(2);}
+function rptTab(i){
+  document.querySelectorAll('.rpt-tab').forEach((t,x)=>t.classList.toggle('active',x===i));
+  document.querySelectorAll('.rpt-sample').forEach((p,x)=>p.classList.toggle('active',x===i));
+}
+function aiTest(){
+  var scene=document.getElementById('simScene').value;
+  var m=document.getElementById('aiMsg');
+  var map={
+    ok:['ok','连接成功：模型可达，最小诊断请求通过。已可保存启用。'],
+    net:['err','连接失败：网络不可达 / 超时 —— 请检查 Base URL 与本机网络（防火墙 / 代理）。'],
+    '401':['err','连接失败：401 Unauthorized —— API Key 无效。请检查 Key 后重试。'],
+    '403':['err','连接失败：403 Forbidden —— Key 权限不足。请确认该 Key 具有模型调用权限。'],
+    model:['err','连接失败：模型不存在 —— 未找到模型名。请点击「识别模型」从可用列表选择。'],
+    proto:['err','连接失败：协议不兼容 —— 该端点不兼容 OpenAI 约束接口。请确认网关适配层。']
+  };
+  var r=map[scene];
+  m.innerHTML='<div class="alert '+r[0]+'">'+r[1]+'</div>';
+  if(scene==='ok'){document.getElementById('reportMode').className='alert ok';document.getElementById('reportMode').innerHTML='AI 增强已启用：报告将包含 AI 归纳润色（结论与证据不变）；调用失败自动降级为规则模式。';toast('AI 连接测试通过');}
+  else{document.getElementById('reportMode').className='alert warn';document.getElementById('reportMode').innerHTML='AI 不可用，已降级为规则模式输出。规则结论、证据与建议不受影响。';}
+}
+function aiList(){
+  var m=document.getElementById('aiMsg');
+  m.innerHTML='<div class="alert ok">识别到 4 个可用模型：<b>deepseek-chat、deepseek-reasoner、qwen-max、kimi-k2</b>（原型示意；正式版调用 /models 接口）。<button class="btn small" style="margin-left:10px" onclick="pickModel()">选择第一个</button></div>';
+}
+function pickModel(){document.getElementById('model').value='deepseek-chat';toast('已选择模型 deepseek-chat');}
+var EV={
+  ev1:['慢查询原始记录（10 分钟窗口）','observed_at\tquery_time\tprocess_keys\tresult_rows\n12:33:34.557\t0.000864\t303\t1\n…（共 32 行，P95 2.8s；完整文件见证据包 06-index-baseline-evidence.txt）','数字来源：冻结契约 fixture diagnosis-report-v1.index-access.review.json'],
+  ev2:['执行计划（普通 EXPLAIN）','TopN · created_at:desc · limit 100\n  └─ Selection · date(created_at)=?\n     └─ TableFullScan · orders · estRows 1,263,814 · 3150:1','数字来源：冻结契约 fixture 同文件'],
+  ev3:['Schema 与索引元数据','orders 现有索引：idx_tenant_created(tenant_id, created_at)\n过滤列顺序：tenant_id, status, created_at —— 未匹配','数字来源：冻结契约 fixture 同文件'],
+  ev4:['EXPLAIN 估算 vs 运行统计','estRows: 120\n实际行数（Statement Summary）: 180,000\n偏差 ≈ 1500 倍','数字来源：冻结契约 fixture diagnosis-report-v1.statistics.review.json'],
+  ev5:['统计健康度','目标表 Last_analyze_time 早于最近一次大批量导入\n（同构真实实测：Healthy 100 → 0，见证据包 14-statistics-delta-poll）','同构真实证据：2026-09-03 TiDB v8.5.8 实验'],
+  ev6:['任务运行日志','对账任务窗口：4 分钟 → 27 分钟','数字来源：冻结契约 fixture 同文件'],
+  ev7:['Statement Summary 原始行','summary_begin_time\t12:34:00 · exec_count=20 · avg_total_keys=65,537 · weighted_total_keys=1,310,740\ndigest 8c27725d5bb319605ec7433f114ddde077401dc4f62174fc58861eee73705f83','真实证据：证据包 16-statement-summary-history-baseline.txt'],
+  ev8:['计划摘要','plan_digest 493f7861144130cbf19abf5305358b3dab302b48b6bb0e8575cffa4588343382\n访问方式：TableFullScan（表仅 PRIMARY 索引）','真实证据：证据包 06-index-baseline-evidence.txt'],
+  ev9:['A/B 实测（调用削减）','窗口 12:39: 执行 5 次 → 加权 327,685 keys\n窗口 12:34: 执行 20 次 → 加权 1,310,740 keys\n削减 75%','真实证据：证据包 17-repeated-scan-call-reduction.out']
+};
+function showEv(key){
+  var e=EV[key];
+  document.getElementById('evTitle').textContent=e[0];
+  document.getElementById('evBody').textContent=e[1];
+  document.getElementById('evMeta').textContent=e[2];
+  document.getElementById('modalBg').classList.add('visible');
+}
+function closeEv(){document.getElementById('modalBg').classList.remove('visible');}
+</script>
+</body>
+</html>
