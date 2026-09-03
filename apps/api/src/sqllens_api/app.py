@@ -19,6 +19,7 @@ from sqllens_api.errors import ApiError, error_response
 from sqllens_api.m0_connection import M0ConnectionStore
 from sqllens_api.m0_diagnosis import M0DiagnosisService
 from sqllens_api.m0_routes import register_m0_connection_routes
+from sqllens_api.v4_routes import register_v4_routes
 from sqllens_api.setup import (
     OWNER_COOKIE_NAME,
     SETUP_COOKIE_NAME,
@@ -338,6 +339,8 @@ def create_app(
         require_owner=require_owner_authenticated,
         require_owner_csrf=require_owner_session,
     )
+
+    register_v4_routes(app)
 
     web_dist = runtime_settings.web_dist_dir
     if isinstance(web_dist, Path) and (web_dist / "index.html").is_file():

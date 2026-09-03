@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sqllens.local/contracts/v4-diagnosis-report.schema.json",
+  "title": "SQLLens v4 Diagnosis Report",
+  "description": "v4 诊断内核输出报告结构（六段 + 变更建议四要素）。priority 仅 P1/P2（无 P0）；P1 条件：p95>=5s 且 24h 执行>=20 次。",
+  "type": "object",
+  "required": ["schema_version", "priority", "mode", "ai_status_zh", "sql_digest", "database", "sections"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "diagnosis-report/v2" },
+    "priority": { "enum": ["P1", "P2"] },
+    "mode": { "enum": ["rules", "rules_ai", "degraded"] },
+    "ai_status_zh": { "type": "string", "minLength": 1 },
+    "sql_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "database": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "sections": {
+      "type": "object",
+      "required": ["conclusion", "evidence", "analysis", "changes", "validation", "rollback"],
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "type": "object",
+          "required": ["text_zh", "rule_ids", "severities"],
+          "additionalProperties": false,
+          "properties": {
+            "text_zh": { "type": "string", "minLength": 1 },
+            "rule_ids": { "type": "array", "items": { "type": "string" } },
+            "severities": { "type": "array", "items": { "enum": ["P1", "P2"] } }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label_zh", "value_zh", "evidence_ids"],
+            "additionalProperties": false,
+            "properties": {
+              "label_zh": { "type": "string", "minLength": 1 },
+              "value_zh": { "type": "string", "minLength": 1 },
+              "evidence_ids": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "analysis": {
+          "type": "object",
+          "required": ["text_zh"],
+          "additionalProperties": false,
+          "properties": {
+            "text_zh": { "type": "string", "minLength": 1 }
+          }
+        },
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "operation_zh", "risk_zh", "cost_zh", "cost_formula_zh",
+              "gain_zh", "gain_formula_zh", "rule_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "operation_zh": { "type": "string", "minLength": 1 },
+              "risk_zh": { "type": "string", "minLength": 1 },
+              "cost_zh": { "type": "string", "minLength": 1 },
+              "cost_formula_zh": { "type": "string", "minLength": 1 },
+              "gain_zh": { "type": "string", "minLength": 1 },
+              "gain_formula_zh": { "type": "string", "minLength": 1 },
+              "rule_id": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text_zh"],
+            "additionalProperties": false,
+            "properties": { "text_zh": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "rollback": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text_zh"],
+            "additionalProperties": false,
+            "properties": { "text_zh": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    }
+  }
+}
