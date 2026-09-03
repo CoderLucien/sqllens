@@ -1,0 +1,45 @@
+{
+  "fixtureRevision": "pingkaidb-7.1.8-5.4/connector-v2",
+  "provenance": {
+    "kind": "documentation-derived-normalized",
+    "runtimeVerified": false,
+    "redaction": "build hash and deployment identity removed",
+    "source": "https://pingkai.cn/docs/pingkaidb/stable/release-7.1.8-5.4"
+  },
+  "identity": {
+    "version": "5.7.25-TiDB-v8.5.4",
+    "version_comment": "PingKaiDB Server, MySQL 5.7 compatible",
+    "tidb_version": "Release Version: v7.1.8-5.4\nOpen-Core Version: v8.5.4\nEdition: PingKaiDB Enterprise\nGit Commit Hash: <redacted>"
+  },
+  "recordings": {
+    "server.identity": {
+      "columns": ["version", "version_comment", "tidb_version"],
+      "rows": [{
+        "version": "5.7.25-TiDB-v8.5.4",
+        "version_comment": "PingKaiDB Server, MySQL 5.7 compatible",
+        "tidb_version": "Release Version: v7.1.8-5.4\nOpen-Core Version: v8.5.4\nEdition: PingKaiDB Enterprise\nGit Commit Hash: <redacted>"
+      }]
+    },
+    "slow_query.current_user": {
+      "columns": ["observed_at", "schema_name", "digest", "plan_digest", "query_time", "parse_time", "compile_time", "cop_time", "process_time", "wait_time", "backoff_time", "total_keys", "process_keys", "mem_max", "disk_max", "result_rows"],
+      "rows": [{
+        "observed_at": "2026-09-02T02:27:00Z",
+        "schema_name": "app_redacted",
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "plan_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+        "query_time": 1.2,
+        "parse_time": 0.002,
+        "compile_time": 0.005,
+        "cop_time": 0.82,
+        "process_time": 0.7,
+        "wait_time": 0.1,
+        "backoff_time": 0.02,
+        "total_keys": 1800,
+        "process_keys": 120,
+        "mem_max": 16384,
+        "disk_max": 0,
+        "result_rows": 8
+      }]
+    }
+  }
+}

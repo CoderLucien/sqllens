@@ -1,0 +1,45 @@
+{
+  "fixtureRevision": "tidb-8.5.4/connector-v2",
+  "provenance": {
+    "kind": "documentation-derived-normalized",
+    "runtimeVerified": false,
+    "redaction": "build hash and deployment identity removed",
+    "source": "https://docs.pingcap.com/tidb/stable/release-8.5.4/"
+  },
+  "identity": {
+    "version": "5.7.25-TiDB-v8.5.4",
+    "version_comment": "TiDB Server Community Edition, MySQL 5.7 compatible",
+    "tidb_version": "Release Version: v8.5.4\nEdition: Community\nGit Commit Hash: <redacted>"
+  },
+  "recordings": {
+    "server.identity": {
+      "columns": ["version", "version_comment", "tidb_version"],
+      "rows": [{
+        "version": "5.7.25-TiDB-v8.5.4",
+        "version_comment": "TiDB Server Community Edition, MySQL 5.7 compatible",
+        "tidb_version": "Release Version: v8.5.4\nEdition: Community\nGit Commit Hash: <redacted>"
+      }]
+    },
+    "slow_query.current_user": {
+      "columns": ["observed_at", "schema_name", "digest", "plan_digest", "query_time", "parse_time", "compile_time", "cop_time", "process_time", "wait_time", "backoff_time", "total_keys", "process_keys", "mem_max", "disk_max", "result_rows"],
+      "rows": [{
+        "observed_at": "2026-09-02T01:28:00Z",
+        "schema_name": "app_redacted",
+        "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "plan_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+        "query_time": 1.2,
+        "parse_time": 0.001,
+        "compile_time": 0.004,
+        "cop_time": 0.8,
+        "process_time": 0.65,
+        "wait_time": 0.12,
+        "backoff_time": 0.03,
+        "total_keys": 1200,
+        "process_keys": 80,
+        "mem_max": 8192,
+        "disk_max": 0,
+        "result_rows": 12
+      }]
+    }
+  }
+}
