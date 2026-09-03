@@ -52,6 +52,23 @@ REPORT_NAMES = (
     "diagnosis-report-v1.statistics.review.json",
     "diagnosis-report-v1.runtime-correlation.review.json",
 )
+M0_REPORT_EXPECTATIONS = (
+    (
+        "diagnosis-report-v1.m0-index-scan.review.json",
+        "TIDB85_INDEX_SCAN_RISK",
+        "P2",
+    ),
+    (
+        "diagnosis-report-v1.m0-statistics-health.review.json",
+        "TIDB85_STATISTICS_HEALTH_RISK",
+        "P2",
+    ),
+    (
+        "diagnosis-report-v1.m0-repeated-scan.review.json",
+        "TIDB85_REPEATED_HEAVY_SCAN",
+        "P1",
+    ),
+)
 WORKFLOW_TRANSITIONS = {
     "queued": {"queued", "collecting", "failed", "cancelled"},
     "collecting": {"collecting", "analyzing", "failed", "cancelled"},
@@ -2824,6 +2841,55 @@ def validate_report_business_impact(report: dict[str, Any]) -> None:
         raise ValueError("report without business evidence must use the fixed M0 disclosure")
 
 
+def validate_m0_review_report(
+    report: dict[str, Any],
+    *,
+    expected_rule_id: str,
+    expected_priority: str,
+) -> None:
+    validate_report_business_impact(report)
+    if report["configuredMode"] != "rules" or report["effectiveMode"] != "rules":
+        raise ValueError("M0 review report must be rules-only")
+    if report["priority"] != expected_priority:
+        raise ValueError("M0 review report priority differs from the frozen sample")
+    if report["reasoning"] != {
+        "ruleFindingsZh": report["reasoning"]["ruleFindingsZh"],
+        "aiContributionZh": None,
+        "aiStatus": "not_requested",
+        "aiCode": None,
+        "aiReasonZh": None,
+    }:
+        raise ValueError("M0 review report contains an AI contribution")
+    trace = report["trace"]
+    if trace["aiInvocation"] is not None:
+        raise ValueError("M0 review report contains an AI invocation")
+    pins = trace["pinnedRevisions"]
+    if pins["rulePack"] != "tidb-8.5-m0-rules/v1":
+        raise ValueError("M0 review report uses the wrong rule pack")
+    if any(pins[key] is not None for key in ("provider", "model", "prompt", "payload")):
+        raise ValueError("M0 review report contains a model pin")
+    if pins["payloadDigest"] is not None:
+        raise ValueError("M0 review report contains an AI payload digest")
+    if trace["ruleIds"] != [expected_rule_id]:
+        raise ValueError("M0 review report rule ID differs from the frozen sample")
+    if trace["evidenceCompleteness"] != 100:
+        raise ValueError("M0 positive review report must have complete required evidence")
+    summarized_ids = {
+        evidence_id
+        for summary in report["evidenceSummary"]
+        for evidence_id in summary["evidenceIds"]
+    }
+    if summarized_ids != set(trace["evidenceIds"]):
+        raise ValueError("M0 review summary and trace Evidence IDs differ")
+    if not report["actions"] or [action["order"] for action in report["actions"]] != list(
+        range(1, len(report["actions"]) + 1)
+    ):
+        raise ValueError("M0 review actions are missing or out of order")
+    rendered = str(report)
+    if "20%" in rendered or "confidence" in rendered.lower():
+        raise ValueError("M0 review report contains legacy fixed completeness prose")
+
+
 def validate_m0_contract_increments() -> None:
     evidence_validator = schema_validator("evidence-v2.schema.json")
     report_validator = schema_validator("diagnosis-report-v1.schema.json")
@@ -2905,6 +2971,10 @@ def main() -> None:
     )
     cases = validate_schema("diagnosis-case-v2.schema.json", list(CASE_NAMES))
     reports = validate_schema("diagnosis-report-v1.schema.json", list(REPORT_NAMES))
+    m0_reports = validate_schema(
+        "diagnosis-report-v1.schema.json",
+        [name for name, _, _ in M0_REPORT_EXPECTATIONS],
+    )
     for source in sources:
         validate_source_semantics(source)
     draining_source, rotated_source = build_source_rotation(sources[0])
@@ -2984,6 +3054,14 @@ def main() -> None:
         if key not in cases_by_revision:
             raise ValueError(f"report has no matching Case fixture: {key}")
         validate_report_projection(report, cases_by_revision[key])
+    for report, (_, rule_id, priority) in zip(
+        m0_reports, M0_REPORT_EXPECTATIONS, strict=True
+    ):
+        validate_m0_review_report(
+            report,
+            expected_rule_id=rule_id,
+            expected_priority=priority,
+        )
     rules_only_report = copy.deepcopy(reports[1])
     rules_only_report["configuredMode"] = "rules"
     rules_only_report["reasoning"].update(
@@ -3012,7 +3090,7 @@ def main() -> None:
         "vNext contract examples valid: "
         "3 sources, 1 lease-drain chain, 1 standalone evidence, 3 cases, "
         "1 AI abstention, 1 rules-only projection, 3 terminal transitions, "
-        "4 report projections, 2 M0 typed Evidence increments"
+        "4 report projections, 2 M0 typed Evidence increments, 3 M0 review reports"
     )
 
 

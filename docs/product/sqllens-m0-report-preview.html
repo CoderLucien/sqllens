@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>SQLLens M0 异常 SQL 诊断报告预览</title>
+  <style>
+    :root {
+      --canvas: #f3f1ec;
+      --surface: #fffefb;
+      --surface-muted: #f7f5f0;
+      --ink: #18201f;
+      --ink-soft: #53605d;
+      --line: #d8d7cf;
+      --line-strong: #b9bdb5;
+      --accent: #0a665b;
+      --accent-soft: #dceee9;
+      --warning: #925412;
+      --warning-soft: #fff1d9;
+      --critical: #a33b2e;
+      --critical-soft: #fae8e4;
+      --focus: #0067c5;
+      --radius-sm: .375rem;
+      --radius-md: .625rem;
+      --space-1: .25rem;
+      --space-2: .5rem;
+      --space-3: .75rem;
+      --space-4: 1rem;
+      --space-5: 1.25rem;
+      --space-6: 1.5rem;
+      --space-8: 2rem;
+      --space-10: 2.5rem;
+      --shadow: 0 1px 2px rgb(24 32 31 / 6%), 0 12px 28px rgb(24 32 31 / 6%);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--canvas);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 20rem;
+      background: var(--canvas);
+      color: var(--ink);
+      font-size: 1rem;
+      line-height: 1.65;
+      text-rendering: optimizeLegibility;
+    }
+
+    button, summary { font: inherit; }
+
+    button:focus-visible,
+    summary:focus-visible {
+      outline: .1875rem solid var(--focus);
+      outline-offset: .1875rem;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 20;
+      top: var(--space-3);
+      left: var(--space-3);
+      padding: var(--space-2) var(--space-4);
+      transform: translateY(-200%);
+      border-radius: var(--radius-sm);
+      background: var(--ink);
+      color: white;
+    }
+
+    .skip-link:focus { transform: translateY(0); }
+
+    .shell {
+      width: min(100% - 2rem, 74rem);
+      margin-inline: auto;
+    }
+
+    .topbar {
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .topbar__inner {
+      min-height: 4.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+    }
+
+    .brand__mark {
+      display: grid;
+      place-items: center;
+      width: 2.25rem;
+      height: 2.25rem;
+      flex: 0 0 auto;
+      border: 1px solid #0b5048;
+      border-radius: var(--radius-sm);
+      background: var(--accent);
+      color: white;
+      font-weight: 800;
+      letter-spacing: -.04em;
+    }
+
+    .brand__name {
+      display: block;
+      font-weight: 780;
+      letter-spacing: -.02em;
+    }
+
+    .brand__edition {
+      display: block;
+      overflow: hidden;
+      color: var(--ink-soft);
+      font-size: .75rem;
+      line-height: 1.3;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .preview-label {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: .375rem .625rem;
+      border: 1px solid #d7a867;
+      border-radius: 999px;
+      background: var(--warning-soft);
+      color: #6f3d08;
+      font-size: .75rem;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .preview-label::before {
+      width: .45rem;
+      height: .45rem;
+      border-radius: 50%;
+      background: #c56e0b;
+      content: "";
+    }
+
+    .intro {
+      padding-block: var(--space-8) var(--space-6);
+    }
+
+    .eyebrow {
+      margin: 0 0 var(--space-2);
+      color: var(--accent);
+      font-size: .75rem;
+      font-weight: 800;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, h4, p { margin-top: 0; }
+
+    h1 {
+      max-width: 46rem;
+      margin-bottom: var(--space-3);
+      font-size: clamp(1.75rem, 5vw, 2.75rem);
+      line-height: 1.15;
+      letter-spacing: -.045em;
+    }
+
+    .intro__copy {
+      max-width: 46rem;
+      margin-bottom: 0;
+      color: var(--ink-soft);
+      font-size: 1.0625rem;
+    }
+
+    .scenario-nav {
+      margin-bottom: var(--space-5);
+    }
+
+    .scenario-nav__label {
+      display: block;
+      margin-bottom: var(--space-2);
+      color: var(--ink-soft);
+      font-size: .8125rem;
+      font-weight: 700;
+    }
+
+    .scenario-switcher {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-2);
+      padding: var(--space-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: #e9e7e0;
+    }
+
+    .scenario-button {
+      min-height: 3rem;
+      padding: var(--space-2) var(--space-3);
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--ink-soft);
+      cursor: pointer;
+      font-weight: 760;
+      line-height: 1.25;
+      transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+    }
+
+    .scenario-button:hover { background: rgb(255 255 255 / 58%); }
+
+    .scenario-button[aria-pressed="true"] {
+      border-color: var(--line-strong);
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: 0 1px 2px rgb(24 32 31 / 8%);
+    }
+
+    .scenario-button small {
+      display: none;
+      margin-top: .125rem;
+      color: var(--ink-soft);
+      font-size: .6875rem;
+      font-weight: 580;
+    }
+
+    .report-layout {
+      display: grid;
+      gap: var(--space-5);
+      align-items: start;
+      padding-bottom: 4rem;
+    }
+
+    .report,
+    .side-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .report { overflow: clip; }
+
+    .report-header {
+      padding: var(--space-6);
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-muted);
+    }
+
+    .report-header__meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-2);
+      margin-bottom: var(--space-4);
+    }
+
+    .priority {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.75rem;
+      padding-inline: .625rem;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      font-size: .75rem;
+      font-weight: 850;
+      letter-spacing: .04em;
+    }
+
+    .priority--P1 { color: var(--critical); background: var(--critical-soft); }
+    .priority--P2 { color: var(--warning); background: var(--warning-soft); }
+    .priority--observe { color: var(--ink-soft); background: #eeeee9; }
+
+    .mode-chip {
+      color: var(--ink-soft);
+      font-size: .75rem;
+      font-weight: 700;
+    }
+
+    .report-title {
+      margin-bottom: var(--space-3);
+      font-size: clamp(1.35rem, 4vw, 2rem);
+      line-height: 1.25;
+      letter-spacing: -.025em;
+    }
+
+    .conclusion {
+      max-width: 50rem;
+      margin-bottom: 0;
+      color: #293330;
+      font-size: 1.0625rem;
+    }
+
+    .report-section {
+      padding: var(--space-6);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .report-section:last-child { border-bottom: 0; }
+
+    .section-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--space-4);
+      margin-bottom: var(--space-4);
+      font-size: 1rem;
+      letter-spacing: -.01em;
+    }
+
+    .section-kicker {
+      color: var(--ink-soft);
+      font-size: .75rem;
+      font-weight: 620;
+    }
+
+    .impact-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--line);
+    }
+
+    .impact-item {
+      min-width: 0;
+      padding: var(--space-3);
+      background: var(--surface-muted);
+    }
+
+    .impact-item dt {
+      margin-bottom: var(--space-1);
+      color: var(--ink-soft);
+      font-size: .6875rem;
+      font-weight: 730;
+    }
+
+    .impact-item dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-size: .875rem;
+      font-weight: 680;
+    }
+
+    .disclosure {
+      margin: var(--space-4) 0 0;
+      padding: var(--space-3) var(--space-4);
+      border-left: .25rem solid #c56e0b;
+      background: var(--warning-soft);
+      color: #6f3d08;
+      font-size: .875rem;
+    }
+
+    .evidence-list,
+    .finding-list,
+    .uncertainty-list,
+    .plain-list,
+    .steps-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .evidence-item {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-4) 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .evidence-item:first-child { padding-top: 0; border-top: 0; }
+    .evidence-item:last-child { padding-bottom: 0; }
+
+    .evidence-item__label {
+      color: var(--accent);
+      font-size: .8125rem;
+      font-weight: 790;
+    }
+
+    .evidence-item__value { margin: 0; }
+
+    .evidence-item__ids {
+      color: var(--ink-soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .6875rem;
+      overflow-wrap: anywhere;
+    }
+
+    .finding-list { display: grid; gap: var(--space-3); }
+
+    .finding-list li {
+      position: relative;
+      padding-left: var(--space-5);
+    }
+
+    .finding-list li::before {
+      position: absolute;
+      top: .65em;
+      left: .125rem;
+      width: .5rem;
+      height: .5rem;
+      border-radius: 50%;
+      background: var(--accent);
+      content: "";
+    }
+
+    .action-card {
+      padding: var(--space-5);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-sm);
+      background: #fff;
+    }
+
+    .action-card + .action-card { margin-top: var(--space-4); }
+
+    .action-card__top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-3);
+      margin-bottom: var(--space-3);
+    }
+
+    .action-card h3 {
+      margin-bottom: 0;
+      font-size: 1.0625rem;
+      line-height: 1.35;
+    }
+
+    .owner {
+      display: inline-flex;
+      padding: .25rem .5rem;
+      border-radius: var(--radius-sm);
+      background: var(--accent-soft);
+      color: #084f47;
+      font-size: .6875rem;
+      font-weight: 780;
+      white-space: nowrap;
+    }
+
+    .rationale { color: var(--ink-soft); }
+
+    .action-grid {
+      display: grid;
+      gap: var(--space-4);
+      margin-top: var(--space-5);
+    }
+
+    .action-block {
+      padding-top: var(--space-3);
+      border-top: 1px solid var(--line);
+    }
+
+    .action-block h4 {
+      margin-bottom: var(--space-2);
+      color: var(--ink-soft);
+      font-size: .75rem;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .plain-list,
+    .steps-list { display: grid; gap: var(--space-2); }
+
+    .plain-list li,
+    .steps-list li {
+      position: relative;
+      padding-left: var(--space-5);
+    }
+
+    .plain-list li::before {
+      position: absolute;
+      left: .125rem;
+      content: "—";
+      color: var(--ink-soft);
+    }
+
+    .steps-list { counter-reset: steps; }
+
+    .steps-list li { counter-increment: steps; }
+
+    .steps-list li::before {
+      position: absolute;
+      left: 0;
+      content: counter(steps) ".";
+      color: var(--accent);
+      font-weight: 780;
+    }
+
+    .validation-box {
+      padding: var(--space-4);
+      border-left: .25rem solid var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .validation-box p { margin-bottom: var(--space-2); }
+    .validation-box p:last-child { margin-bottom: 0; }
+
+    .uncertainty-list { display: grid; gap: var(--space-2); }
+
+    .uncertainty-list li {
+      padding: var(--space-3) var(--space-4);
+      border-left: .25rem solid #c56e0b;
+      background: var(--warning-soft);
+      color: #653a0b;
+    }
+
+    .sidebar { display: grid; gap: var(--space-4); }
+
+    .side-card { padding: var(--space-5); box-shadow: none; }
+
+    .side-card h2 {
+      margin-bottom: var(--space-3);
+      font-size: 1rem;
+    }
+
+    .boundary-list {
+      display: grid;
+      gap: var(--space-3);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .boundary-list strong {
+      display: block;
+      margin-bottom: .125rem;
+      font-size: .8125rem;
+    }
+
+    .boundary-list span {
+      display: block;
+      color: var(--ink-soft);
+      font-size: .8125rem;
+    }
+
+    .score {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .score__number {
+      font-size: 2rem;
+      font-weight: 820;
+      line-height: 1;
+      letter-spacing: -.04em;
+    }
+
+    .score__copy {
+      color: var(--ink-soft);
+      font-size: .75rem;
+      line-height: 1.4;
+    }
+
+    details {
+      border-top: 1px solid var(--line);
+      padding-top: var(--space-3);
+    }
+
+    summary {
+      color: var(--accent);
+      cursor: pointer;
+      font-size: .8125rem;
+      font-weight: 760;
+    }
+
+    .trace-list {
+      display: grid;
+      gap: var(--space-3);
+      margin: var(--space-4) 0 0;
+    }
+
+    .trace-list dt {
+      color: var(--ink-soft);
+      font-size: .6875rem;
+      font-weight: 720;
+    }
+
+    .trace-list dd {
+      margin: .125rem 0 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .6875rem;
+      overflow-wrap: anywhere;
+    }
+
+    .footer {
+      padding-block: var(--space-5);
+      border-top: 1px solid var(--line);
+      color: var(--ink-soft);
+      font-size: .75rem;
+      text-align: center;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (min-width: 40rem) {
+      .scenario-button small { display: block; }
+      .impact-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .validation-box { grid-column: 1 / -1; }
+    }
+
+    @media (min-width: 58rem) {
+      .intro { padding-block: var(--space-10) var(--space-8); }
+      .report-layout { grid-template-columns: minmax(0, 1fr) 18rem; }
+      .sidebar { position: sticky; top: var(--space-5); }
+      .report-header, .report-section { padding: var(--space-8); }
+    }
+
+    @media (max-width: 26rem) {
+      .shell { width: min(100% - 1.25rem, 74rem); }
+      .topbar__inner { min-height: 4rem; }
+      .brand__edition { max-width: 8rem; }
+      .preview-label { max-width: 8.5rem; white-space: normal; line-height: 1.2; }
+      .scenario-switcher { gap: var(--space-1); padding: var(--space-1); }
+      .scenario-button { padding-inline: var(--space-1); font-size: .8125rem; }
+      .report-header, .report-section { padding: var(--space-5); }
+      .impact-grid { grid-template-columns: 1fr; }
+      .action-card { padding: var(--space-4); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#report-root">跳到诊断报告</a>
+  <header class="topbar">
+    <div class="shell topbar__inner">
+      <div class="brand" aria-label="SQLLens">
+        <span class="brand__mark" aria-hidden="true">SL</span>
+        <span>
+          <span class="brand__name">SQLLens</span>
+          <span class="brand__edition">异常 SQL 诊断 · M0</span>
+        </span>
+      </div>
+      <span class="preview-label">示例 / rules-only / 私有试用版</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="shell intro" aria-labelledby="page-title">
+      <p class="eyebrow">TiDB 8.5 · Evidence-first</p>
+      <h1 id="page-title">先看真实证据，再决定下一步</h1>
+      <p class="intro__copy">三类异常 SQL 的评审样例。结论只覆盖证据能证明的范围；建议均需人工批准、受控验证并可回滚。</p>
+    </section>
+
+    <div class="shell">
+      <nav class="scenario-nav" aria-label="诊断场景">
+        <span class="scenario-nav__label">切换评审场景</span>
+        <div class="scenario-switcher">
+          <button class="scenario-button" type="button" data-index="0" aria-pressed="true">
+            索引访问<small>全表扫描</small>
+          </button>
+          <button class="scenario-button" type="button" data-index="1" aria-pressed="false">
+            统计健康<small>低健康度</small>
+          </button>
+          <button class="scenario-button" type="button" data-index="2" aria-pressed="false">
+            重复扫描<small>窗口热点</small>
+          </button>
+        </div>
+      </nav>
+
+      <p id="switch-status" class="sr-only" aria-live="polite"></p>
+      <div class="report-layout">
+        <article id="report-root" class="report" aria-labelledby="report-title"></article>
+        <aside class="sidebar" aria-label="报告说明">
+          <section class="side-card">
+            <h2>报告边界</h2>
+            <ul class="boundary-list">
+              <li><strong>只读证据</strong><span>不执行原 SQL、DDL、ANALYZE 或自动变更。</span></li>
+              <li><strong>确定性规则</strong><span>没有模型请求；证据不足时只输出 observe。</span></li>
+              <li><strong>评审数据</strong><span>fixture/review-only，不是实时 TiDB 采集结果。</span></li>
+            </ul>
+          </section>
+          <section class="side-card" aria-labelledby="completeness-title">
+            <h2 id="completeness-title">证据完整度</h2>
+            <div class="score">
+              <span id="score-number" class="score__number">100%</span>
+              <span class="score__copy">仅表示当前命中规则的必需证据角色齐全，不是置信度。</span>
+            </div>
+          </section>
+          <section class="side-card">
+            <h2>可追溯信息</h2>
+            <details>
+              <summary>查看规则、证据与版本</summary>
+              <dl id="trace-list" class="trace-list"></dl>
+            </details>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="shell">本页面为本地独立评审文件，不发起网络请求，不保存凭据或报告。</div>
+  </footer>
+
+  <noscript><p class="shell">请启用本地 JavaScript 以切换三份内嵌报告。</p></noscript>
+  <script id="reports-data" type="application/json">[{"actions":[{"actionId":"act_m0indexscanrisk001","order":1,"ownerRole":"dba","prerequisitesZh":["准备代表性参数与数据分布","确认索引空间和写放大预算"],"rationaleZh":"全表扫描、扫描放大与索引覆盖证据同时命中，但新增索引的收益和写入代价仍需实测。","risk":"medium","rollbackZh":["若收益不足或写入回归超阈值，停止灰度","确认无其他负载依赖后，仅删除本次新建的候选索引"],"stepsZh":["复核普通 EXPLAIN 与现有索引列顺序","仅在隔离或受控灰度环境创建候选索引并运行同一参数分布"],"titleZh":"先验证访问路径与复合索引候选","validation":{"metricZh":"扫描行数、P95 延迟与写入开销","targetZh":"平均扫描行数降至不高于 12000 行，SQL P95 不高于当前 1800 ms 基线；写入 P95 不高于灰度前冻结基线的 110%"}}],"audience":"dba_sre","caseId":"case_m0indexreview0001","caseRevision":1,"conclusionZh":"该 SQL 存在高扫描放大，普通计划显示全表扫描，且未找到匹配过滤列前缀的复合索引；是否新增索引仍需在代表性数据上验证。","configuredMode":"rules","effectiveMode":"rules","evidenceSummary":[{"evidenceIds":["ev_m0indexmetadata001","ev_m0indexplan000001","ev_m0indexslowquery01","ev_m0indexstructure01"],"labelZh":"扫描与访问路径","valueZh":"orders 表为全表扫描；平均扫描 120000 行、返回 8 行，窗口内调用 18 次"}],"impact":{"businessEvidenceIds":[],"businessZh":"未提供业务影响证据，仅说明数据库技术影响","clusterZh":"当前本地连接的 TiDB 集群","databaseZh":"shop","sqlDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","timeWindowZh":"2026-09-03T05:00:00Z 至 2026-09-03T05:30:00Z"},"priority":"P2","reasoning":{"aiCode":null,"aiContributionZh":null,"aiReasonZh":null,"aiStatus":"not_requested","ruleFindingsZh":["该 SQL 的实测扫描放大达到规则阈值，普通计划为全表扫描，且未找到匹配过滤列前缀的复合索引。"]},"schemaVersion":"diagnosis-report/v1","titleZh":"发现高扫描放大全表扫描，先验证访问路径","trace":{"aiInvocation":null,"claimIds":[],"evidenceCompleteness":100,"evidenceIds":["ev_m0indexmetadata001","ev_m0indexplan000001","ev_m0indexslowquery01","ev_m0indexstructure01"],"evidenceLevel":"E2","pinnedRevisions":{"documentPack":"tidb-8.5-m0-guidance/v1","model":null,"parser":"sqlglot/mysql@30.17.0","payload":null,"payloadDigest":null,"policy":"m0-report-policy/v1","prompt":null,"provider":null,"redaction":"evidence-redaction/v2","rulePack":"tidb-8.5-m0-rules/v1"},"ruleIds":["TIDB85_INDEX_SCAN_RISK"],"sourceRevisions":["src_m0previewfixture01@1"]},"uncertainty":["未提供业务影响证据，仅说明数据库技术影响","当前证据未覆盖全部参数分布，索引收益与写入代价必须受控验证。"]},{"actions":[{"actionId":"act_m0statisticsrisk01","order":1,"ownerRole":"dba","prerequisitesZh":["确认统计信息更新时间与数据变更窗口","保存刷新前计划与统计元数据"],"rationaleZh":"SHOW STATS_HEALTHY 低于 M0 检查阈值，只能说明统计质量风险，不能直接证明估算偏差。","risk":"medium","rollbackZh":["按运维方既有流程恢复刷新前统计或绑定","若计划退化立即停止后续推广"],"stepsZh":["由 DBA 复核统计元数据及采样策略","如符合运维窗口，在 SQLLens 外执行经批准的目标表统计刷新","SQLLens 不执行 ANALYZE、DDL 或任何自动变更"],"titleZh":"复核并受控刷新目标表统计信息","validation":{"metricZh":"普通计划选择与代表性参数 P95 延迟","targetZh":"SHOW STATS_HEALTHY 恢复至不低于 80%，普通计划不退化，代表性参数 P95 不高于刷新前基线"}}],"audience":"dba_sre","caseId":"case_m0statsreview0001","caseRevision":1,"conclusionZh":"order_items 表统计健康度为 42%，统计质量可能影响优化器估算；尚不能据此判断执行计划估算是否准确。","configuredMode":"rules","effectiveMode":"rules","evidenceSummary":[{"evidenceIds":["ev_m0statshealth00001","ev_m0statsstructure01"],"labelZh":"统计健康度","valueZh":"order_items 表 SHOW STATS_HEALTHY 为 42%"}],"impact":{"businessEvidenceIds":[],"businessZh":"未提供业务影响证据，仅说明数据库技术影响","clusterZh":"当前本地连接的 TiDB 集群","databaseZh":"shop","sqlDigest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","timeWindowZh":"2026-09-03T05:00:00Z 至 2026-09-03T05:30:00Z"},"priority":"P2","reasoning":{"aiCode":null,"aiContributionZh":null,"aiReasonZh":null,"aiStatus":"not_requested","ruleFindingsZh":["order_items 表统计健康度低于 M0 的 80% 检查阈值；统计质量可能影响优化器估算，需由 DBA 复核。"]},"schemaVersion":"diagnosis-report/v1","titleZh":"发现统计健康度风险，先由 DBA 复核统计信息","trace":{"aiInvocation":null,"claimIds":[],"evidenceCompleteness":100,"evidenceIds":["ev_m0statshealth00001","ev_m0statsstructure01"],"evidenceLevel":"E2","pinnedRevisions":{"documentPack":"tidb-8.5-m0-guidance/v1","model":null,"parser":"sqlglot/mysql@30.17.0","payload":null,"payloadDigest":null,"policy":"m0-report-policy/v1","prompt":null,"provider":null,"redaction":"evidence-redaction/v2","rulePack":"tidb-8.5-m0-rules/v1"},"ruleIds":["TIDB85_STATISTICS_HEALTH_RISK"],"sourceRevisions":["src_m0previewfixture01@1"]},"uncertainty":["未提供业务影响证据，仅说明数据库技术影响","统计健康度不是估算偏差实测值，刷新是否有益必须通过计划和延迟验证。"]},{"actions":[{"actionId":"act_m0repeatedscan001","order":1,"ownerRole":"developer","prerequisitesZh":["定位产生该 SQL digest 的应用调用点","冻结同一窗口的调用、扫描、P95 基线和可恢复配置"],"rationaleZh":"同一窗口的执行次数、按聚合字段计算的读取量和慢查询扫描放大同时命中；应只选择一项最小、可回滚的调用或查询改动。","risk":"medium","rollbackZh":["若目标未达成或错误率上升，停止灰度并恢复本次变更前的应用或查询配置","恢复后用同一窗口再次核对执行次数、扫描行数和 P95"],"stepsZh":["由开发负责人选择去重、缓存、限频或访问路径修正中的一项最小改动","仅在受控灰度流量中部署，并保持其他查询与容量条件不变"],"titleZh":"在受控灰度中减少重复调用或修正访问路径","validation":{"metricZh":"同一 30 分钟窗口的执行次数、平均扫描行数与 SQL P95","targetZh":"执行次数降至不高于 12 次，或平均扫描行数降至不高于 12500 行；SQL P95 不高于当前 6200 ms 基线"}}],"audience":"dba_sre","caseId":"case_m0repeatreview001","caseRevision":1,"conclusionZh":"该 SQL 在 30 分钟窗口内执行 24 次，按聚合字段计算读取 3000000 个键；慢查询证据显示平均扫描 125000 行、平均返回 10 行。重复执行将一次重扫描放大为窗口内热点，但未推断 CPU、I/O、锁或业务影响。","configuredMode":"rules","effectiveMode":"rules","evidenceSummary":[{"evidenceIds":["ev_m0repeatslowquery1","ev_m0repeatsummary01"],"labelZh":"重复重扫描","valueZh":"30 分钟内执行 24 次，按聚合字段计算读取 3000000 个键；平均扫描 125000 行、返回 10 行，P95 为 6200 ms"}],"impact":{"businessEvidenceIds":[],"businessZh":"未提供业务影响证据，仅说明数据库技术影响","clusterZh":"当前本地连接的 TiDB 集群","databaseZh":"shop","sqlDigest":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","timeWindowZh":"2026-09-03T05:00:00Z 至 2026-09-03T05:30:00Z"},"priority":"P1","reasoning":{"aiCode":null,"aiContributionZh":null,"aiReasonZh":null,"aiStatus":"not_requested","ruleFindingsZh":["该 SQL 在 30 分钟窗口内执行 24 次，按聚合字段计算读取 3000000 个键；平均扫描 125000 行、平均返回 10 行，重复执行形成重扫描热点。"]},"schemaVersion":"diagnosis-report/v1","titleZh":"发现重复重扫描热点，先控制调用与访问路径","trace":{"aiInvocation":null,"claimIds":[],"evidenceCompleteness":100,"evidenceIds":["ev_m0repeatslowquery1","ev_m0repeatsummary01"],"evidenceLevel":"E2","pinnedRevisions":{"documentPack":"tidb-8.5-m0-guidance/v1","model":null,"parser":"sqlglot/mysql@30.17.0","payload":null,"payloadDigest":null,"policy":"m0-report-policy/v1","prompt":null,"provider":null,"redaction":"evidence-redaction/v2","rulePack":"tidb-8.5-m0-rules/v1"},"ruleIds":["TIDB85_REPEATED_HEAVY_SCAN"],"sourceRevisions":["src_m0previewfixture01@1"]},"uncertainty":["未提供业务影响证据，仅说明数据库技术影响","weightedTotalKeys 是按 Statement Summary 聚合字段计算的读取量，不是原始逐次精确总数或返回行数。"]}]</script>
+  <script>
+    (() => {
+      "use strict";
+
+      const reportsNode = document.getElementById("reports-data");
+      const reportRoot = document.getElementById("report-root");
+      const scoreNumber = document.getElementById("score-number");
+      const traceList = document.getElementById("trace-list");
+      const switchStatus = document.getElementById("switch-status");
+      const buttons = [...document.querySelectorAll(".scenario-button")];
+      const reports = JSON.parse(reportsNode.textContent);
+
+      const element = (tag, className, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      };
+
+      const appendList = (parent, items, className, ordered = false) => {
+        const list = element(ordered ? "ol" : "ul", className);
+        items.forEach((item) => list.append(element("li", "", item)));
+        parent.append(list);
+        return list;
+      };
+
+      const impactItem = (label, value, title) => {
+        const wrapper = element("div", "impact-item");
+        const term = element("dt", "", label);
+        const detail = element("dd", "", value);
+        if (title) detail.title = title;
+        wrapper.append(term, detail);
+        return wrapper;
+      };
+
+      const section = (title, kicker) => {
+        const wrapper = element("section", "report-section");
+        const heading = element("h2", "section-title");
+        heading.append(element("span", "", title));
+        if (kicker) heading.append(element("span", "section-kicker", kicker));
+        wrapper.append(heading);
+        return wrapper;
+      };
+
+      const renderAction = (action) => {
+        const card = element("article", "action-card");
+        const top = element("div", "action-card__top");
+        top.append(
+          element("h3", "", `${action.order}. ${action.titleZh}`),
+          element("span", "owner", `负责人：${action.ownerRole} · 风险：${action.risk}`),
+        );
+        card.append(top, element("p", "rationale", action.rationaleZh));
+
+        const grid = element("div", "action-grid");
+        const prerequisites = element("section", "action-block");
+        prerequisites.append(element("h4", "", "前置条件"));
+        appendList(prerequisites, action.prerequisitesZh, "plain-list");
+
+        const steps = element("section", "action-block");
+        steps.append(element("h4", "", "执行步骤"));
+        appendList(steps, action.stepsZh, "steps-list", true);
+
+        const validation = element("section", "action-block validation-box");
+        validation.append(
+          element("h4", "", "验证"),
+          element("p", "", `指标：${action.validation.metricZh}`),
+          element("p", "", `通过标准：${action.validation.targetZh}`),
+        );
+
+        const rollback = element("section", "action-block");
+        rollback.append(element("h4", "", "回滚"));
+        appendList(rollback, action.rollbackZh, "plain-list");
+        grid.append(prerequisites, steps, validation, rollback);
+        card.append(grid);
+        return card;
+      };
+
+      const addTraceRow = (label, value) => {
+        traceList.append(element("dt", "", label), element("dd", "", value));
+      };
+
+      const render = (index) => {
+        const report = reports[index];
+        reportRoot.replaceChildren();
+
+        const header = element("header", "report-header");
+        const meta = element("div", "report-header__meta");
+        meta.append(
+          element("span", `priority priority--${report.priority}`, report.priority),
+          element("span", "mode-chip", "RULES ONLY · E2"),
+        );
+        const title = element("h2", "report-title", report.titleZh);
+        title.id = "report-title";
+        header.append(meta, title, element("p", "conclusion", report.conclusionZh));
+        reportRoot.append(header);
+
+        const impact = section("影响范围", "不扩写业务影响");
+        const digest = report.impact.sqlDigest;
+        const impactGrid = element("dl", "impact-grid");
+        impactGrid.append(
+          impactItem("数据库", report.impact.databaseZh),
+          impactItem("集群", report.impact.clusterZh),
+          impactItem("时间窗口", report.impact.timeWindowZh),
+          impactItem("SQL digest", `${digest.slice(0, 12)}…${digest.slice(-8)}`, digest),
+        );
+        impact.append(impactGrid, element("p", "disclosure", report.impact.businessZh));
+        reportRoot.append(impact);
+
+        const evidence = section("证据", `${report.trace.evidenceIds.length} 项`);
+        const evidenceList = element("ul", "evidence-list");
+        report.evidenceSummary.forEach((item) => {
+          const row = element("li", "evidence-item");
+          row.append(
+            element("span", "evidence-item__label", item.labelZh),
+            element("p", "evidence-item__value", item.valueZh),
+            element("span", "evidence-item__ids", item.evidenceIds.join(" · ")),
+          );
+          evidenceList.append(row);
+        });
+        evidence.append(evidenceList);
+        reportRoot.append(evidence);
+
+        const reasoning = section("结论依据", `${report.reasoning.ruleFindingsZh.length} 条规则命中`);
+        appendList(reasoning, report.reasoning.ruleFindingsZh, "finding-list");
+        reportRoot.append(reasoning);
+
+        const actions = section("建议", "人工批准后执行");
+        report.actions.forEach((action) => actions.append(renderAction(action)));
+        reportRoot.append(actions);
+
+        const uncertainty = section("不确定性", "必须保留");
+        appendList(uncertainty, report.uncertainty, "uncertainty-list");
+        reportRoot.append(uncertainty);
+
+        scoreNumber.textContent = `${report.trace.evidenceCompleteness}%`;
+        traceList.replaceChildren();
+        addTraceRow("Case", report.caseId);
+        addTraceRow("规则", report.trace.ruleIds.join(" · "));
+        addTraceRow("证据", report.trace.evidenceIds.join(" · "));
+        addTraceRow("Source revision", report.trace.sourceRevisions.join(" · "));
+        addTraceRow("规则包", report.trace.pinnedRevisions.rulePack);
+        addTraceRow("AI", "not_requested / 无调用");
+
+        buttons.forEach((button, buttonIndex) => {
+          button.setAttribute("aria-pressed", String(buttonIndex === index));
+        });
+        switchStatus.textContent = `已切换到：${report.titleZh}`;
+      };
+
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => render(Number(button.dataset.index)));
+      });
+
+      render(0);
+    })();
+  </script>
+</body>
+</html>

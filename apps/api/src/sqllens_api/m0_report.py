@@ -176,7 +176,7 @@ def build_m0_rules_report(value: M0ReportInput) -> bytes:
 
     index = _assess_index(select)
     statistics = _assess_statistics(select)
-    repeated = _assess_repeated_placeholder(select)
+    repeated = _assess_repeated(select)
     assessments = {
         INDEX_RULE_ID: index,
         STATISTICS_RULE_ID: statistics,
@@ -648,10 +648,22 @@ def _assess_statistics(select: RoleSelector) -> _Assessment:
     return _Assessment(STATISTICS_RULE_ID, roles, eligible, hit)
 
 
-def _assess_repeated_placeholder(select: RoleSelector) -> _Assessment:
+def _assess_repeated(select: RoleSelector) -> _Assessment:
     roles = ("statement_summary", "slow_query")
     eligible = _correlated_roles(select, roles)
-    return _Assessment(REPEATED_SCAN_RULE_ID, roles, eligible, False)
+    if all(role in eligible for role in roles):
+        summary = eligible["statement_summary"].typed
+        slow = eligible["slow_query"].typed
+        hit = (
+            cast(int, summary["executionCount"]) >= 10
+            and cast(int, summary["weightedTotalKeys"]) >= 1_000_000
+            and cast(int, slow["averageScanRows"]) >= 10_000
+            and cast(int, slow["averageScanRows"])
+            >= 100 * max(cast(int, slow["averageReturnRows"]), 1)
+        )
+    else:
+        hit = False
+    return _Assessment(REPEATED_SCAN_RULE_ID, roles, eligible, hit)
 
 
 def _correlated_roles(
@@ -740,7 +752,16 @@ def _conclusion(hits: list[_Assessment]) -> str:
                 "尚不能据此判断执行计划估算是否准确。"
             )
         else:
-            text = "重复执行将一次重扫描放大为窗口内热点，尚未推断 CPU、I/O 或业务影响。"
+            summary = assessment.eligible["statement_summary"].typed
+            slow = assessment.eligible["slow_query"].typed
+            text = (
+                f"该 SQL 在 {summary['windowMinutes']} 分钟窗口内执行 "
+                f"{summary['executionCount']} 次，按聚合字段计算读取 "
+                f"{summary['weightedTotalKeys']} 个键；慢查询证据显示平均扫描 "
+                f"{slow['averageScanRows']} 行、平均返回 {slow['averageReturnRows']} 行。"
+                "重复执行将一次重扫描放大为窗口内热点，但未推断 CPU、I/O、锁或"
+                "业务影响。"
+            )
         texts.append(text)
     return "；".join(texts)
 
@@ -757,7 +778,14 @@ def _finding_text(assessment: _Assessment) -> str:
             f"{typed['tableName']} 表统计健康度低于 M0 的 80% 检查阈值；统计质量可能影响"
             "优化器估算，需由 DBA 复核。"
         )
-    return "重复执行将一次重扫描放大为窗口内热点。"
+    summary = assessment.eligible["statement_summary"].typed
+    slow = assessment.eligible["slow_query"].typed
+    return (
+        f"该 SQL 在 {summary['windowMinutes']} 分钟窗口内执行 "
+        f"{summary['executionCount']} 次，按聚合字段计算读取 "
+        f"{summary['weightedTotalKeys']} 个键；平均扫描 {slow['averageScanRows']} 行、"
+        f"平均返回 {slow['averageReturnRows']} 行，重复执行形成重扫描热点。"
+    )
 
 
 def _evidence_summary(
@@ -797,16 +825,70 @@ def _evidence_summary(
                     "evidenceIds": cast(list[JsonValue], ids),
                 }
             )
+        elif assessment.rule_id == REPEATED_SCAN_RULE_ID:
+            summary = assessment.eligible["statement_summary"].typed
+            slow = assessment.eligible["slow_query"].typed
+            summaries.append(
+                {
+                    "labelZh": "重复重扫描",
+                    "valueZh": (
+                        f"{summary['windowMinutes']} 分钟内执行 {summary['executionCount']} "
+                        f"次，按聚合字段计算读取 {summary['weightedTotalKeys']} 个键；"
+                        f"平均扫描 {slow['averageScanRows']} 行、返回 "
+                        f"{slow['averageReturnRows']} 行，P95 为 {slow['p95Ms']} ms"
+                    ),
+                    "evidenceIds": cast(list[JsonValue], ids),
+                }
+            )
     return summaries
 
 
 def _actions(hits: list[_Assessment]) -> list[dict[str, JsonValue]]:
     actions: list[dict[str, JsonValue]] = []
     for assessment in hits:
-        if assessment.rule_id == INDEX_RULE_ID:
+        if assessment.rule_id == REPEATED_SCAN_RULE_ID:
+            summary = assessment.eligible["statement_summary"].typed
             slow = assessment.eligible["slow_query"].typed
+            execution_target = max(1, cast(int, summary["executionCount"]) // 2)
             scan_target = max(1, cast(int, slow["averageScanRows"]) // 10)
             action: dict[str, JsonValue] = {
+                "actionId": "act_m0repeatedscan001",
+                "order": 0,
+                "titleZh": "在受控灰度中减少重复调用或修正访问路径",
+                "rationaleZh": (
+                    "同一窗口的执行次数、按聚合字段计算的读取量和慢查询扫描放大同时"
+                    "命中；应只选择一项最小、可回滚的调用或查询改动。"
+                ),
+                "ownerRole": "developer",
+                "risk": "medium",
+                "prerequisitesZh": [
+                    "定位产生该 SQL digest 的应用调用点",
+                    "冻结同一窗口的调用、扫描、P95 基线和可恢复配置",
+                ],
+                "stepsZh": [
+                    "由开发负责人选择去重、缓存、限频或访问路径修正中的一项最小改动",
+                    "仅在受控灰度流量中部署，并保持其他查询与容量条件不变",
+                ],
+                "validation": {
+                    "metricZh": (
+                        f"同一 {summary['windowMinutes']} 分钟窗口的执行次数、"
+                        "平均扫描行数与 SQL P95"
+                    ),
+                    "targetZh": (
+                        f"执行次数降至不高于 {execution_target} 次，或平均扫描行数降至"
+                        f"不高于 {scan_target} 行；SQL P95 不高于当前 "
+                        f"{slow['p95Ms']} ms 基线"
+                    ),
+                },
+                "rollbackZh": [
+                    "若目标未达成或错误率上升，停止灰度并恢复本次变更前的应用或查询配置",
+                    "恢复后用同一窗口再次核对执行次数、扫描行数和 P95",
+                ],
+            }
+        elif assessment.rule_id == INDEX_RULE_ID:
+            slow = assessment.eligible["slow_query"].typed
+            scan_target = max(1, cast(int, slow["averageScanRows"]) // 10)
+            action = {
                 "actionId": "act_m0indexscanrisk001",
                 "order": 0,
                 "titleZh": "先验证访问路径与复合索引候选",
@@ -887,6 +969,11 @@ def _uncertainty(
             items.append("当前证据未覆盖全部参数分布，索引收益与写入代价必须受控验证。")
         if any(item.rule_id == STATISTICS_RULE_ID for item in hits):
             items.append("统计健康度不是估算偏差实测值，刷新是否有益必须通过计划和延迟验证。")
+        if any(item.rule_id == REPEATED_SCAN_RULE_ID for item in hits):
+            items.append(
+                "weightedTotalKeys 是按 Statement Summary 聚合字段计算的读取量，"
+                "不是原始逐次精确总数或返回行数。"
+            )
         return items
     if identity_conflict:
         return [

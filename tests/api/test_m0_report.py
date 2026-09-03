@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from sqllens_api.evidence_connector import (
 )
 from sqllens_api.m0_report import (
     INDEX_RULE_ID,
+    REPEATED_SCAN_RULE_ID,
     RULE_PACK_REVISION,
     STATISTICS_RULE_ID,
     M0ReportInput,
@@ -26,7 +28,32 @@ from sqllens_api.m0_report import (
 )
 
 FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "m0" / "report-inputs.json"
+EXAMPLES_PATH = Path(__file__).parents[2] / "docs" / "contracts" / "examples"
+PREVIEW_PATH = Path(__file__).parents[2] / "docs" / "product" / "sqllens-m0-report-preview.html"
 NO_BUSINESS_EVIDENCE_ZH = "未提供业务影响证据，仅说明数据库技术影响"
+
+
+class _EmbeddedReportsParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._inside_reports_data = False
+        self.chunks: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag == "script" and dict(attrs).get("id") == "reports-data":
+            self._inside_reports_data = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._inside_reports_data:
+            self._inside_reports_data = False
+
+    def handle_data(self, data: str) -> None:
+        if self._inside_reports_data:
+            self.chunks.append(data)
 
 
 def parse_time(value: str) -> datetime:
@@ -110,6 +137,40 @@ def without_kind(value: M0ReportInput, kind: str) -> M0ReportInput:
         window_start=value.window_start,
         window_end=value.window_end,
         evidence=tuple(item for item in value.evidence if item.document["kind"] != kind),
+    )
+
+
+def rebind_review_evidence(
+    collected: CollectedEvidence,
+    *,
+    case_id: str,
+    sql_digest: str | None = None,
+    table_name: str | None = None,
+) -> CollectedEvidence:
+    document = copy.deepcopy(collected.document)
+    storage = strict_json_loads(collected.storage_payload)
+    assert isinstance(storage, dict)
+    document["caseId"] = case_id
+    typed = document["payload"]["typed"]
+    if sql_digest is not None:
+        sql_ref = f"sql:{sql_digest}"
+        document["profileObjectRef"] = sql_ref
+        typed["profileObjectRef"] = sql_ref
+    if table_name is not None:
+        document["profileObjectRef"] = table_name
+        typed["profileObjectRef"] = table_name
+        typed["tableName"] = table_name
+        storage["rows"][0]["tableName"] = table_name
+        if document["kind"] == "statistics":
+            document["summaryZh"] = f"{table_name} 表统计健康度为 {typed['healthyPercent']}%。"
+    raw = strict_json_bytes(storage)
+    raw_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    document["integrityDigest"] = raw_digest
+    document["payload"]["digest"] = raw_digest
+    document["payload"]["typedDigest"] = canonical_sha256(typed)
+    return CollectedEvidence(
+        _document_json=strict_json_bytes(document),
+        storage_payload=raw,
     )
 
 
@@ -481,6 +542,42 @@ def test_report_bytes_are_canonical_and_independent_of_evidence_order() -> None:
     assert b"20%" not in rendered
 
 
+@pytest.mark.parametrize(
+    ("scenario", "filename"),
+    [
+        ("index-scan", "diagnosis-report-v1.m0-index-scan.review.json"),
+        (
+            "statistics-health",
+            "diagnosis-report-v1.m0-statistics-health.review.json",
+        ),
+        ("repeated-scan", "diagnosis-report-v1.m0-repeated-scan.review.json"),
+    ],
+)
+def test_review_json_is_exact_canonical_rule_output(
+    scenario: str,
+    filename: str,
+) -> None:
+    expected = build_m0_rules_report(load_scenario(scenario)) + b"\n"
+
+    assert (EXAMPLES_PATH / filename).read_bytes() == expected
+
+
+def test_standalone_preview_embeds_the_three_exact_review_reports() -> None:
+    parser = _EmbeddedReportsParser()
+    parser.feed(PREVIEW_PATH.read_text(encoding="utf-8"))
+    embedded = json.loads("".join(parser.chunks))
+    expected = [
+        json.loads((EXAMPLES_PATH / filename).read_text(encoding="utf-8"))
+        for filename in (
+            "diagnosis-report-v1.m0-index-scan.review.json",
+            "diagnosis-report-v1.m0-statistics-health.review.json",
+            "diagnosis-report-v1.m0-repeated-scan.review.json",
+        )
+    ]
+
+    assert embedded == expected
+
+
 def test_report_never_copies_raw_storage_or_free_form_evidence_summary() -> None:
     marker = "UNTRUSTED_FREE_FORM_MARKER"
     raw_marker = strict_json_bytes({"fixtureLabel": "fixture/review-only", "marker": marker})
@@ -501,3 +598,167 @@ def test_report_never_copies_raw_storage_or_free_form_evidence_summary() -> None
     rendered = build_m0_rules_report(value)
 
     assert marker.encode() not in rendered
+
+
+def test_repeated_scan_rule_emits_measured_hotspot_and_p1_action() -> None:
+    result = report(load_scenario("repeated-scan"))
+
+    assert result["priority"] == "P1"
+    assert result["trace"]["ruleIds"] == [REPEATED_SCAN_RULE_ID]
+    assert result["trace"]["evidenceCompleteness"] == 100
+    assert "30 分钟" in result["conclusionZh"]
+    assert "24 次" in result["conclusionZh"]
+    assert "按聚合字段计算" in result["conclusionZh"]
+    assert "CPU" not in result["reasoning"]["ruleFindingsZh"][0]
+    assert result["impact"]["businessEvidenceIds"] == []
+    assert len(result["actions"]) == 1
+    action = result["actions"][0]
+    assert action["ownerRole"] == "developer"
+    assert action["validation"]["metricZh"] == (
+        "同一 30 分钟窗口的执行次数、平均扫描行数与 SQL P95"
+    )
+    assert action["validation"]["targetZh"] == (
+        "执行次数降至不高于 12 次，或平均扫描行数降至不高于 12500 行；"
+        "SQL P95 不高于当前 6200 ms 基线"
+    )
+    assert any("恢复" in item for item in action["rollbackZh"])
+
+
+def test_repeated_scan_rule_accepts_all_four_exact_thresholds() -> None:
+    value = replace_evidence(
+        load_scenario("repeated-scan"),
+        "statement_summary",
+        lambda document: document["payload"]["typed"].update(
+            {"executionCount": 10, "weightedTotalKeys": 1_000_000}
+        ),
+    )
+    value = replace_evidence(
+        value,
+        "slow_query",
+        lambda document: document["payload"]["typed"].update(
+            {"averageScanRows": 10_000, "averageReturnRows": 100}
+        ),
+    )
+
+    result = report(value)
+
+    assert result["priority"] == "P2"
+    assert result["trace"]["ruleIds"] == [REPEATED_SCAN_RULE_ID]
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value"),
+    [
+        ("statement_summary", "executionCount", 9),
+        ("statement_summary", "weightedTotalKeys", 999_999),
+        ("slow_query", "averageScanRows", 9_999),
+        ("slow_query", "averageReturnRows", 1_251),
+    ],
+)
+def test_repeated_scan_rule_each_one_below_threshold_abstains(
+    kind: str,
+    field: str,
+    value: int,
+) -> None:
+    input_value = replace_evidence(
+        load_scenario("repeated-scan"),
+        kind,
+        lambda document: document["payload"]["typed"].__setitem__(field, value),
+    )
+
+    result = report(input_value)
+
+    assert result["priority"] == "observe"
+    assert result["actions"] == []
+    assert result["trace"]["ruleIds"] == []
+    assert result["trace"]["evidenceCompleteness"] == 100
+
+
+@pytest.mark.parametrize("missing_kind", ["statement_summary", "slow_query"])
+def test_repeated_scan_rule_requires_both_correlated_roles(missing_kind: str) -> None:
+    result = report(without_kind(load_scenario("repeated-scan"), missing_kind))
+
+    assert result["priority"] == "observe"
+    assert result["actions"] == []
+    assert result["trace"]["ruleIds"] == []
+    assert result["trace"]["evidenceCompleteness"] == 50
+    assert any(missing_kind in item for item in result["uncertainty"])
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value"),
+    [
+        ("slow_query", "p95Ms", 4_999),
+        ("statement_summary", "executionCount", 19),
+    ],
+)
+def test_repeated_scan_priority_stays_p2_without_both_escalation_metrics(
+    kind: str,
+    field: str,
+    value: int,
+) -> None:
+    input_value = replace_evidence(
+        load_scenario("repeated-scan"),
+        kind,
+        lambda document: document["payload"]["typed"].__setitem__(field, value),
+    )
+
+    result = report(input_value)
+
+    assert result["priority"] == "P2"
+    assert result["trace"]["ruleIds"] == [REPEATED_SCAN_RULE_ID]
+
+
+def test_repeated_scan_rule_rejects_a_mismatched_window() -> None:
+    value = replace_evidence(
+        load_scenario("repeated-scan"),
+        "statement_summary",
+        lambda document: document["payload"]["typed"].__setitem__("windowMinutes", 15),
+    )
+
+    result = report(value)
+
+    assert result["priority"] == "observe"
+    assert result["actions"] == []
+    assert result["trace"]["ruleIds"] == []
+
+
+def test_multiple_hits_use_frozen_order_and_at_most_three_actions() -> None:
+    index = load_scenario("index-scan")
+    repeated = load_scenario("repeated-scan")
+    statistics = load_scenario("statistics-health")
+    summary = rebind_review_evidence(
+        evidence_by_kind(repeated, "statement_summary"),
+        case_id=index.case_id,
+        sql_digest=index.sql_digest,
+    )
+    health = rebind_review_evidence(
+        evidence_by_kind(statistics, "statistics"),
+        case_id=index.case_id,
+        table_name="orders",
+    )
+    combined = M0ReportInput(
+        case_id=index.case_id,
+        database=index.database,
+        sql_digest=index.sql_digest,
+        window_start=index.window_start,
+        window_end=index.window_end,
+        evidence=(*index.evidence, summary, health),
+    )
+
+    result = report(combined)
+
+    assert result["priority"] == "P2"
+    assert result["trace"]["ruleIds"] == [
+        REPEATED_SCAN_RULE_ID,
+        INDEX_RULE_ID,
+        STATISTICS_RULE_ID,
+    ]
+    assert result["reasoning"]["ruleFindingsZh"][0].startswith("该 SQL 在 30 分钟")
+    assert [item["labelZh"] for item in result["evidenceSummary"]] == [
+        "重复重扫描",
+        "扫描与访问路径",
+        "统计健康度",
+    ]
+    assert [item["order"] for item in result["actions"]] == [1, 2, 3]
+    assert len(result["actions"]) == 3
