@@ -62,16 +62,12 @@ def index_access_hit(
     p95_ms: float,
     build_rate_rows_per_sec: int = INDEX_BUILD_RATE_ROWS_PER_SEC,
 ) -> RuleHit | None:
+    if not filter_columns:
+        return None
     if scanned_rows < MIN_MEANINGFUL_SCAN_ROWS:
         return None
     if result_rows > 0 and scanned_rows < result_rows * MIN_SCAN_TO_RESULT_RATIO:
         return None
-    for prefix in index_prefixes:
-        if len(prefix) >= len(filter_columns) and filter_columns[: len(prefix)] == prefix:
-            return None
-    if len(filter_columns) >= 2 and filter_columns[:2] == prefix if index_prefixes else False:
-        pass
-
     covered = any(
         filter_columns[: len(prefix)] == prefix for prefix in index_prefixes
     )
