@@ -11,13 +11,14 @@ from sqllens_api.v4_rules import (
     index_access_hit,
     repeated_scan_hit,
     stats_skew_hit,
+    strip_leading_use,
 )
 
 
 def _base_table_count(sql_text: str) -> int:
     """FROM/JOIN 涉及的基础表数量；解析失败返回 1（保守单表）。"""
     try:
-        tree = parse_one(sql_text, read="mysql", error_level=ErrorLevel.IGNORE)
+        tree = parse_one(strip_leading_use(sql_text), read="mysql", error_level=ErrorLevel.IGNORE)
     except Exception:
         return 1
     if tree is None:
