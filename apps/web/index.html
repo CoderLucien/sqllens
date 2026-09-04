@@ -59,7 +59,7 @@ SELECT * FROM orders WHERE user_id = ? AND order_date &gt; '2026-01-01';</div>
 
   <section class="screen" id="scr-ai">
     <h2>AI 增强配置（可选）</h2>
-    <div class="sub">不配置则使用纯规则模式（零外部依赖、零数据出本机）。配置后 AI 仅做归纳润色，不新增诊断结论；调用失败自动降级规则模式。</div>
+    <div class="sub">当前版本报告均由规则引擎生成（可复现、可审计）。本页配置现阶段仅用于连通验证与本机保存；AI 归纳润色为后续能力，接入后仅归纳转述、不推翻规则结论，调用失败自动降级规则模式。</div>
     <div class="row">
       <div><label>接口协议</label><select id="proto"><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic 兼容</option></select></div>
       <div class="flex2"><label>Base URL</label><input id="baseUrl" value="https://api.deepseek.com/v1" placeholder="或公司私有部署地址（兼容 OpenAI 约束接口）"></div>
@@ -87,7 +87,7 @@ SELECT * FROM orders WHERE user_id = ? AND order_date &gt; '2026-01-01';</div>
   <section class="screen" id="scr-report">
     <h2>SQL 优化诊断报告</h2>
     <div class="sub">专业六段 · 结论由规则引擎基于真实证据产生（可复现、可审计）。</div>
-    <div class="alert info" id="reportMode">规则模式输出（未配置 AI）。配置 AI 后可获得归纳润色；AI 故障时同样降级为本模式。</div>
+    <div class="alert info" id="reportMode">当前版本报告均由规则引擎生成；AI 归纳为后续能力。</div>
     <div id="reportBody">
       <div class="hint">尚未执行诊断。请回到「开始诊断」上传诊断包或选择演示样例。</div>
     </div>
