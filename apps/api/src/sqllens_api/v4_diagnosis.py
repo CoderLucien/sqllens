@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlglot import exp, parse_one
+from sqlglot.errors import ErrorLevel
+
 from sqllens_api.v4_rules import (
     RuleHit,
     build_report_v4,
@@ -9,6 +12,17 @@ from sqllens_api.v4_rules import (
     repeated_scan_hit,
     stats_skew_hit,
 )
+
+
+def _base_table_count(sql_text: str) -> int:
+    """FROM/JOIN 涉及的基础表数量；解析失败返回 1（保守单表）。"""
+    try:
+        tree = parse_one(sql_text, read="mysql", error_level=ErrorLevel.IGNORE)
+    except Exception:
+        return 1
+    if tree is None:
+        return 1
+    return max(1, len(list(tree.find_all(exp.Table))))
 
 _DEFAULT_WINDOW_MINUTES = 60
 
@@ -80,6 +94,7 @@ def diagnose_v4(evidence: dict[str, Any], *, mode: str = "rules") -> dict[str, A
     schema = evidence.get("schema") or {}
     optional = evidence.get("optional") or {}
 
+    sql_text = str(sql.get("sql_text") or "")
     table_name = str(sql.get("table_name") or "")
     exec_count = int(runtime.get("exec_count") or 0)
     p95_ms = float(runtime.get("p95_ms") or 0)
@@ -92,15 +107,25 @@ def diagnose_v4(evidence: dict[str, Any], *, mode: str = "rules") -> dict[str, A
         tuple(str(col) for col in (item.get("columns") or []))
         for item in (schema.get("indexes") or [])
     )
-    if table_name and scanned_rows:
+    # 索引规则的目标表取执行计划中 FullScan 算子的表名（JOIN 场景下避免用错表生成 DDL）。
+    plan_table = ""
+    for op in plan.get("operator_rows", []):
+        if "FullScan" in str(op.get("operator", "")):
+            plan_table = str(op.get("table") or "")
+            break
+    index_table = plan_table or table_name
+    # 多表 JOIN：过滤列无法可靠归属到单表，跳过索引规则（只展示证据，不给可能错误的 DDL）。
+    join_detected = sql_text and _base_table_count(sql_text) > 1
+    if index_table and scanned_rows and not join_detected:
         hit = index_access_hit(
-            table_name=table_name,
+            table_name=index_table,
             scanned_rows=scanned_rows,
             result_rows=result_rows,
             filter_columns=filter_columns,
             index_prefixes=index_prefixes,
             exec_count=exec_count,
             p95_ms=p95_ms,
+            sql_text=sql_text or None,
         )
         if hit is not None:
             hits.append(hit)
