@@ -252,6 +252,25 @@ class TestProtocols:
         assert report["mode"] == "rules_ai"
         assert calls == ["/v1/messages"]
 
+    def test_anthropic_base_with_v1_no_double_prefix(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(
+                200,
+                json={"content": [{"type": "text", "text": json.dumps(AI_OK, ensure_ascii=False)}]},
+            )
+
+        report = asyncio.run(
+            augment_report_with_ai(
+                diagnose_v4(EVIDENCE_INDEX), EVIDENCE_INDEX, _config("https://gw.example/v1", "anthropic"),
+                transport=httpx.MockTransport(handler),
+            )
+        )
+        assert report["mode"] == "rules_ai"
+        assert calls == ["/v1/messages"]
+
     def test_openai_bare_domain_path_correction_succeeds(self) -> None:
         calls: list[str] = []
 

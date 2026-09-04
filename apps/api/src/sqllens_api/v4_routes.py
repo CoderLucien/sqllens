@@ -12,6 +12,7 @@ from sqllens_api.errors import ApiError
 from sqllens_api.v4_ai import (  # noqa: F401（AiConfigInput/_headers 等供探测路由与既有测试复用）
     _RETRYABLE_PATH_STATUSES,
     AiConfigInput,
+    _anthropic_urls,
     _candidate_urls,
     _classify,
     _headers,
@@ -125,7 +126,7 @@ async def _probe_ai(
 ) -> dict[str, Any]:
     base = config.base_url.rstrip("/")
     if config.protocol == "anthropic":
-        urls = [f"{base}/v1/messages"]
+        urls = _anthropic_urls(base, "/messages")
     else:
         urls = _candidate_urls(base, "/chat/completions")
     payload = {"model": config.model, **_PROBE_PAYLOAD}
@@ -158,7 +159,7 @@ async def _list_models(
 ) -> dict[str, Any]:
     base = config.base_url.rstrip("/")
     if config.protocol == "anthropic":
-        urls = [f"{base}/v1/models"]
+        urls = _anthropic_urls(base, "/models")
     else:
         urls = _candidate_urls(base, "/models")
     async with httpx.AsyncClient(timeout=AI_TEST_TIMEOUT_SECONDS, transport=transport) as client:
