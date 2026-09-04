@@ -44,7 +44,9 @@ textarea{resize:vertical}
 .badge.p1{background:#fde8e8;color:#b3261e}
 .badge.p2{background:var(--warn-soft);color:var(--warn)}
 .badge.src{background:var(--pri-soft);color:var(--pri)}
-.badge.mode{background:var(--blue-soft);color:var(--blue)}
+.badge.mode-rule{background:var(--blue-soft);color:var(--blue)}
+.badge.mode-ai{background:var(--pri-soft);color:var(--pri)}
+.badge.mode-degraded{background:var(--warn-soft);color:var(--warn)}
 table{width:100%;border-collapse:collapse;font-size:12.5px;margin:10px 0}
 th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
 th{background:#f8fbf9;font-weight:600}

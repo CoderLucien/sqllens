@@ -75,7 +75,7 @@ async function copyDumpScript() {
 function useRules() {
   state.aiOk = false;
   el("reportMode").className = "alert info";
-  el("reportMode").innerHTML = "规则模式输出（未配置 AI）。配置 AI 后可获得归纳润色；AI 故障时同样降级为本模式。";
+  el("reportMode").innerHTML = "当前版本报告均由规则引擎生成；AI 归纳为后续能力。";
   go(2);
 }
 
@@ -123,6 +123,7 @@ async function diagnose(evidence, progressContainer) {
 }
 
 function renderReport(report) {
+  state.report = report;
   const mode = el("reportMode");
   if (report.mode === "rules") { mode.className = "alert info"; mode.textContent = report.ai_status_zh; }
   else if (report.mode === "degraded") { mode.className = "alert warn"; mode.textContent = report.ai_status_zh; }
@@ -130,6 +131,10 @@ function renderReport(report) {
 
   const sections = report.sections;
   const priorityBadge = report.priority === "P1" ? '<span class="badge p1">P1</span>' : '<span class="badge p2">P2</span>';
+  const modeBadge =
+    report.mode === "rules" ? '<span class="badge mode-rule">规则生成</span>'
+      : report.mode === "degraded" ? '<span class="badge mode-degraded">AI 失败已降级</span>'
+        : '<span class="badge mode-ai">AI 增强</span>';
   const ruleBadges = (sections.conclusion.rule_ids || []).map((id) => `<span class="badge src">${esc(id)}</span>`).join("");
 
   const evidenceRows = (sections.evidence || []).map((row) =>
@@ -150,7 +155,7 @@ function renderReport(report) {
   const rollbacks = (sections.rollback || []).map((item) => `<li>${esc(item.text_zh)}</li>`).join("");
 
   el("reportBody").innerHTML = `
-    <div class="h-seg"><span class="no">一</span>结论 ${priorityBadge}${ruleBadges}</div>
+    <div class="h-seg"><span class="no">一</span>结论 ${priorityBadge}${modeBadge}${ruleBadges}</div>
     <p>${esc(sections.conclusion.text_zh)}</p>
     <div class="hint">SQL Digest：${esc(report.sql_digest.slice(0, 16))}… · 数据库：${esc(report.database)}</div>
 
@@ -267,8 +272,9 @@ function copyReport() {
     return;
   }
   const r = state.report;
+  const modeName = r.mode === "rules" ? "规则生成" : r.mode === "degraded" ? "AI 失败已降级" : "AI 增强";
   const lines = [
-    `SQLLens 诊断报告（${r.priority} · ${r.mode === "rules" ? "规则模式" : r.mode}）`,
+    `SQLLens 诊断报告（${r.priority} · ${modeName}）`,
     "",
     `一、结论：${r.sections.conclusion.text_zh}`,
     "",

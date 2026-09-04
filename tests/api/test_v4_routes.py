@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
+import httpx
 from fastapi.testclient import TestClient
 
 from sqllens_api.app import create_app
+from sqllens_api.v4_routes import AiConfigInput, _list_models, _probe_ai
 
 EVIDENCE_INDEX = {
     "schema_version": "evidence/v3",
@@ -151,6 +154,104 @@ class TestAiEndpoints:
         )
         assert response.status_code == 200
         assert response.json()["ok"] is False
+
+
+class TestAiV1Fallback:
+    # rd2 实测：网关官方文档推荐裸域 Base URL，裸域 /chat/completions 返回 501（静态页不吃
+    # POST），/v1/chat/completions 才是真实端点——缺 /v1 时必须自动补全重试一次。
+
+    @staticmethod
+    def _config(base_url: str) -> AiConfigInput:
+        return AiConfigInput(base_url=base_url, api_key="sk-x", model="m")
+
+    def test_bare_domain_501_retries_with_v1_and_succeeds(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            if request.url.path == "/chat/completions":
+                return httpx.Response(501, text="not implemented")
+            return httpx.Response(200, json={"choices": []})
+
+        result = asyncio.run(
+            _probe_ai(self._config("https://gw.example"), transport=httpx.MockTransport(handler))
+        )
+        assert result["ok"] is True
+        assert calls == ["/chat/completions", "/v1/chat/completions"]
+
+    def test_v1_base_url_does_not_retry_and_501_message_hints_v1(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(501, text="not implemented")
+
+        result = asyncio.run(
+            _probe_ai(self._config("https://gw.example/v1"), transport=httpx.MockTransport(handler))
+        )
+        assert result["ok"] is False
+        assert result["code"] == "PROTOCOL_INCOMPATIBLE"
+        assert "/v1" in result["message_zh"]
+        assert calls == ["/v1/chat/completions"]
+
+    def test_auth_error_not_retried(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(401, json={"error": "invalid key"})
+
+        result = asyncio.run(
+            _probe_ai(self._config("https://gw.example"), transport=httpx.MockTransport(handler))
+        )
+        assert result["ok"] is False
+        assert result["code"] == "AUTH_INVALID"
+        assert calls == ["/chat/completions"]
+
+    def test_404_retries_then_classifies_model_not_found(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(404, json={"error": "not found"})
+
+        result = asyncio.run(
+            _probe_ai(self._config("https://gw.example"), transport=httpx.MockTransport(handler))
+        )
+        assert result["ok"] is False
+        assert result["code"] == "MODEL_NOT_FOUND"
+        assert calls == ["/chat/completions", "/v1/chat/completions"]
+
+    def test_models_bare_domain_501_retries_with_v1(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            if request.url.path == "/models":
+                return httpx.Response(501, text="not implemented")
+            return httpx.Response(200, json={"data": [{"id": "gpt-x"}, {"id": "deepseek-chat"}]})
+
+        result = asyncio.run(
+            _list_models(self._config("https://gw.example"), transport=httpx.MockTransport(handler))
+        )
+        assert result["ok"] is True
+        assert result["models"] == ["deepseek-chat", "gpt-x"]
+        assert calls == ["/models", "/v1/models"]
+
+    def test_anthropic_probe_uses_v1_messages_without_retry(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(401, json={"error": "auth"})
+
+        config = AiConfigInput(
+            base_url="https://gw.example", api_key="sk-x", model="claude-x", protocol="anthropic"
+        )
+        result = asyncio.run(_probe_ai(config, transport=httpx.MockTransport(handler)))
+        assert result["ok"] is False
+        assert result["code"] == "AUTH_INVALID"
+        assert calls == ["/v1/messages"]
 
 
 class TestDiagnoseWithoutEstRows:
