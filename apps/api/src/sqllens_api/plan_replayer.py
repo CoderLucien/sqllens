@@ -121,8 +121,13 @@ def parse_plan_replayer_zip(data: bytes) -> PlanReplayerBundle:
             base = lowered.split("/")[-1]
             if base == "meta.txt":
                 bundle.meta_text = text
-            elif "schema" in lowered and (base.endswith(".txt") or base.endswith(".sql")):
-                bundle.schema_text = text
+            elif "schema" in lowered and (
+                base.endswith(".schema.txt") or base == "schema.txt" or base.endswith(".sql")
+            ):
+                # TiDB 原始导出含 schema/schema_meta.txt（清单，非 DDL），按 zip
+                # 条目顺序后写会覆盖真实 *.schema.txt——只接受含 CREATE TABLE 的文本。
+                if "create table" in text.lower():
+                    bundle.schema_text = text
             elif base == "stats.txt" or "stats" in lowered.split("/") or (
                 "stats" in lowered and base.endswith(".json")
             ):
@@ -132,7 +137,10 @@ def parse_plan_replayer_zip(data: bytes) -> PlanReplayerBundle:
             elif base.startswith("explain") or "explain" in base:
                 bundle.explain_text = text
             elif lowered.endswith(".sql") or (base.startswith("sql") and base.endswith(".txt")):
-                sql_by_name[name] = text
+                # 根目录 session/global_bindings.sql 是 TiDB 基线绑定导出（常为空），
+                # 不是被抓取的查询，不能进入 sql_texts。
+                if "bindings" not in base:
+                    sql_by_name[name] = text
 
         # SQL 文本按文件名稳定排序，避免结果非确定。
         bundle.sql_texts = [sql_by_name[k] for k in sorted(sql_by_name)]
@@ -186,7 +194,10 @@ def bundle_to_evidence_v3(bundle: PlanReplayerBundle) -> dict:
 
 
 def _first_sql(bundle: PlanReplayerBundle) -> str:
-    return bundle.sql_texts[0] if bundle.sql_texts else ""
+    for text in bundle.sql_texts:
+        if text and text.strip():
+            return text
+    return ""
 
 
 def _sql_digest(sql_text: str) -> str:
