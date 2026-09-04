@@ -253,6 +253,27 @@ class TestAiV1Fallback:
         assert result["code"] == "AUTH_INVALID"
         assert calls == ["/v1/messages"]
 
+    def test_anthropic_base_with_v1_no_double_prefix_probe_and_models(self) -> None:
+        probe_calls: list[str] = []
+        models_calls: list[str] = []
+
+        def probe_handler(request: httpx.Request) -> httpx.Response:
+            probe_calls.append(request.url.path)
+            return httpx.Response(401, json={"error": "auth"})
+
+        def models_handler(request: httpx.Request) -> httpx.Response:
+            models_calls.append(request.url.path)
+            return httpx.Response(200, json={"data": [{"id": "claude-x"}]})
+
+        config = AiConfigInput(
+            base_url="https://gw.example/v1", api_key="sk-x", model="claude-x", protocol="anthropic"
+        )
+        asyncio.run(_probe_ai(config, transport=httpx.MockTransport(probe_handler)))
+        models = asyncio.run(_list_models(config, transport=httpx.MockTransport(models_handler)))
+        assert probe_calls == ["/v1/messages"]
+        assert models_calls == ["/v1/models"]
+        assert models["models"] == ["claude-x"]
+
 
 class TestDiagnoseWithoutEstRows:
     def test_missing_est_rows_does_not_trigger_stats_skew(self) -> None:

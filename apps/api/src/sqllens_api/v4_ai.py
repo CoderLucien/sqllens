@@ -67,6 +67,13 @@ def _candidate_urls(base: str, suffix: str) -> list[str]:
     return urls
 
 
+def _anthropic_urls(base: str, suffix: str) -> list[str]:
+    """Anthropic 端点固定在 /v1 下；base 已带 /v1 尾缀时不重拼（防 /v1/v1）。"""
+    if urlsplit(base).path.rstrip("/").endswith("/v1"):
+        return [f"{base}{suffix}"]
+    return [f"{base}/v1{suffix}"]
+
+
 def _classify(exc: httpx.HTTPError) -> dict[str, Any]:
     if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout)):
         return {
@@ -274,7 +281,7 @@ async def _call_model(
     """
     base = config.base_url.rstrip("/")
     if config.protocol == "anthropic":
-        urls = [f"{base}/v1/messages"]
+        urls = _anthropic_urls(base, "/messages")
         payload: dict[str, Any] = {
             "model": config.model,
             "max_tokens": AI_MAX_OUTPUT_TOKENS,
