@@ -105,10 +105,11 @@ def diagnose_v4(evidence: dict[str, Any], *, mode: str = "rules") -> dict[str, A
         if hit is not None:
             hits.append(hit)
 
-    est_rows = int(stats.get("est_rows") or 0)
+    est_rows = stats.get("est_rows")
     actual_rows = int(stats.get("actual_rows") or 0) or int(stats.get("row_count") or 0)
     healthy = int(stats.get("healthy") if stats.get("healthy") is not None else 100)
-    if actual_rows > 0 and (est_rows > 0 or actual_rows > est_rows):
+    if est_rows is not None and actual_rows > 0 and (int(est_rows) > 0 or actual_rows > int(est_rows)):
+        est_rows = int(est_rows)
         hit = stats_skew_hit(
             table_name=table_name or "目标表",
             est_rows=est_rows,

@@ -66,8 +66,6 @@ def index_access_hit(
         return None
     if scanned_rows < MIN_MEANINGFUL_SCAN_ROWS:
         return None
-    if result_rows > 0 and scanned_rows < result_rows * MIN_SCAN_TO_RESULT_RATIO:
-        return None
     covered = any(
         filter_columns[: len(prefix)] == prefix for prefix in index_prefixes
     )
@@ -82,13 +80,50 @@ def index_access_hit(
     build_seconds = max(10, math.ceil(scanned_rows / build_rate_rows_per_sec))
     storage_bytes = INDEX_BYTES_PER_ROW * scanned_rows * 1.5
     storage_mb = storage_bytes / (1024 * 1024)
-    expected_scan = max(result_rows * INDEX_LOOKUP_FACTOR, 2)
-    reduction = (1 - expected_scan / scanned_rows) * 100
-    p95_est_ms = p95_ms * expected_scan / scanned_rows
-    if p95_est_ms < 1:
-        p95_est_str = "< 1ms"
+    has_result = result_rows > 0
+    ratio = scanned_rows / result_rows if has_result else None
+    # 返回占比较高（>1%）时普通复合索引收益有限：改为覆盖索引建议（消除回表）。
+    large_scan = has_result and ratio is not None and ratio <= MIN_SCAN_TO_RESULT_RATIO
+
+    if large_scan:
+        ddl = (
+            f"CREATE INDEX {index_name} ON {table_name}({', '.join(index_cols)}); "
+            "（覆盖索引：按 SELECT 引用列追加到索引尾部，使索引覆盖查询，避免回表）"
+        )
+        gain_zh = (
+            f"回表消除：{_fmt_number(scanned_rows)} 行全表扫描改为仅读覆盖索引页；"
+            f"返回 {_fmt_number(result_rows)} 行（占比 {result_rows / scanned_rows * 100:.0f}%）"
+            "时，普通索引收益有限，覆盖索引可减少约 1 次/行的回表随机读。IO 预计下降 50% 以上，需隔离环境实测。"
+        )
+        gain_formula_zh = (
+            f"收益公式：回表消除收益 ≈ 返回行数（{result_rows}）× 回表随机读成本；"
+            "覆盖索引扫描量与返回行数同量级。"
+        )
+    elif has_result:
+        expected_scan = max(result_rows * INDEX_LOOKUP_FACTOR, 2)
+        reduction = (1 - expected_scan / scanned_rows) * 100
+        p95_est_str = ""
+        if p95_ms > 0:
+            p95_est_ms = p95_ms * expected_scan / scanned_rows
+            p95_est_str = "< 1ms" if p95_est_ms < 1 else f"约 {p95_est_ms:.0f}ms"
+        gain_zh = (
+            f"扫描行数 {_fmt_number(scanned_rows)} → 约 {_fmt_number(expected_scan)} "
+            f"（-{reduction:.1f}%）；"
+            + (f"P95 预估 {p95_ms:.0f}ms → {p95_est_str}。" if p95_ms > 0 else "P95 需隔离环境实测确认。")
+        )
+        gain_formula_zh = (
+            f"收益公式：索引后扫描 ≈ 返回行数（{result_rows}）× 回表系数（{INDEX_LOOKUP_FACTOR}）；"
+            "P95 按扫描行数线性比例估算，需实测验证。"
+        )
     else:
-        p95_est_str = f"约 {p95_est_ms:.0f}ms"
+        gain_zh = (
+            f"扫描量由 {_fmt_number(scanned_rows)} 行全表扫描降为按 {', '.join(filter_columns)} "
+            "选择性过滤的索引范围扫描；具体收益取决于数据分布，需隔离环境实测确认。"
+        )
+        gain_formula_zh = (
+            "收益公式：返回行数未知（离线包无运行时统计），不伪造行数预估；"
+            "索引后扫描 ≈ 过滤选择性 × 表行数，需实测验证。"
+        )
 
     action = ActionAdvice(
         operation_zh=(
@@ -107,33 +142,46 @@ def index_access_hit(
             f"成本公式：构建时长 ≈ 行数 ÷ 保守构建速率（{build_rate_rows_per_sec} 行/秒）；"
             f"存储 ≈ Σ索引列字节宽 × 行数 × 1.5。"
         ),
-        gain_zh=(
-            f"扫描行数 {_fmt_number(scanned_rows)} → 约 {_fmt_number(expected_scan)} "
-            f"（-{reduction:.1f}%）；P95 预估 {p95_ms:.0f}ms → {p95_est_str}。"
-        ),
-        gain_formula_zh=(
-            f"收益公式：索引后扫描 ≈ 返回行数（{result_rows}）× 回表系数（{INDEX_LOOKUP_FACTOR}）；"
-            "P95 按扫描行数线性比例估算，需实测验证。"
-        ),
+        gain_zh=gain_zh,
+        gain_formula_zh=gain_formula_zh,
         validation_zh=(
             "隔离环境运行普通 EXPLAIN 与压测：确认访问方式由 TableFullScan 变为 "
             "IndexRangeScan；扫描行数下降 ≥ 90%、P95 < 500ms、写入回归 ≤ 5% 为达标。"
         ),
         rollback_zh=f"DROP INDEX {index_name} ON {table_name};（收益或写入开销不达标时在隔离环境执行；生产环境不自动变更）。",
     )
+    if large_scan:
+        conclusion_zh = (
+            f"该查询在 {table_name} 表发生全表扫描：扫描 {_fmt_number(scanned_rows)} 行、"
+            f"返回 {_fmt_number(result_rows)} 行（占比 {result_rows / scanned_rows * 100:.0f}%）；"
+            f"过滤列 {', '.join(filter_columns)} 无可用索引。由于返回占比较高，普通索引收益有限，"
+            "建议评估覆盖索引（过滤列 + 查询列）以消除回表。"
+        )
+        analysis_zh = (
+            f"过滤列 {', '.join(filter_columns)} 未命中任何现有索引前缀，优化器回退为全表扫描；"
+            f"返回行占扫描行的 {result_rows / scanned_rows * 100:.0f}%，属大范围扫描——"
+            "行数过滤收益有限，但覆盖索引可让查询只读索引页、跳过每行一次的回表随机读。"
+        )
+    else:
+        conclusion_zh = (
+            f"该查询在 {table_name} 表发生全表扫描：平均扫描 {_fmt_number(scanned_rows)} 行"
+            + (f"，扫描/返回比 {scanned_rows / result_rows:.0f}:1" if has_result else "")
+            + "；现有索引未覆盖过滤列顺序，建议优先在隔离环境验证复合索引候选。"
+        )
+        analysis_zh = (
+            f"过滤列 {', '.join(filter_columns)} 未命中任何现有索引前缀，优化器回退为全表扫描；"
+            + (
+                f"扫描 {_fmt_number(scanned_rows)} 行仅返回 {_fmt_number(result_rows)} 行。"
+                if has_result
+                else f"扫描 {_fmt_number(scanned_rows)} 行且访问路径为全表扫描。"
+            )
+            + "当前没有证据表明需要扩容——瓶颈在访问路径，不在资源。"
+        )
     return RuleHit(
         rule_id="IDX_ACCESS_001",
         severity=severity,
-        conclusion_zh=(
-            f"该查询在 {table_name} 表发生全表扫描：平均扫描 {_fmt_number(scanned_rows)} 行，"
-            f"扫描/返回比 {scanned_rows / max(result_rows, 1):.0f}:1；现有索引未覆盖过滤列顺序，"
-            "建议优先在隔离环境验证复合索引候选。"
-        ),
-        analysis_zh=(
-            f"过滤列 {', '.join(filter_columns)} 未命中任何现有索引前缀，优化器回退为全表扫描；"
-            f"扫描 {_fmt_number(scanned_rows)} 行仅返回 {_fmt_number(result_rows)} 行。"
-            "当前没有证据表明需要扩容——瓶颈在访问路径，不在资源。"
-        ),
+        conclusion_zh=conclusion_zh,
+        analysis_zh=analysis_zh,
         evidence_ids=("ev_plan", "ev_schema", "ev_runtime"),
         actions=(action,),
     )
@@ -277,8 +325,22 @@ def build_report_v4(
         report_priority = "P2"
     else:
         report_priority = "P1" if any(h.severity == "P1" for h in hits) else "P2"
-    conclusion_zh = "；".join(h.conclusion_zh for h in hits) or "未命中任何规则，证据不足以给出变更建议。"
-    analysis_zh = "\n".join(h.analysis_zh for h in hits)
+    if hits:
+        conclusion_zh = "；".join(h.conclusion_zh for h in hits)
+        analysis_zh = "\n".join(h.analysis_zh for h in hits)
+    else:
+        evidence_labels = "、".join(row["label_zh"] for row in evidence_rows) or "无"
+        conclusion_zh = (
+            f"诊断包已成功解析，共提取 {len(evidence_rows)} 组证据（{evidence_labels}）。"
+            "当前证据未命中规则库中的三类已知模式（索引访问 / 统计偏差 / 热点重复），"
+            "因此本次不给出变更建议——不做无依据的修改推荐。"
+        )
+        analysis_zh = (
+            "规则引擎对已解析的执行计划、统计信息与 Schema 逐项核对后未发现匹配模式："
+            "可能原因包括：该 SQL 本身访问路径正常（已走索引或扫描量很小）、"
+            "统计信息健康且估算准确、或执行频率未达到重复扫描阈值。"
+            "下方证据表保留了本次解析的原始事实，可直接供人工判断。"
+        )
     changes = []
     for hit in hits:
         for action in hit.actions:
@@ -293,8 +355,12 @@ def build_report_v4(
                     "rule_id": hit.rule_id,
                 }
             )
-    validation_zh = [a.validation_zh for h in hits for a in h.actions]
-    rollback_zh = [a.rollback_zh for h in hits for a in h.actions]
+    validation_zh = [a.validation_zh for h in hits for a in h.actions] or [
+        "无需验证：本次未给出变更建议，无需执行变更。"
+    ]
+    rollback_zh = [a.rollback_zh for h in hits for a in h.actions] or [
+        "无需回滚：本次未给出变更建议，未引入任何变更。"
+    ]
     ai_status_zh = (
         f"AI 调用失败，已降级为规则模式输出（{ai_degraded_reason_zh}）。"
         if mode == "degraded"

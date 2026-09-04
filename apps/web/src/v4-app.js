@@ -93,15 +93,31 @@ async function postJson(url, body) {
   return data;
 }
 
-async function diagnose(evidence) {
-  const busy = el("uploadMsg");
-  if (busy) busy.innerHTML = '<span class="spin"></span>正在诊断…';
+const PROGRESS_STAGES = ["上传诊断包", "解析 Replayer", "提取证据", "生成结论", "完成"];
+
+function setProgress(container, currentIndex, doneThrough) {
+  const items = PROGRESS_STAGES.map((label, index) => {
+    let cls = "p-step";
+    let mark = "";
+    if (index < doneThrough || (index === currentIndex && doneThrough === index)) {
+      if (index < currentIndex) { cls += " done"; mark = "✓ "; }
+    }
+    if (index === currentIndex && doneThrough !== index) cls += " active";
+    if (index === currentIndex && doneThrough === index) { cls += " done"; mark = "✓ "; }
+    return `<span class="${cls}">${mark}${label}</span>`;
+  });
+  container.innerHTML = `<div class="p-steps">${items.join('<span class="p-arrow">→</span>')}</div>`;
+}
+
+async function diagnose(evidence, progressContainer) {
   try {
+    if (progressContainer) setProgress(progressContainer, 3, 2);
     const report = await postJson("/api/v1/v4/diagnose", evidence);
+    if (progressContainer) setProgress(progressContainer, 4, 4);
     renderReport(report);
     go(2);
   } catch (error) {
-    if (busy) busy.innerHTML = `<div class="alert err">诊断失败：${esc(error.message)}</div>`;
+    if (progressContainer) progressContainer.innerHTML = `<div class="alert err">诊断失败：${esc(error.message)}</div>`;
     toast(`诊断失败：${error.message}`);
   }
 }
@@ -120,13 +136,15 @@ function renderReport(report) {
     `<tr><td>${esc(row.label_zh)}</td><td>${esc(row.value_zh)}</td><td>${esc((row.evidence_ids || []).join(", "))}</td></tr>`
   ).join("");
 
-  const changes = (sections.changes || []).map((change) => `
+  const changes = (sections.changes || []).length
+    ? (sections.changes || []).map((change) => `
     <div class="four">
       <div class="kv"><b>变更操作</b><span>${esc(change.operation_zh)}</span></div>
       <div class="kv"><b>风险提示</b><span>${esc(change.risk_zh)}</span></div>
       <div class="kv"><b>成本预估</b><span>${esc(change.cost_zh)}<span class="formula">${esc(change.cost_formula_zh)}</span></span></div>
       <div class="kv"><b>收益预估</b><span>${esc(change.gain_zh)}<span class="formula">${esc(change.gain_formula_zh)}</span></span></div>
-    </div>`).join("");
+    </div>`).join("")
+    : '<div class="alert info">本次未给出变更建议：证据未命中已知异常模式。如需进一步分析，可补充运行时证据（如直连采集执行次数与延迟）后重新诊断。</div>';
 
   const validations = (sections.validation || []).map((item) => `<li>${esc(item.text_zh)}</li>`).join("");
   const rollbacks = (sections.rollback || []).map((item) => `<li>${esc(item.text_zh)}</li>`).join("");
@@ -210,14 +228,14 @@ function init() {
     const file = event.target.files && event.target.files[0];
     if (!file) return;
     const busy = el("uploadMsg");
-    busy.innerHTML = '<span class="spin"></span>正在上传并解析诊断包…';
+    setProgress(busy, 0, 0);
     try {
       const response = await fetch("/api/v1/v4/plan-replayer", { method: "POST", body: file });
       let data = null;
       try { data = await response.json(); } catch { data = null; }
       if (!response.ok) throw new Error((data && data.message) ? data.message : `上传失败：HTTP ${response.status}`);
-      busy.innerHTML = '<div class="alert ok">诊断包解析完成，正在执行规则诊断…</div>';
-      await diagnose(data);
+      setProgress(busy, 2, 1);
+      await diagnose(data, busy);
     } catch (error) {
       busy.innerHTML = `<div class="alert err">上传失败：${esc(error.message)}</div>`;
       toast(`上传失败：${error.message}`);
@@ -238,9 +256,37 @@ function init() {
     else if (button.textContent.includes("← 返回")) button.addEventListener("click", () => go(0));
   });
   document.querySelectorAll("#scr-report .btn").forEach((button) => {
-    if (button.textContent.includes("AI 配置")) button.addEventListener("click", () => go(1));
-    else if (button.textContent.includes("开始诊断")) button.addEventListener("click", () => go(0));
+    if (button.id === "restartBtn") button.addEventListener("click", () => go(0));
+    else if (button.id === "copyReportBtn") button.addEventListener("click", copyReport);
   });
+}
+
+function copyReport() {
+  if (!state.report) {
+    toast("尚无报告可复制");
+    return;
+  }
+  const r = state.report;
+  const lines = [
+    `SQLLens 诊断报告（${r.priority} · ${r.mode === "rules" ? "规则模式" : r.mode}）`,
+    "",
+    `一、结论：${r.sections.conclusion.text_zh}`,
+    "",
+    "二、证据：" + (r.sections.evidence || []).map((e) => `${e.label_zh}：${e.value_zh}`).join("；"),
+    "",
+    `三、问题分析：${r.sections.analysis.text_zh}`,
+    "",
+    "四、变更建议：" + ((r.sections.changes || []).map((c, i) =>
+      `\n${i + 1}. 操作：${c.operation_zh}\n   风险：${c.risk_zh}\n   成本：${c.cost_zh}\n   收益：${c.gain_zh}`).join("") || "无（未命中已知异常模式）"),
+    "",
+    "五、验证方法：" + (r.sections.validation || []).map((v) => v.text_zh).join("；"),
+    "",
+    "六、回滚步骤：" + (r.sections.rollback || []).map((v) => v.text_zh).join("；"),
+  ];
+  navigator.clipboard.writeText(lines.join("\n")).then(
+    () => toast("报告已复制到剪贴板"),
+    () => toast("复制失败，请手动选择复制"),
+  );
 }
 
 init();

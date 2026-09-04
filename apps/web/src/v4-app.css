@@ -72,3 +72,8 @@ th{background:#f8fbf9;font-weight:600}
 .flex2{flex:2}
 .btn-group{display:flex;gap:10px}
 .plain-list{margin-left:18px}
+.p-steps{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0;font-size:12.5px}
+.p-step{padding:4px 10px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:#fff}
+.p-step.active{background:var(--pri);color:#fff;border-color:var(--pri)}
+.p-step.done{background:var(--pri-soft);color:var(--pri);border-color:var(--pri)}
+.p-arrow{color:var(--muted)}

@@ -102,3 +102,67 @@ def test_evidence_v3_mapping() -> None:
     indexes = {i["name"]: i["columns"] for i in ev["schema"]["indexes"]}
     assert indexes["idx_tenant_created"] == ["tenant_id", "created_at"]
     assert "tenant_id" in ev["schema"]["filter_columns"]
+
+
+def test_sql_txt_filename_recognized() -> None:
+    """真实 PLAN REPLAYER DUMP 使用 sql.txt（而非 *.sql），必须被识别。"""
+    data = _make_zip(
+        {
+            "meta.txt": "TiDB Version: v8.5.8\n",
+            "schema.txt": "CREATE TABLE lineitem (l_orderkey bigint, PRIMARY KEY (l_orderkey, l_linenumber));\n",
+            "stats.txt": '{"lineitem": {"row_count": 6001215, "healthy": 100}}',
+            "sql.txt": "SELECT l_orderkey FROM lineitem WHERE l_shipdate >= '1998-01-01';",
+            "explain.txt": "TableFullScan lineitem estRows 6001215",
+        }
+    )
+    bundle = parse_plan_replayer_zip(data)
+    evidence = bundle_to_evidence_v3(bundle)
+    assert evidence["sql"]["sql_text"].startswith("SELECT l_orderkey")
+    assert evidence["sql"]["table_name"] == "lineitem"
+    assert evidence["schema"]["filter_columns"] == ["l_shipdate"]
+    assert "PRIMARY" in [item["name"] for item in evidence["schema"]["indexes"]]
+    assert evidence["plan"]["operator_rows"]
+
+
+def test_real_tidb_dump_structure() -> None:
+    """按 mac测试专员 2026-09-04 真实 zip 结构复现：子目录路径 + TAB 分隔 explain + 大写列名。"""
+    data = _make_zip(
+        {
+            "meta.txt": "Release Version: v8.5.8\nEdition: Community\n",
+            "schema/tpch.lineitem.schema.txt": (
+                "create database if not exists `tpch`; use `tpch`;CREATE TABLE `lineitem` (\n"
+                "  `L_ORDERKEY` bigint NOT NULL,\n  `L_SHIPDATE` date NOT NULL,\n"
+                "  PRIMARY KEY (`L_ORDERKEY`,`L_LINENUMBER`) /*T![clustered_index] CLUSTERED */\n"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            ),
+            "stats/tpch.lineitem.json": (
+                '{"database_name": "tpch", "table_name": "lineitem", "count": 6001215, "modify_count": 0}'
+            ),
+            "sql/sql0.sql": (
+                "use tpch; SELECT l_orderkey, l_extendedprice, l_discount "
+                "FROM lineitem WHERE L_SHIPDATE < '1996-01-01';"
+            ),
+            "explain.txt": (
+                "TableReader_11\t3482024.00\t3489491\troot\t\ttime:901.7ms, loops:3398\tdata:Projection_5\tN/A\n"
+                "    └─TableFullScan_9\t6001215.00\t6001215\tcop[tikv]\ttable:lineitem\t"
+                "tikv_task:{proc max:80ms}\tkeep order:false\tN/A\n"
+            ),
+        }
+    )
+    bundle = parse_plan_replayer_zip(data)
+    evidence = bundle_to_evidence_v3(bundle)
+    assert evidence["sql"]["table_name"] == "lineitem"
+    assert evidence["sql"]["sql_text"]
+    assert evidence["schema"]["filter_columns"] == ["l_shipdate"]
+    assert evidence["schema"]["indexes"] == [
+        {"name": "PRIMARY", "columns": ["l_orderkey", "l_linenumber"]}
+    ]
+    assert evidence["stats"]["row_count"] == 6001215
+    assert evidence["plan"]["operator_rows"][0]["operator"].startswith("TableReader")
+    assert evidence["plan"]["operator_rows"][0]["est_rows"] == 3482024
+    assert any(
+        row.get("table") == "lineitem" and "FullScan" in row["operator"]
+        for row in evidence["plan"]["operator_rows"]
+    )
+    assert evidence["runtime"]["scanned_rows"] == 6001215
+    assert evidence["runtime"]["result_rows"] == 3489491
