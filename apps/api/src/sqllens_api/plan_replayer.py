@@ -118,15 +118,18 @@ def parse_plan_replayer_zip(data: bytes) -> PlanReplayerBundle:
             base = lowered.split("/")[-1]
             if base == "meta.txt":
                 bundle.meta_text = text
-            elif base == "schema.txt":
-                bundle.schema_text = text
-            elif base == "stats.txt":
+            elif base == "schema.txt" or base.endswith(".schema.txt"):
+                # 真实 zip 为 schema/<db>.<table>.schema.txt，可能多表；拼接保留全部。
+                bundle.schema_text = (bundle.schema_text + "\n" + text) if bundle.schema_text else text
+            elif lowered.startswith("stats/") and base.endswith(".json"):
+                bundle.stats_text = text
+            elif base in ("stats.txt", "stats.json"):
                 bundle.stats_text = text
             elif base == "errors.txt":
                 bundle.errors_text = text
             elif base.startswith("explain") or "explain" in base:
                 bundle.explain_text = text
-            elif lowered.endswith(".sql") and "sql" in lowered:
+            elif base.endswith(".sql") and "sql" in lowered:
                 sql_by_name[name] = text
 
         # SQL 文本按文件名稳定排序，避免结果非确定。
@@ -164,17 +167,21 @@ def bundle_to_evidence_v3(bundle: PlanReplayerBundle) -> dict:
     按证据不足降级处理。数字一律为安全整数，禁止 NaN/Infinity。
     """
     sql_text = _first_sql(bundle)
+    plan = _parse_plan(bundle.explain_text)
+    stats = _parse_stats(bundle.stats_text)
+    # EXPLAIN ANALYZE 的 estRows/actRows 补充到 stats（供统计偏差规则对比）。
+    _enrich_stats_from_plan(stats, plan)
     return {
         "schema_version": "evidence/v3",
         "sql": {
             "sql_digest": _sql_digest(sql_text),
             "sql_text": sql_text,
-            "database": _database_from_meta(bundle.meta_text),
+            "database": _database_from_bundle(bundle),
             "table_name": _table_from_sql(sql_text),
         },
-        "runtime": _parse_runtime(bundle),
-        "plan": _parse_plan(bundle.explain_text),
-        "stats": _parse_stats(bundle.stats_text),
+        "runtime": _parse_runtime(plan, stats),
+        "plan": {"operator_rows": plan["operator_rows"]},
+        "stats": stats,
         "schema": _parse_schema(bundle.schema_text, sql_text),
         "optional": {},
     }
@@ -204,6 +211,27 @@ def _database_from_meta(meta_text: str | None) -> str:
     return ""
 
 
+def _database_from_bundle(bundle: PlanReplayerBundle) -> str:
+    """多来源提取 database 名（契约要求非空）。"""
+    db = _database_from_meta(bundle.meta_text)
+    if db:
+        return db
+    # stats JSON 的 database_name
+    if bundle.stats_text:
+        try:
+            data = json.loads(bundle.stats_text)
+            if isinstance(data, dict) and data.get("database_name"):
+                return str(data["database_name"])
+        except json.JSONDecodeError:
+            pass
+    # schema 文件的 `use `db``
+    if bundle.schema_text:
+        m = re.search(r"\buse\s+`?([\w]+)`?", bundle.schema_text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    return ""
+
+
 _TABLE_RE = re.compile(r"\bFROM\s+([`\w.]+)", re.IGNORECASE)
 
 
@@ -212,46 +240,91 @@ def _table_from_sql(sql_text: str) -> str:
     return match.group(1) if match else ""
 
 
-def _parse_runtime(bundle: PlanReplayerBundle) -> dict:
-    # 离线 Plan Replayer 通常不含运行时指标；exec_count/window 取保守缺省，
-    # 诊断内核据此判定为「无运行时证据」而非伪造数字。
-    return {
-        "exec_count": 0,
-        "window_minutes": 1,
-    }
+def _parse_runtime(plan: dict, stats: dict) -> dict:
+    """从执行计划提取实际扫描/结果行数，作为运行时证据。
+
+    离线 Plan Replayer 无 exec_count/p95（那些来自 statement summary），
+    故 exec_count 保持 0、不伪造；但 EXPLAIN ANALYZE 的 actRows 可提供
+    scanned_rows / result_rows，足以让索引类规则命中。
+    """
+    runtime: dict = {"exec_count": 0, "window_minutes": 1}
+    if plan.get("scanned_rows"):
+        runtime["scanned_rows"] = plan["scanned_rows"]
+    if plan.get("result_rows"):
+        runtime["result_rows"] = plan["result_rows"]
+    return runtime
 
 
-_PLAN_OP_RE = re.compile(
-    r"(?P<op>[A-Za-z][A-Za-z0-9_]+)\s*(?:\(\s*)?(?P<table>[`\w.]+)?"
-    r"(?:[^\n]*?estRows[: ]?\s*(?P<est>\d+))?",
-    re.IGNORECASE,
-)
+_TREE_PREFIX_RE = re.compile(r"^[\s└─├│]*")
+_ID_SUFFIX_RE = re.compile(r"_\d+$")
+_TABLE_ACCESS_RE = re.compile(r"table:([`\w.]+)", re.IGNORECASE)
+
+
+def _safe_number(value: str | None) -> int | None:
+    value = (value or "").strip()
+    if not value or value in ("N/A", "<nil>", "NULL", "None"):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_plan(explain_text: str | None) -> dict:
-    """从 explain 文本尽力提取算子行（operator/table/est_rows）。
+    """解析 TiDB EXPLAIN ANALYZE 的制表符分隔输出。
 
-    保持确定性：仅取前若干行，失败时返回空 operator_rows。
+    真实格式（每行 tab 分隔，列序固定）：
+    ``id \\t estRows \\t actRows \\t task \\t access_object \\t execution_info \\t operator_info \\t memory \\t disk``
+
+    返回 ``operator_rows``（契约字段：operator/table/est_rows）以及供 runtime
+    使用的 ``scanned_rows`` / ``result_rows``。
     """
+    result: dict = {"operator_rows": [], "scanned_rows": 0, "result_rows": 0}
     if not explain_text:
-        return {"operator_rows": []}
+        return result
+
     rows: list[dict] = []
+    scanned_rows = 0
+    scan_est_rows = 0
+    first_act: int | None = None
     for line in explain_text.splitlines():
-        match = _PLAN_OP_RE.search(line)
-        if not match:
+        if "\t" not in line:
             continue
-        operator = match.group("op")
-        if operator.lower() in ("explain", "id", "estrows", "task", "access", "object"):
+        parts = line.split("\t")
+        if len(parts) < 3:
             continue
+        id_clean = _TREE_PREFIX_RE.sub("", parts[0]).strip()
+        operator = _ID_SUFFIX_RE.sub("", id_clean)
+        if not operator or operator.lower() in ("id", "explain", "estrows"):
+            continue
+        est_rows = _safe_number(parts[1])
+        act_rows = _safe_number(parts[2])
         row: dict = {"operator": operator}
-        if match.group("table"):
-            row["table"] = match.group("table")
-        if match.group("est"):
-            row["est_rows"] = _safe_int(match.group("est"))
-        rows.append(row)
+        if est_rows is not None:
+            row["est_rows"] = est_rows
+        if len(parts) > 4:
+            m = _TABLE_ACCESS_RE.search(parts[4])
+            if m:
+                row["table"] = m.group(1)
+        # 契约 operator_rows 要求 operator+table 必填，仅保留带 table 的算子
+        # （scan 类），非表算子（TableReader/Projection/Selection）不写入。
+        if "table" in row:
+            rows.append(row)
+
+        if first_act is None and act_rows is not None:
+            first_act = act_rows
+        if operator.lower().endswith("scan") and act_rows is not None:
+            if act_rows > scanned_rows:
+                scanned_rows = act_rows
+                scan_est_rows = est_rows or 0
         if len(rows) >= 128:
             break
-    return {"operator_rows": rows}
+
+    result["operator_rows"] = rows
+    result["scanned_rows"] = scanned_rows
+    result["scan_est_rows"] = scan_est_rows
+    result["result_rows"] = first_act or 0
+    return result
 
 
 def _parse_stats(stats_text: str | None) -> dict:
@@ -284,12 +357,24 @@ def _collect_stat_fields(data: dict, stats: dict) -> None:
     for key in ("est_rows", "actual_rows", "row_count", "healthy"):
         if isinstance(data.get(key), (int, float)):
             stats[key] = _safe_int(data[key])
+    # 真实 TiDB stats JSON 用 count 表示表行数。
+    if isinstance(data.get("count"), (int, float)) and "row_count" not in stats:
+        stats["row_count"] = _safe_int(data["count"])
+
+
+def _enrich_stats_from_plan(stats: dict, plan: dict) -> None:
+    """EXPLAIN ANALYZE 的 estRows/actRows 补充到 stats（stats 文件常无这两项）。"""
+    if plan.get("scanned_rows") and "actual_rows" not in stats:
+        stats["actual_rows"] = plan["scanned_rows"]
+    if plan.get("scan_est_rows") and "est_rows" not in stats:
+        stats["est_rows"] = plan["scan_est_rows"]
 
 
 _INDEX_INLINE_RE = re.compile(r"\b(?:KEY|INDEX)\s+([`\w]+)\s*\(([^)]+)\)", re.IGNORECASE)
 _INDEX_CREATE_RE = re.compile(
     r"\b(?:CREATE\s+)?INDEX\s+([`\w]+)\s+ON\s+[`\w.]+\s*\(([^)]+)\)", re.IGNORECASE
 )
+_PRIMARY_KEY_RE = re.compile(r"\bPRIMARY\s+KEY\s*\(([^)]+)\)", re.IGNORECASE)
 
 
 def _parse_schema(schema_text: str | None, sql_text: str) -> dict:
@@ -305,6 +390,13 @@ def _parse_schema(schema_text: str | None, sql_text: str) -> dict:
                 seen.add(name)
                 columns = [c.strip("` ") for c in m.group(2).split(",") if c.strip()]
                 indexes.append({"name": name, "columns": columns})
+        # PRIMARY KEY（无名字索引）
+        for m in _PRIMARY_KEY_RE.finditer(schema_text):
+            if "PRIMARY" in seen:
+                continue
+            seen.add("PRIMARY")
+            columns = [c.strip("` ") for c in m.group(1).split(",") if c.strip()]
+            indexes.append({"name": "PRIMARY", "columns": columns})
         if indexes:
             result["indexes"] = indexes
     filter_columns = _filter_columns_from_sql(sql_text)
@@ -313,7 +405,10 @@ def _parse_schema(schema_text: str | None, sql_text: str) -> dict:
     return result
 
 
-_FILTER_COL_RE = re.compile(r"\b([a-zA-Z_][\w]*)\s*(?:=|>|<|>=|<=|!=|IN|LIKE)", re.IGNORECASE)
+_FILTER_COL_RE = re.compile(
+    r"\b([a-zA-Z_][\w]*)\s*(?:>=|<=|!=|<>|=|>|<|\bIN\b|\bLIKE\b|\bBETWEEN\b)",
+    re.IGNORECASE,
+)
 
 
 def _filter_columns_from_sql(sql_text: str) -> list[str]:

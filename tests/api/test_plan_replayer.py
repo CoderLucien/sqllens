@@ -31,7 +31,7 @@ def _minimal_zip() -> bytes:
             "stats.txt": '{"orders": {"row_count": 1260000}}',
             "errors.txt": "",
             "sql/1.sql": "SELECT * FROM orders WHERE order_date > '2026-01-01';",
-            "explain.txt": "TableFullScan orders estRows 1263814",
+            "explain.txt": "TableFullScan_9\t1263814.00\t1263814\tcop[tikv]\ttable:orders\tkeep order:false\tN/A\tN/A\n",
         }
     )
 
@@ -87,7 +87,7 @@ def test_evidence_v3_mapping() -> None:
                 "stats.txt": '{"orders": {"row_count": 1260000, "healthy": 92}}',
                 "sql/1.sql": "SELECT * FROM orders WHERE tenant_id = ? "
                 "AND status = 'open' ORDER BY order_date;",
-                "explain.txt": "TableFullScan orders estRows:1263814",
+                "explain.txt": "TableFullScan_9\t1263814.00\t1263814\tcop[tikv]\ttable:orders\tkeep order:false\tN/A\tN/A\n",
             }
         )
     )
@@ -102,3 +102,36 @@ def test_evidence_v3_mapping() -> None:
     indexes = {i["name"]: i["columns"] for i in ev["schema"]["indexes"]}
     assert indexes["idx_tenant_created"] == ["tenant_id", "created_at"]
     assert "tenant_id" in ev["schema"]["filter_columns"]
+
+
+def test_real_tidb_format() -> None:
+    """真实 TiDB PLAN REPLAYER zip 结构（嵌套 schema/stats 路径 + 制表符 explain）。"""
+    bundle = parse_plan_replayer_zip(
+        _make_zip(
+            {
+                "meta.txt": "Release Version: v8.5.8\nStore: tikv\n",
+                "schema/tpch.lineitem.schema.txt": (
+                    "CREATE TABLE `lineitem` (`L_ORDERKEY` bigint NOT NULL, "
+                    "`L_SHIPDATE` date NOT NULL, "
+                    "PRIMARY KEY (`L_ORDERKEY`,`L_LINENUMBER`))"
+                ),
+                "stats/tpch.lineitem.json": '{"table_name":"lineitem","count":6001215}',
+                "sql/sql0.sql": "SELECT l_orderkey, l_discount FROM lineitem "
+                "WHERE l_shipdate < '1996-01-01'",
+                "explain.txt": (
+                    "TableReader_11\t3482024.00\t3489491\troot\t\ttime:901.7ms\tdata:Projection_5\t12.7 MB\tN/A\n"
+                    "    └─TableFullScan_9\t6001215.00\t6001215\tcop[tikv]\ttable:lineitem\ttikv_task:{}\tkeep order:false\tN/A\tN/A\n"
+                ),
+            }
+        )
+    )
+    ev = bundle_to_evidence_v3(bundle)
+    assert ev["sql"]["table_name"] == "lineitem"
+    assert ev["runtime"]["scanned_rows"] == 6001215
+    assert ev["runtime"]["result_rows"] == 3489491
+    assert ev["stats"]["row_count"] == 6001215
+    assert ev["stats"]["actual_rows"] == 6001215
+    assert ev["stats"]["est_rows"] == 6001215
+    indexes = {i["name"]: i["columns"] for i in ev["schema"]["indexes"]}
+    assert indexes["PRIMARY"] == ["L_ORDERKEY", "L_LINENUMBER"]
+    assert ev["schema"]["filter_columns"] == ["l_shipdate"]
