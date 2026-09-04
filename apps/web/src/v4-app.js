@@ -75,8 +75,17 @@ async function copyDumpScript() {
 function useRules() {
   state.aiOk = false;
   el("reportMode").className = "alert info";
-  el("reportMode").innerHTML = "当前版本报告均由规则引擎生成；AI 归纳为后续能力。";
+  el("reportMode").innerHTML = "已选纯规则模式：本次会话诊断仅由规则引擎生成；如需 AI 增强请回到上页通过连接测试。";
   go(2);
+}
+
+function aiConfigBody() {
+  if (!state.aiOk) return null;
+  const base_url = el("baseUrl").value.trim();
+  const api_key = el("apiKey").value.trim();
+  const model = el("model").value.trim();
+  if (!base_url || !api_key || !model) return null;
+  return { base_url, api_key, model, protocol: el("proto").value };
 }
 
 async function postJson(url, body) {
@@ -112,7 +121,10 @@ function setProgress(container, currentIndex, doneThrough) {
 async function diagnose(evidence, progressContainer) {
   try {
     if (progressContainer) setProgress(progressContainer, 3, 2);
-    const report = await postJson("/api/v1/v4/diagnose", evidence);
+    const body = { ...evidence };
+    const ai = aiConfigBody();
+    if (ai) body.ai_config = ai;
+    const report = await postJson("/api/v1/v4/diagnose", body);
     if (progressContainer) setProgress(progressContainer, 4, 4);
     renderReport(report);
     go(2);
@@ -154,6 +166,24 @@ function renderReport(report) {
   const validations = (sections.validation || []).map((item) => `<li>${esc(item.text_zh)}</li>`).join("");
   const rollbacks = (sections.rollback || []).map((item) => `<li>${esc(item.text_zh)}</li>`).join("");
 
+  let aiBlock = "";
+  if (sections.ai_summary) {
+    const suggestionHtml = (sections.ai_suggestions || []).map((item) => `
+      <div class="ai-item"><span class="badge mode-ai">AI 建议</span> ${esc(item.text_zh)}
+        <div class="hint">证据出处：${esc((item.evidence_ids || []).join("、"))} · 验证方式：${esc(item.validation_zh)}</div>
+      </div>`).join("");
+    const reviewHtml = (sections.ai_review || []).map((item) => `
+      <div class="ai-item"><span class="badge mode-degraded">AI review</span> 对 ${esc(item.rule_id)} 的异议：${esc(item.text_zh)}
+        <div class="hint">异议不改变规则结论，采信由您判断。</div>
+      </div>`).join("");
+    aiBlock = `
+    <div class="h-seg"><span class="no">附</span>AI 增强 <span class="badge mode-ai">追加内容</span></div>
+    <div class="hint">以下内容由 AI 基于同一份证据生成，不改变上方规则结论。</div>
+    <p>${esc(sections.ai_summary.text_zh)}</p>
+    ${suggestionHtml}
+    ${reviewHtml}`;
+  }
+
   el("reportBody").innerHTML = `
     <div class="h-seg"><span class="no">一</span>结论 ${priorityBadge}${modeBadge}${ruleBadges}</div>
     <p>${esc(sections.conclusion.text_zh)}</p>
@@ -172,7 +202,8 @@ function renderReport(report) {
     <ul class="plain-list">${validations}</ul>
 
     <div class="h-seg"><span class="no">六</span>回滚步骤</div>
-    <ul class="plain-list">${rollbacks}</ul>`;
+    <ul class="plain-list">${rollbacks}</ul>
+    ${aiBlock}`;
 }
 
 async function aiTest() {
@@ -289,6 +320,16 @@ function copyReport() {
     "",
     "六、回滚步骤：" + (r.sections.rollback || []).map((v) => v.text_zh).join("；"),
   ];
+  if (r.sections.ai_summary) {
+    lines.push(
+      "",
+      "AI 增强（不改变规则结论）：",
+      `归纳：${r.sections.ai_summary.text_zh}`,
+      ...((r.sections.ai_suggestions || []).map((s, i) =>
+        `AI 建议${i + 1}：${s.text_zh}（证据：${s.evidence_ids.join("、")}；验证：${s.validation_zh}）`)),
+      ...((r.sections.ai_review || []).map((v) => `AI review（${v.rule_id}）：${v.text_zh}`)),
+    );
+  }
   navigator.clipboard.writeText(lines.join("\n")).then(
     () => toast("报告已复制到剪贴板"),
     () => toast("复制失败，请手动选择复制"),

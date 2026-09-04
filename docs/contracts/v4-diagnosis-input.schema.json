@@ -8,6 +8,18 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": "evidence/v3" },
+    "ai_config": {
+      "type": "object",
+      "description": "可选 AI 增强配置：存在时诊断在规则报告之上追加 AI 三输出（单次调用）；仅会话内存，不落盘。",
+      "additionalProperties": false,
+      "properties": {
+        "base_url": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "api_key": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "protocol": { "enum": ["openai", "anthropic"], "default": "openai" }
+      },
+      "required": ["base_url", "api_key", "model"]
+    },
     "sql": {
       "type": "object",
       "required": ["sql_digest", "database"],
