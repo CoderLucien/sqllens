@@ -226,3 +226,39 @@ class TestBuildReport:
             evidence_rows=[],
         )
         assert report["sections"]["conclusion"]["rule_ids"] == ["IDX_ACCESS_001"]
+
+
+class TestNonSargable:
+    def test_function_wrapped_column_prefers_rewrite(self) -> None:
+        hit = index_access_hit(
+            table_name="lineitem",
+            scanned_rows=6_001_215,
+            result_rows=3_489_491,
+            filter_columns=("l_shipdate",),
+            index_prefixes=(("l_orderkey", "l_linenumber"),),
+            exec_count=0,
+            p95_ms=0,
+            sql_text="SELECT l_orderkey FROM lineitem WHERE YEAR(l_shipdate) <= 1995;",
+        )
+        assert hit is not None
+        assert hit.rule_id == "IDX_ACCESS_001"
+        assert "改写" in hit.actions[0].operation_zh
+        assert "YEAR" in hit.actions[0].operation_zh
+        assert "CREATE INDEX" not in hit.actions[0].operation_zh
+        assert "CREATE INDEX" in hit.actions[1].operation_zh
+        assert "函数" in hit.conclusion_zh
+
+    def test_plain_range_predicate_keeps_index_advice(self) -> None:
+        hit = index_access_hit(
+            table_name="lineitem",
+            scanned_rows=6_001_215,
+            result_rows=3_489_491,
+            filter_columns=("l_shipdate",),
+            index_prefixes=(("l_orderkey", "l_linenumber"),),
+            exec_count=0,
+            p95_ms=0,
+            sql_text="SELECT l_orderkey FROM lineitem WHERE l_shipdate < '1996-01-01';",
+        )
+        assert hit is not None
+        assert "改写" not in hit.actions[0].operation_zh
+        assert "CREATE INDEX" in hit.actions[0].operation_zh

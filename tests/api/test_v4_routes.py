@@ -174,3 +174,67 @@ class TestDiagnoseWithoutEstRows:
         assert "IDX_ACCESS_001" not in report["sections"]["conclusion"]["rule_ids"]
         assert "REPEATED_SCAN_001" not in report["sections"]["conclusion"]["rule_ids"]
         assert report["priority"] == "P2"
+
+
+class TestNonSargableScenario:
+    def test_function_wrapped_predicate_recommends_rewrite(self) -> None:
+        payload = {
+            "schema_version": "evidence/v3",
+            "sql": {
+                "sql_digest": "b" * 64,
+                "database": "tpch",
+                "table_name": "lineitem",
+                "sql_text": "SELECT l_orderkey FROM lineitem WHERE YEAR(l_shipdate) <= 1995;",
+            },
+            "runtime": {"exec_count": 0, "window_minutes": 1, "scanned_rows": 6001215, "result_rows": 5808334},
+            "plan": {
+                "operator_rows": [
+                    {"operator": "TableFullScan_7", "table": "lineitem", "est_rows": 6001215},
+                ]
+            },
+            "stats": {"row_count": 6001215, "healthy": 100},
+            "schema": {"filter_columns": ["l_shipdate"], "indexes": [{"name": "PRIMARY", "columns": ["l_orderkey", "l_linenumber"]}]},
+        }
+        response = _client().post("/api/v1/v4/diagnose", json=payload)
+        assert response.status_code == 200, response.text
+        report = response.json()
+        assert report["sections"]["conclusion"]["rule_ids"] == ["IDX_ACCESS_001"]
+        changes = report["sections"]["changes"]
+        assert "改写" in changes[0]["operation_zh"]
+        assert "CREATE INDEX" not in changes[0]["operation_zh"]
+        assert "CREATE INDEX" in changes[1]["operation_zh"]
+        assert "函数" in report["sections"]["conclusion"]["text_zh"]
+        assert report["priority"] == "P2"
+
+
+class TestJoinScenario:
+    def test_multi_table_join_skips_index_rule(self) -> None:
+        payload = {
+            "schema_version": "evidence/v3",
+            "sql": {
+                "sql_digest": "a" * 64,
+                "database": "tpch",
+                "table_name": "customer",
+                "sql_text": (
+                    "SELECT c.c_custkey FROM customer c "
+                    "JOIN orders o ON c.c_custkey = o.o_custkey "
+                    "JOIN lineitem l ON l.l_orderkey = o.o_orderkey "
+                    "WHERE l.l_returnflag = 'R';"
+                ),
+            },
+            "runtime": {"exec_count": 0, "window_minutes": 1, "scanned_rows": 6001215, "result_rows": 100},
+            "plan": {
+                "operator_rows": [
+                    {"operator": "TableFullScan_9", "table": "lineitem", "est_rows": 6001215},
+                    {"operator": "TableReader_11", "table": "lineitem", "est_rows": 100},
+                ]
+            },
+            "stats": {"row_count": 6001215, "healthy": 100},
+            "schema": {"filter_columns": ["l_returnflag"], "indexes": [{"name": "PRIMARY", "columns": ["l_orderkey", "l_linenumber"]}]},
+        }
+        response = _client().post("/api/v1/v4/diagnose", json=payload)
+        assert response.status_code == 200, response.text
+        report = response.json()
+        assert "IDX_ACCESS_001" not in report["sections"]["conclusion"]["rule_ids"]
+        assert report["sections"]["changes"] == []
+        assert "JOIN" in report["sections"]["analysis"]["text_zh"]

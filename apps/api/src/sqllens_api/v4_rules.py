@@ -4,6 +4,29 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from sqlglot import exp, parse_one
+from sqlglot.errors import ErrorLevel
+
+
+def _function_wrapped_columns(sql_text: str | None) -> set[str]:
+    """WHERE 中出现在函数实参里的列名集合（如 YEAR(l_shipdate) → {l_shipdate}）。"""
+    if not sql_text:
+        return set()
+    try:
+        tree = parse_one(sql_text, read="mysql", error_level=ErrorLevel.IGNORE)
+    except Exception:
+        return set()
+    where = tree.find(exp.Where)
+    if where is None:
+        return set()
+    wrapped: set[str] = set()
+    for function in where.find_all(exp.Func):
+        for column in function.find_all(exp.Column):
+            name = column.name
+            if name:
+                wrapped.add(name.lower())
+    return wrapped
+
 P1_MIN_P95_MS = 5000
 P1_MIN_EXEC_COUNT = 20
 INDEX_BUILD_RATE_ROWS_PER_SEC = 50_000
@@ -61,6 +84,7 @@ def index_access_hit(
     exec_count: int,
     p95_ms: float,
     build_rate_rows_per_sec: int = INDEX_BUILD_RATE_ROWS_PER_SEC,
+    sql_text: str | None = None,
 ) -> RuleHit | None:
     if not filter_columns:
         return None
@@ -84,6 +108,22 @@ def index_access_hit(
     ratio = scanned_rows / result_rows if has_result else None
     # 返回占比较高（>1%）时普通复合索引收益有限：改为覆盖索引建议（消除回表）。
     large_scan = has_result and ratio is not None and ratio <= MIN_SCAN_TO_RESULT_RATIO
+    # 非 Sargable：过滤列被函数包裹（如 YEAR(col)）——索引无效，必须先改写谓词。
+    non_sargable_cols = _function_wrapped_columns(sql_text) & set(filter_columns)
+    if non_sargable_cols:
+        return _non_sargable_hit(
+            table_name=table_name,
+            scanned_rows=scanned_rows,
+            result_rows=result_rows,
+            wrapped_cols=sorted(non_sargable_cols),
+            filter_columns=filter_columns,
+            index_name=index_name,
+            ddl=ddl,
+            severity=severity,
+            build_seconds=build_seconds,
+            storage_mb=storage_mb,
+            build_rate_rows_per_sec=build_rate_rows_per_sec,
+        )
 
     if large_scan:
         ddl = (
@@ -184,6 +224,82 @@ def index_access_hit(
         analysis_zh=analysis_zh,
         evidence_ids=("ev_plan", "ev_schema", "ev_runtime"),
         actions=(action,),
+    )
+
+
+def _non_sargable_hit(
+    *,
+    table_name: str,
+    scanned_rows: int,
+    result_rows: int,
+    wrapped_cols: list[str],
+    filter_columns: tuple[str, ...],
+    index_name: str,
+    ddl: str,
+    severity: str,
+    build_seconds: int,
+    storage_mb: float,
+    build_rate_rows_per_sec: int,
+) -> RuleHit:
+    """非 Sargable 谓词：函数包裹过滤列 → 索引无效，必须先改写谓词。"""
+    col = wrapped_cols[0]
+    rewrite = ActionAdvice(
+        operation_zh=(
+            f"改写谓词，让过滤列直接参与比较：将 {col} 上的函数移到常量一侧，"
+            f"例如 `YEAR({col}) <= 1995` 改写为 `{col} >= '1995-01-01' AND {col} < '1996-01-01'`。"
+            "改写后优化器才能利用索引与统计信息。"
+        ),
+        risk_zh=(
+            "纯 SQL 改写，无 DDL 变更；需业务方确认改写后的边界语义与原条件等价"
+            "（时区、闭开区间），并在隔离环境对比结果集一致后发布。"
+        ),
+        cost_zh="预计 1 个研发工时以内（SQL 改写 + 结果集等价性测试）。",
+        cost_formula_zh="成本公式：按改写点数量估算（单谓词 1 处 + 等价性测试）。",
+        gain_zh=(
+            f"谓词由不可用索引状态变为可下推范围条件：{_fmt_number(scanned_rows)} 行全表扫描"
+            f"（返回 {_fmt_number(result_rows)} 行）可降为按 {col} 范围的索引扫描，"
+            "收益取决于该范围的选择性，需隔离环境实测。"
+        ),
+        gain_formula_zh=(
+            "收益公式：改写后扫描 ≈ 范围选择性 × 表行数；"
+            "函数包裹谓词会强制全表扫描（无法下推），改写是收益的前提。"
+        ),
+        validation_zh=(
+            "隔离环境对比改写前后：EXPLAIN 访问方式由 TableFullScan 变为 IndexRangeScan、"
+            "结果集逐行一致、扫描行数与 P95 达标。"
+        ),
+        rollback_zh="恢复原 SQL 写法即可（无 DDL 变更，零数据风险）。",
+    )
+    index_secondary = ActionAdvice(
+        operation_zh=(
+            f"谓词改写后，若过滤选择性仍不足，再评估索引：{ddl} "
+            "（注意：函数包裹谓词下该索引无效，必须先完成改写）。"
+        ),
+        risk_zh=(
+            "TiDB 在线 DDL，不阻塞读写；写入期间存在写放大与临时空间开销，建议业务低峰执行。"
+        ),
+        cost_zh=f"预计 {build_seconds} 秒（约 {storage_mb:.0f}MB 索引存储）。",
+        cost_formula_zh=f"成本公式：构建时长 ≈ 行数 ÷ 保守构建速率（{build_rate_rows_per_sec} 行/秒）；存储 ≈ Σ索引列字节宽 × 行数 × 1.5。",
+        gain_zh="改写后按过滤选择性获得常规索引收益（扫描行数下降 ≥ 90% 需实测确认）。",
+        gain_formula_zh="收益公式：索引后扫描 ≈ 返回行数 × 回表系数；需实测验证。",
+        validation_zh="隔离环境 EXPLAIN 确认 IndexRangeScan 且扫描行数下降 ≥ 90%。",
+        rollback_zh=f"DROP INDEX {index_name} ON {table_name};",
+    )
+    return RuleHit(
+        rule_id="IDX_ACCESS_001",
+        severity=severity,
+        conclusion_zh=(
+            f"该查询在 {table_name} 表发生全表扫描（扫描 {_fmt_number(scanned_rows)} 行），"
+            f"根因是过滤列 {', '.join(wrapped_cols)} 被函数包裹（非 Sargable 谓词）："
+            "函数使索引与统计信息失效，优化器被迫全表扫描。应优先改写谓词，而不是创建索引。"
+        ),
+        analysis_zh=(
+            f"WHERE 中 {col} 被函数包裹时，谓词无法下推为索引范围扫描，"
+            "任何基于该列的索引都不可用；在函数包裹的谓词上建索引无法解决问题。"
+            "改写后按数据分布再评估是否需要索引。"
+        ),
+        evidence_ids=("ev_plan", "ev_schema", "ev_runtime"),
+        actions=(rewrite, index_secondary),
     )
 
 
@@ -338,7 +454,9 @@ def build_report_v4(
         analysis_zh = (
             "规则引擎对已解析的执行计划、统计信息与 Schema 逐项核对后未发现匹配模式："
             "可能原因包括：该 SQL 本身访问路径正常（已走索引或扫描量很小）、"
-            "统计信息健康且估算准确、或执行频率未达到重复扫描阈值。"
+            "统计信息健康且估算准确、执行频率未达到重复扫描阈值，"
+            "或该 SQL 为多表 JOIN 场景（当前版本只展示逐算子证据，"
+            "JOIN 顺序与聚合类建议为后续规则）。"
             "下方证据表保留了本次解析的原始事实，可直接供人工判断。"
         )
     changes = []
