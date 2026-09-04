@@ -20,6 +20,9 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from sqlglot import exp, parse_one
+from sqlglot.errors import ErrorLevel
+
 # 单个文件读取上限与 zip 内条目上限，防止 zip bomb / 超大诊断包。
 _MAX_ENTRY_BYTES = 2 * 1024 * 1024  # 2 MiB / 文件
 _MAX_TOTAL_BYTES = 32 * 1024 * 1024  # 32 MiB / 包
@@ -118,18 +121,17 @@ def parse_plan_replayer_zip(data: bytes) -> PlanReplayerBundle:
             base = lowered.split("/")[-1]
             if base == "meta.txt":
                 bundle.meta_text = text
-            elif base == "schema.txt" or base.endswith(".schema.txt"):
-                # 真实 zip 为 schema/<db>.<table>.schema.txt，可能多表；拼接保留全部。
-                bundle.schema_text = (bundle.schema_text + "\n" + text) if bundle.schema_text else text
-            elif lowered.startswith("stats/") and base.endswith(".json"):
-                bundle.stats_text = text
-            elif base in ("stats.txt", "stats.json"):
+            elif "schema" in lowered and (base.endswith(".txt") or base.endswith(".sql")):
+                bundle.schema_text = text
+            elif base == "stats.txt" or "stats" in lowered.split("/") or (
+                "stats" in lowered and base.endswith(".json")
+            ):
                 bundle.stats_text = text
             elif base == "errors.txt":
                 bundle.errors_text = text
             elif base.startswith("explain") or "explain" in base:
                 bundle.explain_text = text
-            elif base.endswith(".sql") and "sql" in lowered:
+            elif lowered.endswith(".sql") or (base.startswith("sql") and base.endswith(".txt")):
                 sql_by_name[name] = text
 
         # SQL 文本按文件名稳定排序，避免结果非确定。
@@ -167,10 +169,6 @@ def bundle_to_evidence_v3(bundle: PlanReplayerBundle) -> dict:
     按证据不足降级处理。数字一律为安全整数，禁止 NaN/Infinity。
     """
     sql_text = _first_sql(bundle)
-    plan = _parse_plan(bundle.explain_text)
-    stats = _parse_stats(bundle.stats_text)
-    # EXPLAIN ANALYZE 的 estRows/actRows 补充到 stats（供统计偏差规则对比）。
-    _enrich_stats_from_plan(stats, plan)
     return {
         "schema_version": "evidence/v3",
         "sql": {
@@ -179,9 +177,9 @@ def bundle_to_evidence_v3(bundle: PlanReplayerBundle) -> dict:
             "database": _database_from_bundle(bundle),
             "table_name": _table_from_sql(sql_text),
         },
-        "runtime": _parse_runtime(plan, stats),
-        "plan": {"operator_rows": plan["operator_rows"]},
-        "stats": stats,
+        "runtime": _parse_runtime(bundle),
+        "plan": _parse_plan(bundle.explain_text),
+        "stats": _parse_stats(bundle.stats_text),
         "schema": _parse_schema(bundle.schema_text, sql_text),
         "optional": {},
     }
@@ -212,11 +210,10 @@ def _database_from_meta(meta_text: str | None) -> str:
 
 
 def _database_from_bundle(bundle: PlanReplayerBundle) -> str:
-    """多来源提取 database 名（契约要求非空）。"""
+    """多来源提取 database 名（契约要求非空，meta.txt 常无此字段）。"""
     db = _database_from_meta(bundle.meta_text)
     if db:
         return db
-    # stats JSON 的 database_name
     if bundle.stats_text:
         try:
             data = json.loads(bundle.stats_text)
@@ -224,7 +221,6 @@ def _database_from_bundle(bundle: PlanReplayerBundle) -> str:
                 return str(data["database_name"])
         except json.JSONDecodeError:
             pass
-    # schema 文件的 `use `db``
     if bundle.schema_text:
         m = re.search(r"\buse\s+`?([\w]+)`?", bundle.schema_text, re.IGNORECASE)
         if m:
@@ -240,91 +236,135 @@ def _table_from_sql(sql_text: str) -> str:
     return match.group(1) if match else ""
 
 
-def _parse_runtime(plan: dict, stats: dict) -> dict:
-    """从执行计划提取实际扫描/结果行数，作为运行时证据。
+_ACT_ROWS_RE = re.compile(r"actRows[:=]\s*(\d+)", re.IGNORECASE)
 
-    离线 Plan Replayer 无 exec_count/p95（那些来自 statement summary），
-    故 exec_count 保持 0、不伪造；但 EXPLAIN ANALYZE 的 actRows 可提供
-    scanned_rows / result_rows，足以让索引类规则命中。
+
+def _split_explain_line(line: str) -> tuple[str, float | None, int | None, str] | None:
+    """解析一行 EXPLAIN 输出为 (operator, est_rows, act_rows, info)。
+
+    兼容真实 TiDB 三种输出形态：
+    1. TAB 分隔（Plan Replayer explain.txt）：`    └─TableFullScan_9\t6001215.00\t6001215\tcop[tikv]\ttable:lineitem\t...`
+    2. 表格线框（mysql 客户端）：`│ TableFullScan_16 │ 6001215.00 │ 5998605 │ cop[tikv] │ table:lineitem ...│`
+    3. 简化文本：`TableFullScan lineitem estRows 6001215`
+    """
+    if "\t" in line:
+        parts = line.split("\t")
+        head = re.sub(r"^[\s│├└─]+", "", parts[0] or "")
+        head_match = re.match(r"(?P<op>[A-Za-z][A-Za-z0-9_]*(?:_\d+)?)\s*$", head)
+        if not head_match or len(parts) < 3:
+            return None
+        op = head_match.group("op")
+        est = parts[1] if len(parts) > 1 else ""
+        act = parts[2] if len(parts) > 2 else ""
+        info = "\t".join(parts[3:])
+    elif "│" in line:
+        cells = [c.strip() for c in line.split("│")]
+        if len(cells) < 3 or not cells[1]:
+            return None
+        op = cells[1]
+        if not re.match(r"^[A-Za-z]", op):
+            return None
+        est = cells[2] if len(cells) > 2 else ""
+        act = cells[3] if len(cells) > 3 else ""
+        info = " ".join(cells[4:]) if len(cells) > 4 else ""
+    else:
+        match = _TIDB_PLAN_RE.search(line)
+        if not match:
+            # 简化文本兜底："TableFullScan lineitem estRows 6001215"
+            fallback = _PLAN_OP_RE.search(line)
+            if not fallback:
+                return None
+            op = fallback.group("op")
+            est = fallback.group("est") or ""
+            act = ""
+            table = fallback.group("table") or ""
+            info = f"table:{table}" if table else ""
+        else:
+            op = match.group("op")
+            est = match.group("est")
+            info = match.group("info") or ""
+            act_match = _ACT_ROWS_RE.search(info)
+            act = act_match.group(1) if act_match else ""
+    try:
+        est_val = float(est) if est else None
+    except ValueError:
+        est_val = None
+    try:
+        act_val = int(act) if act else None
+    except ValueError:
+        act_val = None
+    return op, est_val, act_val, info
+
+
+def _parse_runtime(bundle: PlanReplayerBundle) -> dict:
+    """离线包运行时指标：从 EXPLAIN ANALYZE 文本提取 actRows 实测行数。
+
+    exec_count 保持 0（DUMP 包无语句级执行次数，不伪造）；scanned_rows 取
+    FullScan 算子的最大 actRows，result_rows 取首个 actRows（根算子）。
     """
     runtime: dict = {"exec_count": 0, "window_minutes": 1}
-    if plan.get("scanned_rows"):
-        runtime["scanned_rows"] = plan["scanned_rows"]
-    if plan.get("result_rows"):
-        runtime["result_rows"] = plan["result_rows"]
+    scanned = 0
+    first_act: int | None = None
+    for line in (bundle.explain_text or "").splitlines():
+        parsed = _split_explain_line(line)
+        if not parsed:
+            continue
+        op, _est, act_val, _info = parsed
+        if act_val is None:
+            continue
+        if first_act is None:
+            first_act = act_val
+        if "FullScan" in op:
+            scanned = max(scanned, act_val)
+    if scanned:
+        runtime["scanned_rows"] = scanned
+    if first_act is not None:
+        runtime["result_rows"] = first_act
     return runtime
 
 
-_TREE_PREFIX_RE = re.compile(r"^[\s└─├│]*")
-_ID_SUFFIX_RE = re.compile(r"_\d+$")
-_TABLE_ACCESS_RE = re.compile(r"table:([`\w.]+)", re.IGNORECASE)
-
-
-def _safe_number(value: str | None) -> int | None:
-    value = (value or "").strip()
-    if not value or value in ("N/A", "<nil>", "NULL", "None"):
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
+_PLAN_OP_RE = re.compile(
+    r"(?P<op>[A-Za-z][A-Za-z0-9_]+)\s*(?:\(\s*)?(?P<table>[`\w.]+)?"
+    r"(?:[^\n]*?estRows[: ]?\s*(?P<est>\d+))?",
+    re.IGNORECASE,
+)
+# 真实 TiDB explain.txt 行形如：
+#   "└─TableFullScan_15 6001215.00 cop[tikv] table:lineitem, range:[...] keep order:false"
+#   以及无算子编号的 "TableReader 100.00 root data:..."
+_TIDB_PLAN_RE = re.compile(
+    r"^\s*[│├└─\s]*\s*(?P<op>[A-Za-z][A-Za-z0-9_]*?)(?:_\d+)?\s+"
+    r"(?P<est>[\d.]+)\s+\S+\s+(?P<info>.*)$"
+)
+_TABLE_IN_INFO_RE = re.compile(r"\btable:([`\w.]+)", re.IGNORECASE)
+_EXPLAIN_FILTER_OPS = {"explain", "id", "estrows", "task", "access", "object"}
 
 
 def _parse_plan(explain_text: str | None) -> dict:
-    """解析 TiDB EXPLAIN ANALYZE 的制表符分隔输出。
+    """从 explain 文本尽力提取算子行（operator/table/est_rows）。
 
-    真实格式（每行 tab 分隔，列序固定）：
-    ``id \\t estRows \\t actRows \\t task \\t access_object \\t execution_info \\t operator_info \\t memory \\t disk``
-
-    返回 ``operator_rows``（契约字段：operator/table/est_rows）以及供 runtime
-    使用的 ``scanned_rows`` / ``result_rows``。
+    兼容真实 TiDB 三种输出形态（TAB 分隔 / 表格线框 / 简化文本），
+    保持确定性：仅取前若干行，失败时返回空 operator_rows。
     """
-    result: dict = {"operator_rows": [], "scanned_rows": 0, "result_rows": 0}
     if not explain_text:
-        return result
-
+        return {"operator_rows": []}
     rows: list[dict] = []
-    scanned_rows = 0
-    scan_est_rows = 0
-    first_act: int | None = None
     for line in explain_text.splitlines():
-        if "\t" not in line:
+        parsed = _split_explain_line(line)
+        if not parsed:
             continue
-        parts = line.split("\t")
-        if len(parts) < 3:
+        operator, est_val, _act_val, info = parsed
+        if operator.lower() in _EXPLAIN_FILTER_OPS:
             continue
-        id_clean = _TREE_PREFIX_RE.sub("", parts[0]).strip()
-        operator = _ID_SUFFIX_RE.sub("", id_clean)
-        if not operator or operator.lower() in ("id", "explain", "estrows"):
-            continue
-        est_rows = _safe_number(parts[1])
-        act_rows = _safe_number(parts[2])
         row: dict = {"operator": operator}
-        if est_rows is not None:
-            row["est_rows"] = est_rows
-        if len(parts) > 4:
-            m = _TABLE_ACCESS_RE.search(parts[4])
-            if m:
-                row["table"] = m.group(1)
-        # 契约 operator_rows 要求 operator+table 必填，仅保留带 table 的算子
-        # （scan 类），非表算子（TableReader/Projection/Selection）不写入。
-        if "table" in row:
-            rows.append(row)
-
-        if first_act is None and act_rows is not None:
-            first_act = act_rows
-        if operator.lower().endswith("scan") and act_rows is not None:
-            if act_rows > scanned_rows:
-                scanned_rows = act_rows
-                scan_est_rows = est_rows or 0
+        if est_val is not None:
+            row["est_rows"] = _safe_int(est_val)
+        table_match = _TABLE_IN_INFO_RE.search(info)
+        if table_match:
+            row["table"] = table_match.group(1)
+        rows.append(row)
         if len(rows) >= 128:
             break
-
-    result["operator_rows"] = rows
-    result["scanned_rows"] = scanned_rows
-    result["scan_est_rows"] = scan_est_rows
-    result["result_rows"] = first_act or 0
-    return result
+    return {"operator_rows": rows}
 
 
 def _parse_stats(stats_text: str | None) -> dict:
@@ -357,17 +397,8 @@ def _collect_stat_fields(data: dict, stats: dict) -> None:
     for key in ("est_rows", "actual_rows", "row_count", "healthy"):
         if isinstance(data.get(key), (int, float)):
             stats[key] = _safe_int(data[key])
-    # 真实 TiDB stats JSON 用 count 表示表行数。
-    if isinstance(data.get("count"), (int, float)) and "row_count" not in stats:
+    if "row_count" not in stats and isinstance(data.get("count"), (int, float)):
         stats["row_count"] = _safe_int(data["count"])
-
-
-def _enrich_stats_from_plan(stats: dict, plan: dict) -> None:
-    """EXPLAIN ANALYZE 的 estRows/actRows 补充到 stats（stats 文件常无这两项）。"""
-    if plan.get("scanned_rows") and "actual_rows" not in stats:
-        stats["actual_rows"] = plan["scanned_rows"]
-    if plan.get("scan_est_rows") and "est_rows" not in stats:
-        stats["est_rows"] = plan["scan_est_rows"]
 
 
 _INDEX_INLINE_RE = re.compile(r"\b(?:KEY|INDEX)\s+([`\w]+)\s*\(([^)]+)\)", re.IGNORECASE)
@@ -388,14 +419,13 @@ def _parse_schema(schema_text: str | None, sql_text: str) -> dict:
                 if name in seen:
                     continue
                 seen.add(name)
-                columns = [c.strip("` ") for c in m.group(2).split(",") if c.strip()]
+                columns = [c.strip("` ").lower() for c in m.group(2).split(",") if c.strip()]
                 indexes.append({"name": name, "columns": columns})
-        # PRIMARY KEY（无名字索引）
         for m in _PRIMARY_KEY_RE.finditer(schema_text):
             if "PRIMARY" in seen:
                 continue
             seen.add("PRIMARY")
-            columns = [c.strip("` ") for c in m.group(1).split(",") if c.strip()]
+            columns = [c.strip("` ").lower() for c in m.group(1).split(",") if c.strip()]
             indexes.append({"name": "PRIMARY", "columns": columns})
         if indexes:
             result["indexes"] = indexes
@@ -405,17 +435,28 @@ def _parse_schema(schema_text: str | None, sql_text: str) -> dict:
     return result
 
 
-_FILTER_COL_RE = re.compile(
-    r"\b([a-zA-Z_][\w]*)\s*(?:>=|<=|!=|<>|=|>|<|\bIN\b|\bLIKE\b|\bBETWEEN\b)",
-    re.IGNORECASE,
-)
+_FILTER_COL_RE = re.compile(r"\b([a-zA-Z_][\w]*)\s*(?:=|>|<|>=|<=|!=|IN|LIKE)", re.IGNORECASE)
 
 
 def _filter_columns_from_sql(sql_text: str) -> list[str]:
+    """用 sqlglot 语义解析 WHERE 中的列引用（正则兜底仅在解析失败时使用）。"""
     columns: list[str] = []
+    try:
+        tree = parse_one(sql_text, read="mysql", error_level=ErrorLevel.IGNORE)
+    except Exception:
+        tree = None
+    if tree is not None:
+        where = tree.find(exp.Where)
+        if where is not None:
+            for column in where.find_all(exp.Column):
+                name = column.name
+                if name and name.lower() not in columns:
+                    columns.append(name.lower())
+        if columns:
+            return columns[:32]
     for m in _FILTER_COL_RE.finditer(sql_text or ""):
-        col = m.group(1)
-        if col.lower() in ("select", "where", "and", "or", "from", "order", "group", "by", "limit"):
+        col = m.group(1).lower()
+        if col in ("select", "where", "and", "or", "from", "order", "group", "by", "limit"):
             continue
         if col not in columns:
             columns.append(col)

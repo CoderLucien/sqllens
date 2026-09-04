@@ -151,3 +151,26 @@ class TestAiEndpoints:
         )
         assert response.status_code == 200
         assert response.json()["ok"] is False
+
+
+class TestDiagnoseWithoutEstRows:
+    def test_missing_est_rows_does_not_trigger_stats_skew(self) -> None:
+        payload = {
+            "schema_version": "evidence/v3",
+            "sql": {
+                "sql_digest": "a" * 64,
+                "database": "tpch",
+                "table_name": "lineitem",
+            },
+            "runtime": {"exec_count": 0, "window_minutes": 1},
+            "plan": {"operator_rows": []},
+            "stats": {"row_count": 6001215, "healthy": 100},
+            "schema": {"filter_columns": [], "indexes": []},
+        }
+        response = _client().post("/api/v1/v4/diagnose", json=payload)
+        assert response.status_code == 200, response.text
+        report = response.json()
+        assert "STATS_SKEW_001" not in report["sections"]["conclusion"]["rule_ids"]
+        assert "IDX_ACCESS_001" not in report["sections"]["conclusion"]["rule_ids"]
+        assert "REPEATED_SCAN_001" not in report["sections"]["conclusion"]["rule_ids"]
+        assert report["priority"] == "P2"
