@@ -166,3 +166,57 @@ def test_real_tidb_dump_structure() -> None:
     )
     assert evidence["runtime"]["scanned_rows"] == 6001215
     assert evidence["runtime"]["result_rows"] == 3489491
+
+
+def test_full_original_export_shape_with_bindings_and_schema_meta() -> None:
+    """TiDB 原始 DUMP 全量形态：空 bindings 不抢占 SQL、schema_meta 不覆盖 DDL。"""
+    data = _make_zip(
+        {
+            "sql_meta.toml": "[sql]\n",
+            "config.toml": "[config]\n",
+            "variables.toml": "[vars]\n",
+            "meta.txt": "TiDB Version: v8.5.8\ncapture_time: 2026-09-04T15:12:00+08:00\n",
+            "schema/tpch.lineitem.schema.txt": (
+                "create database if not exists `tpch`; use `tpch`;"
+                "CREATE TABLE `lineitem` (\n"
+                "  `L_ORDERKEY` bigint NOT NULL,\n"
+                "  `L_LINENUMBER` bigint NOT NULL,\n"
+                "  `L_SHIPDATE` date NOT NULL,\n"
+                "  PRIMARY KEY (`L_ORDERKEY`,`L_LINENUMBER`)\n"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
+            ),
+            "schema/schema_meta.txt": "tpch.lineitem;",
+            "table_tiflash_replica.txt": "",
+            "stats/tpch.lineitem.json": (
+                '{"columns": [], "indices": [], "database_name": "tpch", '
+                '"table_name": "lineitem", "count": 6001215, "modify_count": 0}'
+            ),
+            "statsMem/tpch.lineitem.txt": "6001215",
+            "sql/sql0.sql": (
+                "SELECT l_orderkey, l_extendedprice, l_discount "
+                "FROM lineitem WHERE YEAR(l_shipdate) <= 1995"
+            ),
+            "session_bindings.sql": "",
+            "global_bindings.sql": "",
+            "explain.txt": (
+                "TableReader_11\t4800972.00\t3489491\troot\t\ttime:2.13s, loops:3398\t"
+                "data:Projection_5\t13.9 MB\tN/A\n"
+                "└─TableFullScan_9\t6001215.00\t6001215\tcop[tikv]\ttable:lineitem\t"
+                "tikv_task:{proc max:257ms}\tkeep order:false\tN/A\n"
+            ),
+        }
+    )
+    bundle = parse_plan_replayer_zip(data)
+    evidence = bundle_to_evidence_v3(bundle)
+    assert bundle.sql_texts == [
+        "SELECT l_orderkey, l_extendedprice, l_discount "
+        "FROM lineitem WHERE YEAR(l_shipdate) <= 1995"
+    ]
+    assert evidence["sql"]["sql_text"].startswith("SELECT l_orderkey")
+    assert evidence["sql"]["table_name"] == "lineitem"
+    assert evidence["schema"]["filter_columns"] == ["l_shipdate"]
+    assert evidence["schema"]["indexes"] == [
+        {"name": "PRIMARY", "columns": ["l_orderkey", "l_linenumber"]}
+    ]
+    assert evidence["stats"]["row_count"] == 6001215
+    assert evidence["runtime"]["scanned_rows"] == 6001215
