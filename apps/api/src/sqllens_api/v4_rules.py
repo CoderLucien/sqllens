@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from sqlglot import exp, parse_one
 from sqlglot.errors import ErrorLevel
+
+# 真实 Plan Replayer 包的 sql0.sql 带前导 `USE <db>;`（sqlglot 会把库名计为表，
+# 导致单表被误判为多表 JOIN），解析前必须剥离。
+_USE_PREFIX_RE = re.compile(r"^\s*(?:use\s+`?[\w$]+`?\s*;)+", re.IGNORECASE)
+
+
+def strip_leading_use(sql_text: str) -> str:
+    return _USE_PREFIX_RE.sub("", sql_text, count=1)
 
 
 def _function_wrapped_columns(sql_text: str | None) -> set[str]:
@@ -13,7 +22,7 @@ def _function_wrapped_columns(sql_text: str | None) -> set[str]:
     if not sql_text:
         return set()
     try:
-        tree = parse_one(sql_text, read="mysql", error_level=ErrorLevel.IGNORE)
+        tree = parse_one(strip_leading_use(sql_text), read="mysql", error_level=ErrorLevel.IGNORE)
     except Exception:
         return set()
     where = tree.find(exp.Where)

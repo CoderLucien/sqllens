@@ -207,6 +207,67 @@ class TestNonSargableScenario:
         assert report["priority"] == "P2"
 
 
+class TestUsePrefix:
+    # 真实 Plan Replayer 包的 sql0.sql 带前导 `USE <db>;`，库名曾被误计为表，
+    # 导致单表被当成多表 JOIN 而整体跳过索引规则。
+    def test_use_prefix_single_table_still_hits_index_rule(self) -> None:
+        payload = {
+            "schema_version": "evidence/v3",
+            "sql": {
+                "sql_digest": "c" * 64,
+                "database": "tpch",
+                "table_name": "lineitem",
+                "sql_text": (
+                    "USE tpch;\n"
+                    "SELECT l_orderkey, l_extendedprice FROM lineitem "
+                    "WHERE l_shipdate < '1996-01-01';"
+                ),
+            },
+            "runtime": {"exec_count": 0, "window_minutes": 1, "scanned_rows": 6001215, "result_rows": 5808334},
+            "plan": {
+                "operator_rows": [
+                    {"operator": "TableFullScan_7", "table": "lineitem", "est_rows": 6001215},
+                ]
+            },
+            "stats": {"row_count": 6001215, "healthy": 100},
+            "schema": {"filter_columns": ["l_shipdate"], "indexes": [{"name": "PRIMARY", "columns": ["l_orderkey", "l_linenumber"]}]},
+        }
+        response = _client().post("/api/v1/v4/diagnose", json=payload)
+        assert response.status_code == 200, response.text
+        report = response.json()
+        assert "IDX_ACCESS_001" in report["sections"]["conclusion"]["rule_ids"]
+        assert report["sections"]["changes"], "real.zip 形态（带 USE 前缀）应恢复索引规则命中"
+
+    def test_use_prefix_scenario2_rewrite_still_first(self) -> None:
+        payload = {
+            "schema_version": "evidence/v3",
+            "sql": {
+                "sql_digest": "b" * 64,
+                "database": "tpch",
+                "table_name": "lineitem",
+                "sql_text": (
+                    "USE tpch;\n"
+                    "SELECT l_orderkey FROM lineitem WHERE YEAR(l_shipdate) <= 1995;"
+                ),
+            },
+            "runtime": {"exec_count": 0, "window_minutes": 1, "scanned_rows": 6001215, "result_rows": 5808334},
+            "plan": {
+                "operator_rows": [
+                    {"operator": "TableFullScan_7", "table": "lineitem", "est_rows": 6001215},
+                ]
+            },
+            "stats": {"row_count": 6001215, "healthy": 100},
+            "schema": {"filter_columns": ["l_shipdate"], "indexes": [{"name": "PRIMARY", "columns": ["l_orderkey", "l_linenumber"]}]},
+        }
+        response = _client().post("/api/v1/v4/diagnose", json=payload)
+        assert response.status_code == 200, response.text
+        report = response.json()
+        assert report["sections"]["conclusion"]["rule_ids"] == ["IDX_ACCESS_001"]
+        changes = report["sections"]["changes"]
+        assert "改写" in changes[0]["operation_zh"]
+        assert "CREATE INDEX" not in changes[0]["operation_zh"]
+
+
 class TestJoinScenario:
     def test_multi_table_join_skips_index_rule(self) -> None:
         payload = {
