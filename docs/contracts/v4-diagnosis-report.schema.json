@@ -87,6 +87,47 @@
             "additionalProperties": false,
             "properties": { "text_zh": { "type": "string", "minLength": 1 } }
           }
+        },
+        "ai_summary": {
+          "type": "object",
+          "description": "AI 归纳（仅 mode=rules_ai 时存在；只追加，不改变规则六段）。",
+          "required": ["text_zh"],
+          "additionalProperties": false,
+          "properties": { "text_zh": { "type": "string", "minLength": 1, "maxLength": 400 } }
+        },
+        "ai_suggestions": {
+          "type": "array",
+          "maxItems": 3,
+          "description": "AI 补充策略建议；每条必含证据出处与验证方式，证据撑不住的条目不输出。",
+          "items": {
+            "type": "object",
+            "required": ["text_zh", "evidence_ids", "validation_zh"],
+            "additionalProperties": false,
+            "properties": {
+              "text_zh": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "evidence_ids": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": { "enum": ["ev_runtime", "ev_plan", "ev_stats", "ev_schema"] }
+              },
+              "validation_zh": { "type": "string", "minLength": 1, "maxLength": 160 }
+            }
+          }
+        },
+        "ai_review": {
+          "type": "array",
+          "maxItems": 2,
+          "description": "AI 对已命中规则结论的异议条目；规则结论照常原样展示，绝不被自动推翻。",
+          "items": {
+            "type": "object",
+            "required": ["rule_id", "text_zh"],
+            "additionalProperties": false,
+            "properties": {
+              "rule_id": { "type": "string", "minLength": 1 },
+              "text_zh": { "type": "string", "minLength": 1, "maxLength": 300 }
+            }
+          }
         }
       }
     }
