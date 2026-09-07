@@ -88,6 +88,14 @@ function aiConfigBody() {
   return { base_url, api_key, model, protocol: el("proto").value };
 }
 
+// 服务端错误体形状为 {"error":{code,message}}；透传真实原因，兜底仅留状态码，
+// 场景前缀（上传失败/诊断失败）由调用方追加，避免双重前缀。
+function apiErrorMessage(data, status) {
+  const detail = data && data.error;
+  const message = (detail && detail.message) || (data && data.message);
+  return message || `HTTP ${status}`;
+}
+
 async function postJson(url, body) {
   const response = await fetch(url, {
     method: "POST",
@@ -97,7 +105,7 @@ async function postJson(url, body) {
   let data = null;
   try { data = await response.json(); } catch { data = null; }
   if (!response.ok) {
-    throw new Error((data && data.message) ? data.message : `请求失败：HTTP ${response.status}`);
+    throw new Error(apiErrorMessage(data, response.status));
   }
   return data;
 }
@@ -318,7 +326,7 @@ function init() {
       const response = await fetch("/api/v1/v4/plan-replayer", { method: "POST", body: file });
       let data = null;
       try { data = await response.json(); } catch { data = null; }
-      if (!response.ok) throw new Error((data && data.message) ? data.message : `上传失败：HTTP ${response.status}`);
+      if (!response.ok) throw new Error(apiErrorMessage(data, response.status));
       setProgress(busy, 2, 1);
       await diagnose(data, busy);
     } catch (error) {
