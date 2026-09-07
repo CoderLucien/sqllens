@@ -59,6 +59,37 @@ def test_reject_path_traversal() -> None:
         parse_plan_replayer_zip(_make_zip({"../evil.txt": "x"}))
 
 
+def test_accepts_large_production_stats_entry() -> None:
+    """回归（2026-09-07）：真实生产表 stats JSON 单文件可达数 MiB（用户包 6.1 MiB
+    曾被 2 MiB 单文件上限误拒、整包 422）。合法大条目必须放行。"""
+    big_stats = '{"columns": {"pad": "%s"}}' % ("0" * (3 * 1024 * 1024))
+    bundle = parse_plan_replayer_zip(
+        _make_zip(
+            {
+                "meta.txt": "TiDB Version: v8.5.8\n",
+                "sql/sql0.sql": "SELECT 1;",
+                "stats/testdb.t.json": big_stats,
+            }
+        )
+    )
+    assert bundle.stats_text is not None
+
+
+def test_reject_entry_above_hard_cap() -> None:
+    """防线仍在：单文件超过 16 MiB 硬上限仍拒收（zip bomb 防护边界）。"""
+    huge = "0" * (16 * 1024 * 1024 + 1)
+    with pytest.raises(PlanReplayerError):
+        parse_plan_replayer_zip(
+            _make_zip(
+                {
+                    "meta.txt": "TiDB Version: v8.5.8\n",
+                    "sql/sql0.sql": "SELECT 1;",
+                    "stats/testdb.t.json": huge,
+                }
+            )
+        )
+
+
 def test_reject_not_a_zip() -> None:
     with pytest.raises(PlanReplayerError):
         parse_plan_replayer_zip(b"not a zip")
@@ -72,6 +103,28 @@ def test_reject_empty_payload() -> None:
 def test_reject_missing_recognizable_content() -> None:
     with pytest.raises(PlanReplayerError):
         parse_plan_replayer_zip(_make_zip({"unknown.bin": "x"}))
+
+
+def test_database_from_schema_filename_fallback() -> None:
+    """回归（2026-09-07）：真实生产包 meta.txt 无库名行、stats 无 database_name、
+    schema 无 use 语句时，库名应从 schema/<db>.<table>.schema.txt 文件名前缀兜底。"""
+    bundle = parse_plan_replayer_zip(
+        _make_zip(
+            {
+                "meta.txt": "TiDB Version: v8.5.8\ncapture_time: 2026-09-07T11:00:00Z\n",
+                "schema/lego_leju_oltp.leju_record.schema.txt": (
+                    "CREATE TABLE leju_record (id bigint PRIMARY KEY, "
+                    "created_at datetime, status varchar(16));"
+                ),
+                "stats/lego_leju_oltp.leju_record.json": '{"leju_record": {"row_count": 4720000000}}',
+                "sql/sql0.sql": "SELECT * FROM leju_record WHERE status = 'open';",
+                "explain.txt": "TableFullScan leju_record estRows:4720000000",
+            }
+        )
+    )
+    ev = bundle_to_evidence_v3(bundle)
+    assert ev["sql"]["database"] == "lego_leju_oltp"
+    assert ev["sql"]["table_name"] == "leju_record"
 
 
 def test_evidence_v3_mapping() -> None:

@@ -24,8 +24,10 @@ from sqlglot import exp, parse_one
 from sqlglot.errors import ErrorLevel
 
 # 单个文件读取上限与 zip 内条目上限，防止 zip bomb / 超大诊断包。
-_MAX_ENTRY_BYTES = 2 * 1024 * 1024  # 2 MiB / 文件
-_MAX_TOTAL_BYTES = 32 * 1024 * 1024  # 32 MiB / 包
+# 单文件线卡解压量：真实生产表 stats JSON 单文件可达数 MiB（2026-09-07 用户包
+# 6.1 MiB 曾被 2 MiB 误拒），放宽到 16 MiB；总包线卡压缩后 payload，维持 32 MiB。
+_MAX_ENTRY_BYTES = 16 * 1024 * 1024  # 16 MiB / 文件（解压后）
+_MAX_TOTAL_BYTES = 32 * 1024 * 1024  # 32 MiB / 包（压缩后 payload）
 _MAX_ENTRIES = 512
 
 # 允许解析的文本文件白名单（按名称后缀匹配）。
@@ -47,9 +49,10 @@ class PlanReplayerError(ValueError):
 class PlanReplayerBundle:
     """解析产物：一个只读的 Plan Replayer 证据包视图。"""
 
-    files: dict[str, str] = field(default_factory=dict)
+    file_names: set[str] = field(default_factory=set)
     sql_texts: list[str] = field(default_factory=list)
     schema_text: str | None = None
+    schema_db: str | None = None
     stats_text: str | None = None
     explain_text: str | None = None
     errors_text: str | None = None
@@ -116,7 +119,9 @@ def parse_plan_replayer_zip(data: bytes) -> PlanReplayerBundle:
             if not lowered.endswith(_WHITELIST_SUFFIXES):
                 continue
             text = _bounded_read(archive, info)
-            bundle.files[name] = text
+            # 只保留文件名用于摘要清单；原文仅进入下方类型化字段（请求内生命周期，
+            # 不随会话驻留——真实 stats 单文件可达数 MiB）。
+            bundle.file_names.add(name)
 
             base = lowered.split("/")[-1]
             if base == "meta.txt":
@@ -128,6 +133,11 @@ def parse_plan_replayer_zip(data: bytes) -> PlanReplayerBundle:
                 # 条目顺序后写会覆盖真实 *.schema.txt——只接受含 CREATE TABLE 的文本。
                 if "create table" in text.lower():
                     bundle.schema_text = text
+                    stem = base[: -len(".schema.txt")] if base.endswith(".schema.txt") else ""
+                    if stem.count(".") == 1:
+                        # schema/<db>.<table>.schema.txt 文件名前段即库名
+                        #（严格单点号防歧义）；meta/stats 均无库名时的兜底来源。
+                        bundle.schema_db = stem.split(".")[0]
             elif base == "stats.txt" or "stats" in lowered.split("/") or (
                 "stats" in lowered and base.endswith(".json")
             ):
@@ -236,6 +246,8 @@ def _database_from_bundle(bundle: PlanReplayerBundle) -> str:
         m = re.search(r"\buse\s+`?([\w]+)`?", bundle.schema_text, re.IGNORECASE)
         if m:
             return m.group(1)
+    if bundle.schema_db:
+        return bundle.schema_db
     return ""
 
 
@@ -489,7 +501,7 @@ def plan_replayer_summary(bundle: PlanReplayerBundle) -> dict:
         "tidbVersion": bundle.tidb_version,
         "capturedAt": bundle.captured_at,
         "sqlCount": bundle.sql_count,
-        "availableFiles": sorted(bundle.files),
+        "availableFiles": sorted(bundle.file_names),
         "summaryZh": (
             f"已解析 Plan Replayer 诊断包：{bundle.sql_count} 条 SQL"
             + (f"（TiDB {bundle.tidb_version}）" if bundle.tidb_version else "")

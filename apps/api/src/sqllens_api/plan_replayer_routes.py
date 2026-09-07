@@ -12,7 +12,6 @@ from starlette.responses import JSONResponse, Response
 
 from sqllens_api.errors import ApiError
 from sqllens_api.plan_replayer import (
-    PlanReplayerBundle,
     PlanReplayerError,
     bundle_to_evidence_v3,
     parse_plan_replayer_zip,
@@ -23,20 +22,24 @@ _UPLOAD_BODY_LIMIT = 32 * 1024 * 1024  # 与解析器总上限一致
 
 
 class PlanReplayerStore:
-    """会话内存内的 Plan Replayer evidence/v3 视图，仅保留最近一次上传。"""
+    """会话内存内的 Plan Replayer evidence/v3 视图，仅保留最近一次上传。
+
+    只驻留投影后的小 payload（evidence/v3 + 摘要），不驻留解析 bundle——
+    真实生产包 stats 单文件可达数 MiB，bundle 生命周期收敛在单次请求内。
+    """
 
     def __init__(self) -> None:
-        self._bundle: PlanReplayerBundle | None = None
+        self._payload: dict | None = None
 
-    async def replace(self, bundle: PlanReplayerBundle) -> PlanReplayerBundle:
-        self._bundle = bundle
-        return bundle
+    async def replace(self, payload: dict) -> dict:
+        self._payload = payload
+        return payload
 
-    async def view(self) -> PlanReplayerBundle | None:
-        return self._bundle
+    async def view(self) -> dict | None:
+        return self._payload
 
     async def clear(self) -> None:
-        self._bundle = None
+        self._payload = None
 
 
 def register_plan_replayer_routes(
@@ -54,19 +57,18 @@ def register_plan_replayer_routes(
         except PlanReplayerError as exc:
             raise ApiError(422, "PLAN_REPLAYER_INVALID", str(exc)) from None
 
-        await store.replace(bundle)
-        # 返回 evidence/v3 结构（供诊断内核 / 前端继续消费），另附轻量摘要。
+        # 返回 evidence/v3 结构（供诊断内核 / 前端继续消费），另附轻量摘要；
+        # 会话只驻留该投影，bundle（含大原文）随请求结束释放。
         payload = bundle_to_evidence_v3(bundle)
         payload["_summary"] = plan_replayer_summary(bundle)
+        await store.replace(payload)
         return JSONResponse(content=payload)
 
     @app.get("/api/v1/v4/plan-replayer")
     async def get_plan_replayer() -> JSONResponse:
-        bundle = await store.view()
-        if bundle is None:
+        payload = await store.view()
+        if payload is None:
             return JSONResponse(content={"available": False})
-        payload = bundle_to_evidence_v3(bundle)
-        payload["_summary"] = plan_replayer_summary(bundle)
         return JSONResponse(content=payload)
 
     @app.delete("/api/v1/v4/plan-replayer", status_code=204)
