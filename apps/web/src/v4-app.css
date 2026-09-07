@@ -73,6 +73,7 @@ th{background:#f8fbf9;font-weight:600}
 .row-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
 .flex2{flex:2}
 .btn-group{display:flex;gap:10px}
+#reportTabs{margin:12px 0 0}
 .plain-list{margin-left:18px}
 .ai-item{border:1px dashed var(--pri);border-radius:6px;padding:8px 10px;margin:8px 0;font-size:13px}
 .p-steps{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0;font-size:12.5px}

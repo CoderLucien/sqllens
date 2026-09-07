@@ -59,7 +59,7 @@ SELECT * FROM orders WHERE user_id = ? AND order_date &gt; '2026-01-01';</div>
 
   <section class="screen" id="scr-ai">
     <h2>AI 增强配置（可选）</h2>
-    <div class="sub">规则结论始终由规则引擎生成（可复现、可审计）。在此通过连接测试后，诊断报告将追加 AI 增强内容（归纳 / 补充策略 / 规则 review），AI 不推翻规则结论，失败自动降级纯规则模式。Key 仅本机会话保存。</div>
+    <div class="sub">规则结论始终由规则引擎生成（可复现、可审计）。在此通过连接测试后，可在报告页点击「AI 增强分析」生成第二份对照报告（归纳 / 补充策略 / 规则 review），AI 不推翻规则结论，失败仅影响第二份。Key 仅本机会话保存。</div>
     <div class="row">
       <div><label>接口协议</label><select id="proto"><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic 兼容</option></select></div>
       <div class="flex2"><label>Base URL</label><input id="baseUrl" value="https://api.deepseek.com/v1" placeholder="或公司私有部署地址（兼容 OpenAI 约束接口）"></div>
@@ -78,7 +78,6 @@ SELECT * FROM orders WHERE user_id = ? AND order_date &gt; '2026-01-01';</div>
     <div class="footer-actions">
       <button class="btn ghost">← 返回</button>
       <div class="btn-group">
-        <button class="btn ghost">跳过，使用规则模式（默认）</button>
         <button class="btn">开始诊断 →</button>
       </div>
     </div>
@@ -86,14 +85,21 @@ SELECT * FROM orders WHERE user_id = ? AND order_date &gt; '2026-01-01';</div>
 
   <section class="screen" id="scr-report">
     <h2>SQL 优化诊断报告</h2>
-    <div class="sub">专业六段 · 规则结论由规则引擎产生（可复现、可审计）；AI 内容以「AI」标注追加。</div>
-    <div class="alert info" id="reportMode">默认纯规则模式；AI 配置页通过连接测试后，诊断将追加 AI 增强内容（不改变规则结论）。</div>
+    <div class="sub">专业六段 · 规则结论由规则引擎产生（可复现、可审计）；点击「AI 增强分析」可基于同一份证据生成第二份「规则 + AI」对照报告。</div>
+    <div class="alert info" id="reportMode">默认规则诊断；AI 配置页通过连接测试后，可点击下方「AI 增强分析」生成第二份对照报告（AI 不改变规则结论）。</div>
+    <div class="tabs" id="reportTabs" style="display:none">
+      <div class="tab active" id="tabRules">报告一 · 规则生成</div>
+      <div class="tab" id="tabAi">报告二 · 规则 + AI 增强</div>
+    </div>
     <div id="reportBody">
       <div class="hint">尚未执行诊断。请回到「开始诊断」上传诊断包或选择演示样例。</div>
     </div>
     <div class="footer-actions">
       <button class="btn ghost" id="restartBtn">← 重新诊断</button>
-      <button class="btn" id="copyReportBtn">复制报告</button>
+      <div class="btn-group">
+        <button class="btn" id="aiRunBtn">AI 增强分析</button>
+        <button class="btn" id="copyReportBtn">复制报告</button>
+      </div>
     </div>
   </section>
 </div>
