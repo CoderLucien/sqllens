@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 import httpx
 from fastapi.testclient import TestClient
 
 from sqllens_api.app import create_app
 from sqllens_api.v4_routes import AiConfigInput, _list_models, _probe_ai
+
+# 可执行命令纯度：不允许中文字符（可直接粘贴到 TiDB 客户端执行）。
+_CJK_RE = re.compile(r"[一-鿿]")
 
 EVIDENCE_INDEX = {
     "schema_version": "evidence/v3",
@@ -94,13 +98,21 @@ class TestDiagnoseEndpoint:
         for row in sections["evidence"]:
             assert row["label_zh"] and row["value_zh"] and isinstance(row["evidence_ids"], list)
         for change in sections["changes"]:
-            assert set(change) == {
+            assert set(change) - {"operation_sql"} == {
                 "operation_zh", "risk_zh", "cost_zh", "cost_formula_zh",
                 "gain_zh", "gain_formula_zh", "rule_id",
             }
+            if "operation_sql" in change:
+                assert change["operation_sql"].endswith(";")
+                assert not _CJK_RE.search(change["operation_sql"])
+                assert "CREATE INDEX" not in change["operation_zh"]
         for section_name in ("validation", "rollback"):
             for row in sections[section_name]:
                 assert row["text_zh"]
+                if "sql" in row:
+                    assert row["sql"].endswith(";")
+                    assert not _CJK_RE.search(row["sql"])
+                    assert row["sql"] not in row["text_zh"]
 
     def test_stats_skew_evidence_yields_stats_rule(self) -> None:
         payload = {
@@ -324,7 +336,12 @@ class TestNonSargableScenario:
         changes = report["sections"]["changes"]
         assert "改写" in changes[0]["operation_zh"]
         assert "CREATE INDEX" not in changes[0]["operation_zh"]
-        assert "CREATE INDEX" in changes[1]["operation_zh"]
+        assert "operation_sql" not in changes[0]
+        assert "CREATE INDEX" not in changes[1]["operation_zh"]
+        assert changes[1]["operation_sql"].startswith("CREATE INDEX")
+        rollback = report["sections"]["rollback"]
+        assert rollback[1]["sql"].startswith("DROP INDEX")
+        assert "DROP INDEX" not in rollback[1]["text_zh"]
         assert "函数" in report["sections"]["conclusion"]["text_zh"]
         assert report["priority"] == "P2"
 
@@ -388,6 +405,7 @@ class TestUsePrefix:
         changes = report["sections"]["changes"]
         assert "改写" in changes[0]["operation_zh"]
         assert "CREATE INDEX" not in changes[0]["operation_zh"]
+        assert "operation_sql" not in changes[0]
 
 
 class TestJoinScenario:

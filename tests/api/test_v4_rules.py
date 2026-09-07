@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from sqllens_api.v4_rules import (
@@ -39,8 +41,10 @@ class TestIndexAccess:
         assert hit is not None
         assert hit.rule_id == "IDX_ACCESS_001"
         assert hit.severity == "P2"
-        assert "CREATE INDEX" in hit.actions[0].operation_zh
-        assert "租" in "".join(hit.actions[0].operation_zh) or "idx" in hit.actions[0].operation_zh.lower()
+        assert "CREATE INDEX" not in hit.actions[0].operation_zh
+        assert hit.actions[0].operation_sql == (
+            "CREATE INDEX idx_tenant_id_status ON orders(tenant_id, status, created_at);"
+        )
 
     def test_miss_when_index_covers_filters(self) -> None:
         hit = index_access_hit(
@@ -123,7 +127,8 @@ class TestStatsSkew:
         assert hit is not None
         assert hit.rule_id == "STATS_SKEW_001"
         assert hit.severity == "P2"
-        assert "ANALYZE" in hit.actions[0].operation_zh
+        assert "ANALYZE" not in hit.actions[0].operation_zh
+        assert hit.actions[0].operation_sql == "ANALYZE TABLE billing_order;"
 
     def test_hit_on_unhealthy_stats(self) -> None:
         hit = stats_skew_hit(table_name="t", est_rows=1000, actual_rows=1100, healthy=0)
@@ -244,8 +249,12 @@ class TestNonSargable:
         assert hit.rule_id == "IDX_ACCESS_001"
         assert "改写" in hit.actions[0].operation_zh
         assert "YEAR" in hit.actions[0].operation_zh
-        assert "CREATE INDEX" not in hit.actions[0].operation_zh
-        assert "CREATE INDEX" in hit.actions[1].operation_zh
+        assert hit.actions[0].operation_sql is None
+        assert "CREATE INDEX" not in hit.actions[1].operation_zh
+        assert hit.actions[1].operation_sql is not None
+        assert hit.actions[1].operation_sql.startswith("CREATE INDEX")
+        assert hit.actions[1].rollback_sql == "DROP INDEX idx_l_shipdate ON lineitem;"
+        assert "DROP INDEX" not in hit.actions[1].rollback_zh
         assert "函数" in hit.conclusion_zh
 
     def test_plain_range_predicate_keeps_index_advice(self) -> None:
@@ -261,4 +270,78 @@ class TestNonSargable:
         )
         assert hit is not None
         assert "改写" not in hit.actions[0].operation_zh
-        assert "CREATE INDEX" in hit.actions[0].operation_zh
+        assert "CREATE INDEX" not in hit.actions[0].operation_zh
+        assert hit.actions[0].operation_sql.startswith("CREATE INDEX")
+
+    def test_covering_index_branch_keeps_pure_ddl(self) -> None:
+        hit = index_access_hit(
+            table_name="lineitem",
+            scanned_rows=6_001_215,
+            result_rows=5_808_334,
+            filter_columns=("l_shipdate",),
+            index_prefixes=(("l_orderkey", "l_linenumber"),),
+            exec_count=0,
+            p95_ms=0,
+        )
+        assert hit is not None
+        action = hit.actions[0]
+        assert action.operation_sql == "CREATE INDEX idx_l_shipdate ON lineitem(l_shipdate);"
+        assert "覆盖索引" in action.operation_zh
+        assert "CREATE INDEX" not in action.operation_zh
+
+
+class TestExecutableCommandPurity:
+    """可执行命令与描述文字分离（QA 清单 v1.1 A1/A3）：命令字段为纯 SQL，可直接粘贴执行。"""
+
+    _CJK_RE = re.compile(r"[一-鿿]")
+
+    def _index_hit(self):
+        return index_access_hit(
+            table_name="orders",
+            scanned_rows=1_263_814,
+            result_rows=400,
+            filter_columns=("tenant_id", "status", "created_at"),
+            index_prefixes=(),
+            exec_count=842,
+            p95_ms=2800,
+        )
+
+    def test_operation_and_rollback_sql_contain_no_chinese(self) -> None:
+        action = self._index_hit().actions[0]
+        for sql in (action.operation_sql, action.rollback_sql):
+            assert sql and sql.endswith(";")
+            assert not self._CJK_RE.search(sql)
+
+    def test_command_not_duplicated_in_description_text(self) -> None:
+        action = self._index_hit().actions[0]
+        assert action.operation_sql not in action.operation_zh
+        assert action.rollback_sql not in action.rollback_zh
+
+    def test_report_sections_carry_optional_command_fields(self) -> None:
+        report = build_report_v4(
+            hits=[self._index_hit()],
+            mode="rules",
+            sql_digest="a" * 64,
+            database="d",
+            evidence_rows=[],
+        )
+        change = report["sections"]["changes"][0]
+        assert change["operation_sql"].startswith("CREATE INDEX")
+        assert "CREATE INDEX" not in change["operation_zh"]
+        rollback = report["sections"]["rollback"][0]
+        assert rollback["sql"].startswith("DROP INDEX")
+        assert "DROP INDEX" not in rollback["text_zh"]
+
+    def test_no_command_advice_omits_field(self) -> None:
+        hit = repeated_scan_hit(exec_count=20, avg_keys=65_537, p95_ms=66)
+        report = build_report_v4(
+            hits=[hit],
+            mode="rules",
+            sql_digest="a" * 64,
+            database="d",
+            evidence_rows=[],
+        )
+        for change in report["sections"]["changes"]:
+            assert "operation_sql" not in change
+        for item in report["sections"]["rollback"]:
+            assert "sql" not in item
