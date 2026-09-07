@@ -55,7 +55,7 @@ th{background:#f8fbf9;font-weight:600}
 .four{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0;background:#fbfdfc}
 .four .kv{display:flex;gap:8px;font-size:13px;margin:5px 0;align-items:flex-start}
 .four .kv b{min-width:88px;color:var(--pri);font-weight:600;flex-shrink:0}
-.four .formula{display:block;font-size:11px;color:var(--muted)}
+.four .formula{display:block;font-size:11px;color:#4a5560}
 .footer-actions{display:flex;gap:10px;margin-top:18px;justify-content:space-between;align-items:center}
 .demo-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:10px 0}
 .demo-card{border:1px solid var(--line);border-radius:8px;padding:12px;cursor:pointer;background:#fbfdfc}
