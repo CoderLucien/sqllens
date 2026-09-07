@@ -1,7 +1,9 @@
 
 :root{
-  --bg:#f4f7f6;--card:#fff;--ink:#1a2420;--muted:#5b6962;--line:#d8e2dd;
-  --pri:#176b4b;--pri-soft:#e2f1e9;--warn:#8a5a00;--warn-soft:#fdf3dc;
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5b6572;--line:#dde3ea;
+  /* TiDB 品牌红：产品名 / Logo / 关键行动；语义色：风险=红 成功/收益=绿 警告/成本=黄 信息/链接=蓝 */
+  --pri:#e70d0d;--pri-soft:#fdeaea;--pri-dark:#c00d0d;
+  --ok:#0f7a3d;--ok-soft:#e3f2e9;--warn:#8a5a00;--warn-soft:#fdf3dc;
   --err:#b3261e;--err-soft:#fdecea;--blue:#2d6290;--blue-soft:#e7f0f8;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -29,24 +31,24 @@ textarea{resize:vertical}
 .panel{display:none;margin-top:10px}
 .panel.active{display:block}
 .btn{display:inline-block;background:var(--pri);color:#fff;border:none;border-radius:6px;padding:9px 20px;font-size:13.5px;cursor:pointer}
-.btn:hover{background:#10583d}
+.btn:hover{background:var(--pri-dark)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.ghost{background:#fff;color:var(--pri);border:1px solid var(--pri)}
 .btn.small{padding:5px 12px;font-size:12px}
 .code{background:#0f1f18;color:#c9e8d8;border-radius:6px;padding:10px 12px;font-family:Menlo,Consolas,monospace;font-size:12px;overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:break-all}
 .hint{font-size:12px;color:var(--muted);margin-top:6px}
 .alert{padding:10px 12px;border-radius:6px;font-size:13px;margin:10px 0}
-.alert.ok{background:var(--pri-soft);color:var(--pri)}
+.alert.ok{background:var(--ok-soft);color:var(--ok)}
 .alert.err{background:var(--err-soft);color:var(--err)}
 .alert.warn{background:var(--warn-soft);color:var(--warn)}
 .alert.info{background:var(--blue-soft);color:var(--blue)}
 .badge{display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;margin-right:6px;vertical-align:middle}
 .badge.p1{background:#fde8e8;color:#b3261e}
 .badge.p2{background:var(--warn-soft);color:var(--warn)}
-.badge.src{background:var(--pri-soft);color:var(--pri)}
+.badge.src{background:var(--blue-soft);color:var(--blue)}
 .badge.mode-rule{background:var(--blue-soft);color:var(--blue)}
-.badge.mode-ai{background:var(--pri-soft);color:var(--pri)}
-.badge.mode-degraded{background:var(--warn-soft);color:var(--warn)}
+.badge.mode-ai{background:var(--ok-soft);color:var(--ok)}
+.badge.mode-degraded{background:var(--err-soft);color:var(--err)}
 table{width:100%;border-collapse:collapse;font-size:12.5px;margin:10px 0}
 th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
 th{background:#f8fbf9;font-weight:600}
@@ -74,6 +76,10 @@ th{background:#f8fbf9;font-weight:600}
 .flex2{flex:2}
 .btn-group{display:flex;gap:10px}
 #reportTabs{margin:12px 0 0}
+.cmd{display:flex;align-items:center;gap:8px;flex:1;min-width:0;margin:2px 0}
+.cmd code{flex:1;background:#101f18;color:#c9e8d8;border-radius:6px;padding:8px 10px;font-family:Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all}
+.cost-text{color:var(--warn);font-weight:600}
+.gain-text{color:var(--ok);font-weight:600}
 .plain-list{margin-left:18px}
 .ai-item{border:1px dashed var(--pri);border-radius:6px;padding:8px 10px;margin:8px 0;font-size:13px}
 .p-steps{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0;font-size:12.5px}

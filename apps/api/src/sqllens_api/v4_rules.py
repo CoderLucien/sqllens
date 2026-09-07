@@ -65,6 +65,9 @@ class ActionAdvice:
     gain_formula_zh: str
     validation_zh: str
     rollback_zh: str
+    # 纯可执行命令（无中文、可直接粘贴到 TiDB 客户端执行），无命令的建议为 None。
+    operation_sql: str | None = None
+    rollback_sql: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,10 +138,6 @@ def index_access_hit(
         )
 
     if large_scan:
-        ddl = (
-            f"CREATE INDEX {index_name} ON {table_name}({', '.join(index_cols)}); "
-            "（覆盖索引：按 SELECT 引用列追加到索引尾部，使索引覆盖查询，避免回表）"
-        )
         gain_zh = (
             f"回表消除：{_fmt_number(scanned_rows)} 行全表扫描改为仅读覆盖索引页；"
             f"返回 {_fmt_number(result_rows)} 行（占比 {result_rows / scanned_rows * 100:.0f}%）"
@@ -174,11 +173,15 @@ def index_access_hit(
             "索引后扫描 ≈ 过滤选择性 × 表行数，需实测验证。"
         )
 
+    operation_zh = (
+        "在隔离环境验证覆盖索引候选（按 SELECT 引用列追加到索引尾部，使索引覆盖查询、避免回表），"
+        "并以相同参数分布对比新旧计划的扫描行数与 P95。"
+        if large_scan
+        else "在隔离环境验证复合索引候选，并以相同参数分布对比新旧计划的扫描行数与 P95。"
+    )
     action = ActionAdvice(
-        operation_zh=(
-            f"在隔离环境验证复合索引候选：{ddl} "
-            "并以相同参数分布对比新旧计划的扫描行数与 P95。"
-        ),
+        operation_zh=operation_zh,
+        operation_sql=ddl,
         risk_zh=(
             "TiDB 在线 DDL，不阻塞读写；写入期间存在写放大与临时空间开销，"
             "建议业务低峰执行；索引将承担每行一次额外写入成本。"
@@ -197,7 +200,8 @@ def index_access_hit(
             "隔离环境运行普通 EXPLAIN 与压测：确认访问方式由 TableFullScan 变为 "
             "IndexRangeScan；扫描行数下降 ≥ 90%、P95 < 500ms、写入回归 ≤ 5% 为达标。"
         ),
-        rollback_zh=f"DROP INDEX {index_name} ON {table_name};（收益或写入开销不达标时在隔离环境执行；生产环境不自动变更）。",
+        rollback_zh="收益或写入开销不达标时在隔离环境执行回滚；生产环境不自动变更。",
+        rollback_sql=f"DROP INDEX {index_name} ON {table_name};",
     )
     if large_scan:
         conclusion_zh = (
@@ -281,9 +285,10 @@ def _non_sargable_hit(
     )
     index_secondary = ActionAdvice(
         operation_zh=(
-            f"谓词改写后，若过滤选择性仍不足，再评估索引：{ddl} "
+            "谓词改写后，若过滤选择性仍不足，再评估创建索引"
             "（注意：函数包裹谓词下该索引无效，必须先完成改写）。"
         ),
+        operation_sql=ddl,
         risk_zh=(
             "TiDB 在线 DDL，不阻塞读写；写入期间存在写放大与临时空间开销，建议业务低峰执行。"
         ),
@@ -292,7 +297,8 @@ def _non_sargable_hit(
         gain_zh="改写后按过滤选择性获得常规索引收益（扫描行数下降 ≥ 90% 需实测确认）。",
         gain_formula_zh="收益公式：索引后扫描 ≈ 返回行数 × 回表系数；需实测验证。",
         validation_zh="隔离环境 EXPLAIN 确认 IndexRangeScan 且扫描行数下降 ≥ 90%。",
-        rollback_zh=f"DROP INDEX {index_name} ON {table_name};",
+        rollback_zh="收益或写入开销不达标时在隔离环境执行回滚；生产环境不自动变更。",
+        rollback_sql=f"DROP INDEX {index_name} ON {table_name};",
     )
     return RuleHit(
         rule_id="IDX_ACCESS_001",
@@ -339,9 +345,9 @@ def stats_skew_hit(
         gain_parts.append(f"批处理耗时预估从 {batch_before_min} 分钟回到 {target} 分钟以内")
     action = ActionAdvice(
         operation_zh=(
-            f"在隔离环境执行：ANALYZE TABLE {table_name}; "
-            "复现当前统计与计划后刷新，并对比 Join 顺序与任务耗时。"
+            "在隔离环境复现当前统计与计划后刷新表统计，并对比 Join 顺序与任务耗时。"
         ),
+        operation_sql=f"ANALYZE TABLE {table_name};",
         risk_zh=(
             "ANALYZE 为在线操作，采样占用 1 个 TiKV 读线程；建议避开业务高峰；"
             "先隔离验证，不直接在生产刷新。"
@@ -471,23 +477,30 @@ def build_report_v4(
     changes = []
     for hit in hits:
         for action in hit.actions:
-            changes.append(
-                {
-                    "operation_zh": action.operation_zh,
-                    "risk_zh": action.risk_zh,
-                    "cost_zh": action.cost_zh,
-                    "cost_formula_zh": action.cost_formula_zh,
-                    "gain_zh": action.gain_zh,
-                    "gain_formula_zh": action.gain_formula_zh,
-                    "rule_id": hit.rule_id,
-                }
-            )
+            change = {
+                "operation_zh": action.operation_zh,
+                "risk_zh": action.risk_zh,
+                "cost_zh": action.cost_zh,
+                "cost_formula_zh": action.cost_formula_zh,
+                "gain_zh": action.gain_zh,
+                "gain_formula_zh": action.gain_formula_zh,
+                "rule_id": hit.rule_id,
+            }
+            if action.operation_sql:
+                change["operation_sql"] = action.operation_sql
+            changes.append(change)
     validation_zh = [a.validation_zh for h in hits for a in h.actions] or [
         "无需验证：本次未给出变更建议，无需执行变更。"
     ]
-    rollback_zh = [a.rollback_zh for h in hits for a in h.actions] or [
-        "无需回滚：本次未给出变更建议，未引入任何变更。"
-    ]
+    rollback_items = []
+    for hit in hits:
+        for action in hit.actions:
+            item = {"text_zh": action.rollback_zh}
+            if action.rollback_sql:
+                item["sql"] = action.rollback_sql
+            rollback_items.append(item)
+    if not rollback_items:
+        rollback_items = [{"text_zh": "无需回滚：本次未给出变更建议，未引入任何变更。"}]
     ai_status_zh = (
         f"AI 调用失败，已降级为规则模式输出（{ai_degraded_reason_zh}）。"
         if mode == "degraded"
@@ -510,6 +523,6 @@ def build_report_v4(
             "analysis": {"text_zh": analysis_zh},
             "changes": changes,
             "validation": [{"text_zh": item} for item in validation_zh],
-            "rollback": [{"text_zh": item} for item in rollback_zh],
+            "rollback": rollback_items,
         },
     }

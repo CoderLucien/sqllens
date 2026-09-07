@@ -72,6 +72,9 @@ async function copyDumpScript() {
   try { await navigator.clipboard.writeText(el("dumpScript").textContent); toast("DUMP 脚本已复制"); }
   catch { toast("浏览器未开放剪贴板权限，请手动复制"); }
 }
+function commandBlock(sql) {
+  return `<div class="cmd"><code>${esc(sql)}</code><button class="btn small ghost cmd-copy" data-cmd="${esc(sql)}">复制命令</button></div>`;
+}
 function currentReport() {
   return state.activeReport === "ai" ? state.aiReport : state.report;
 }
@@ -202,14 +205,15 @@ function renderReport(report) {
     ? (sections.changes || []).map((change) => `
     <div class="four">
       <div class="kv"><b>变更操作</b><span>${esc(change.operation_zh)}</span></div>
+      ${change.operation_sql ? `<div class="kv"><b>执行命令</b>${commandBlock(change.operation_sql)}</div>` : ""}
       <div class="kv"><b>风险提示</b><span>${esc(change.risk_zh)}</span></div>
-      <div class="kv"><b>成本预估</b><span>${esc(change.cost_zh)}<span class="formula">${esc(change.cost_formula_zh)}</span></span></div>
-      <div class="kv"><b>收益预估</b><span>${esc(change.gain_zh)}<span class="formula">${esc(change.gain_formula_zh)}</span></span></div>
+      <div class="kv"><b>成本预估</b><span><span class="cost-text">${esc(change.cost_zh)}</span><span class="formula">${esc(change.cost_formula_zh)}</span></span></div>
+      <div class="kv"><b>收益预估</b><span><span class="gain-text">${esc(change.gain_zh)}</span><span class="formula">${esc(change.gain_formula_zh)}</span></span></div>
     </div>`).join("")
     : '<div class="alert info">本次未给出变更建议：证据未命中已知异常模式。如需进一步分析，可补充运行时证据（如直连采集执行次数与延迟）后重新诊断。</div>';
 
   const validations = (sections.validation || []).map((item) => `<li>${esc(item.text_zh)}</li>`).join("");
-  const rollbacks = (sections.rollback || []).map((item) => `<li>${esc(item.text_zh)}</li>`).join("");
+  const rollbacks = (sections.rollback || []).map((item) => `<li>${esc(item.text_zh)}${item.sql ? commandBlock(item.sql) : ""}</li>`).join("");
 
   let aiBlock = "";
   if (sections.ai_summary) {
@@ -342,6 +346,14 @@ function init() {
   });
   el("tabRules").addEventListener("click", () => { state.activeReport = "rules"; renderCurrent(); });
   el("tabAi").addEventListener("click", () => { if (state.aiReport) { state.activeReport = "ai"; renderCurrent(); } });
+  el("reportBody").addEventListener("click", (event) => {
+    const button = event.target.closest(".cmd-copy");
+    if (!button) return;
+    navigator.clipboard.writeText(button.dataset.cmd).then(
+      () => toast("命令已复制，可直接粘贴到 TiDB 客户端执行"),
+      () => toast("浏览器未开放剪贴板权限，请手动复制命令"),
+    );
+  });
 }
 
 function copyReport() {
@@ -361,11 +373,11 @@ function copyReport() {
     `三、问题分析：${r.sections.analysis.text_zh}`,
     "",
     "四、变更建议：" + ((r.sections.changes || []).map((c, i) =>
-      `\n${i + 1}. 操作：${c.operation_zh}\n   风险：${c.risk_zh}\n   成本：${c.cost_zh}\n   收益：${c.gain_zh}`).join("") || "无（未命中已知异常模式）"),
+      `\n${i + 1}. 操作：${c.operation_zh}${c.operation_sql ? `\n   执行命令：\n   ${c.operation_sql}` : ""}\n   风险：${c.risk_zh}\n   成本：${c.cost_zh}\n   收益：${c.gain_zh}`).join("") || "无（未命中已知异常模式）"),
     "",
     "五、验证方法：" + (r.sections.validation || []).map((v) => v.text_zh).join("；"),
     "",
-    "六、回滚步骤：" + (r.sections.rollback || []).map((v) => v.text_zh).join("；"),
+    "六、回滚步骤：" + (r.sections.rollback || []).map((v) => v.text_zh + (v.sql ? `\n${v.sql}` : "")).join("；"),
   ];
   if (r.sections.ai_summary) {
     lines.push(
