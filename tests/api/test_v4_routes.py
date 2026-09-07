@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from pathlib import Path
 
 import httpx
 from fastapi.testclient import TestClient
@@ -12,6 +13,10 @@ from sqllens_api.v4_routes import AiConfigInput, _list_models, _probe_ai
 
 # 可执行命令纯度：不允许中文字符（可直接粘贴到 TiDB 客户端执行）。
 _CJK_RE = re.compile(r"[一-鿿]")
+
+_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[2] / "docs" / "contracts" / "v4-diagnosis-report.schema.json"
+)
 
 EVIDENCE_INDEX = {
     "schema_version": "evidence/v3",
@@ -113,6 +118,22 @@ class TestDiagnoseEndpoint:
                     assert row["sql"].endswith(";")
                     assert not _CJK_RE.search(row["sql"])
                     assert row["sql"] not in row["text_zh"]
+
+    def test_emitted_fields_stay_within_frozen_contract(self) -> None:
+        # 契约声明 additionalProperties:false——实现新发出的任何字段必须先入契约，
+        # 否则对冻结 schema 的校验必失败（运行时不校验，靠本测试兜住同步）。
+        contract = json.loads(_CONTRACT_PATH.read_text())
+        section_props = contract["properties"]["sections"]["properties"]
+        change_props = set(section_props["changes"]["items"]["properties"])
+        rollback_props = set(section_props["rollback"]["items"]["properties"])
+        response = _client().post("/api/v1/v4/diagnose", json=EVIDENCE_INDEX)
+        assert response.status_code == 200, response.text
+        for change in response.json()["sections"]["changes"]:
+            extra = set(change) - change_props
+            assert not extra, f"changes 字段未入契约: {extra}"
+        for item in response.json()["sections"]["rollback"]:
+            extra = set(item) - rollback_props
+            assert not extra, f"rollback 字段未入契约: {extra}"
 
     def test_stats_skew_evidence_yields_stats_rule(self) -> None:
         payload = {

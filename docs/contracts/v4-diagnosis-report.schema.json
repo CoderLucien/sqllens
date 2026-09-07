@@ -61,6 +61,11 @@
             "additionalProperties": false,
             "properties": {
               "operation_zh": { "type": "string", "minLength": 1 },
+              "operation_sql": {
+                "type": "string",
+                "minLength": 1,
+                "description": "可选：纯可执行命令（如 CREATE INDEX / ANALYZE TABLE），不含中文、可直接粘贴到 TiDB 客户端执行；无完整命令的建议（谓词改写、合并批量）省略该字段。"
+              },
               "risk_zh": { "type": "string", "minLength": 1 },
               "cost_zh": { "type": "string", "minLength": 1 },
               "cost_formula_zh": { "type": "string", "minLength": 1 },
@@ -85,7 +90,14 @@
             "type": "object",
             "required": ["text_zh"],
             "additionalProperties": false,
-            "properties": { "text_zh": { "type": "string", "minLength": 1 } }
+            "properties": {
+              "text_zh": { "type": "string", "minLength": 1 },
+              "sql": {
+                "type": "string",
+                "minLength": 1,
+                "description": "可选：纯可执行回滚命令（如 DROP INDEX），不含中文；无命令的回滚（纯应用层变更）省略该字段。"
+              }
+            }
           }
         },
         "ai_summary": {
