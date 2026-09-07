@@ -1,4 +1,4 @@
-const state = { aiOk: false };
+const state = { aiOk: false, evidence: null, report: null, aiReport: null, activeReport: "rules", aiRunning: false };
 
 const DEMOS = [
   {
@@ -72,11 +72,8 @@ async function copyDumpScript() {
   try { await navigator.clipboard.writeText(el("dumpScript").textContent); toast("DUMP 脚本已复制"); }
   catch { toast("浏览器未开放剪贴板权限，请手动复制"); }
 }
-function useRules() {
-  state.aiOk = false;
-  el("reportMode").className = "alert info";
-  el("reportMode").innerHTML = "已选纯规则模式：本次会话诊断仅由规则引擎生成；如需 AI 增强请回到上页通过连接测试。";
-  go(2);
+function currentReport() {
+  return state.activeReport === "ai" ? state.aiReport : state.report;
 }
 
 function aiConfigBody() {
@@ -121,12 +118,14 @@ function setProgress(container, currentIndex, doneThrough) {
 async function diagnose(evidence, progressContainer) {
   try {
     if (progressContainer) setProgress(progressContainer, 3, 2);
-    const body = { ...evidence };
-    const ai = aiConfigBody();
-    if (ai) body.ai_config = ai;
-    const report = await postJson("/api/v1/v4/diagnose", body);
+    state.evidence = evidence;
+    state.report = null;
+    state.aiReport = null;
+    state.activeReport = "rules";
+    const report = await postJson("/api/v1/v4/diagnose", evidence);
     if (progressContainer) setProgress(progressContainer, 4, 4);
-    renderReport(report);
+    state.report = report;
+    renderCurrent();
     go(2);
   } catch (error) {
     if (progressContainer) progressContainer.innerHTML = `<div class="alert err">诊断失败：${esc(error.message)}</div>`;
@@ -134,8 +133,54 @@ async function diagnose(evidence, progressContainer) {
   }
 }
 
+async function runAiAnalysis() {
+  if (state.aiRunning) return;
+  if (!state.report) { toast("请先完成一次规则诊断，再生成 AI 对照报告"); return; }
+  const ai = aiConfigBody();
+  if (!ai) {
+    el("reportMode").className = "alert warn";
+    el("reportMode").innerHTML = "尚未启用 AI：请到第②步「AI 增强配置」填写并通过连接测试，再回到本页点击「AI 增强分析」生成第二份对照报告。";
+    toast("请先在 AI 增强配置页通过连接测试");
+    go(1);
+    return;
+  }
+  const btn = el("aiRunBtn");
+  state.aiRunning = true;
+  btn.disabled = true;
+  btn.textContent = "AI 分析中…";
+  el("reportMode").className = "alert info";
+  el("reportMode").textContent = "AI 分析中（单次调用，最长约 30 秒）……";
+  try {
+    const report = await postJson("/api/v1/v4/diagnose", { ...state.evidence, ai_config: ai });
+    state.aiReport = report;
+    state.activeReport = "ai";
+    renderCurrent();
+    toast(report.mode === "degraded" ? "AI 调用失败，第二份报告已按规则口径降级" : "第二份「规则 + AI」报告已生成");
+  } catch (error) {
+    el("reportMode").className = "alert err";
+    el("reportMode").textContent = `AI 分析失败：${error.message}（第一份规则报告不受影响）`;
+    toast(`AI 分析失败：${error.message}`);
+  } finally {
+    state.aiRunning = false;
+    btn.disabled = false;
+    btn.textContent = "AI 增强分析";
+  }
+}
+
+function renderCurrent() {
+  const tabs = el("reportTabs");
+  if (state.aiReport) {
+    tabs.style.display = "";
+    el("tabAi").textContent = state.aiReport.mode === "degraded" ? "报告二 · 规则 + AI（已降级）" : "报告二 · 规则 + AI 增强";
+  } else {
+    tabs.style.display = "none";
+  }
+  el("tabRules").classList.toggle("active", state.activeReport === "rules");
+  el("tabAi").classList.toggle("active", state.activeReport === "ai");
+  renderReport(currentReport());
+}
+
 function renderReport(report) {
-  state.report = report;
   const mode = el("reportMode");
   if (report.mode === "rules") { mode.className = "alert info"; mode.textContent = report.ai_status_zh; }
   else if (report.mode === "degraded") { mode.className = "alert warn"; mode.textContent = report.ai_status_zh; }
@@ -287,22 +332,24 @@ function init() {
   document.querySelectorAll("#scr-ai .btn").forEach((button) => {
     if (button.textContent.includes("连接测试")) button.addEventListener("click", aiTest);
     else if (button.textContent.includes("识别模型")) button.addEventListener("click", aiList);
-    else if (button.textContent.includes("跳过")) button.addEventListener("click", useRules);
     else if (button.textContent.includes("开始诊断")) button.addEventListener("click", () => go(2));
     else if (button.textContent.includes("← 返回")) button.addEventListener("click", () => go(0));
   });
   document.querySelectorAll("#scr-report .btn").forEach((button) => {
     if (button.id === "restartBtn") button.addEventListener("click", () => go(0));
     else if (button.id === "copyReportBtn") button.addEventListener("click", copyReport);
+    else if (button.id === "aiRunBtn") button.addEventListener("click", runAiAnalysis);
   });
+  el("tabRules").addEventListener("click", () => { state.activeReport = "rules"; renderCurrent(); });
+  el("tabAi").addEventListener("click", () => { if (state.aiReport) { state.activeReport = "ai"; renderCurrent(); } });
 }
 
 function copyReport() {
-  if (!state.report) {
+  const r = currentReport();
+  if (!r) {
     toast("尚无报告可复制");
     return;
   }
-  const r = state.report;
   const modeName = r.mode === "rules" ? "规则生成" : r.mode === "degraded" ? "AI 失败已降级" : "AI 增强";
   const lines = [
     `SQLLens 诊断报告（${r.priority} · ${modeName}）`,
