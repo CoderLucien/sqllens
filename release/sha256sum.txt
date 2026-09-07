@@ -1,1 +1,1 @@
-57573115c826f2856acaeca8249afba478a3708e8071f77cf3e5f07fee6a7892  sqllens-v4-m0-arm64.tar
+7c40d73e30ea89ffdf37a5dd51c1a0e70c6b9883b5b3100f91e7f0cefeb266fd  sqllens-v4-m0-arm64.tar
