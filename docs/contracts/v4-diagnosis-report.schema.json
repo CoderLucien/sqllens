@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sqllens.local/contracts/v4-diagnosis-report.schema.json",
+  "title": "SQLLens v4 Diagnosis Report",
+  "description": "v4 诊断内核输出报告结构（六段 + 变更建议四要素）。priority 仅 P1/P2（无 P0）；P1 条件：p95>=5s 且 24h 执行>=20 次。",
+  "type": "object",
+  "required": ["schema_version", "priority", "mode", "ai_status_zh", "sql_digest", "database", "sections"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "diagnosis-report/v2" },
+    "priority": { "enum": ["P1", "P2"] },
+    "mode": { "enum": ["rules", "rules_ai", "degraded"] },
+    "ai_status_zh": { "type": "string", "minLength": 1 },
+    "sql_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "database": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "sections": {
+      "type": "object",
+      "required": ["conclusion", "evidence", "analysis", "changes", "validation", "rollback"],
+      "additionalProperties": false,
+      "properties": {
+        "conclusion": {
+          "type": "object",
+          "required": ["text_zh", "rule_ids", "severities"],
+          "additionalProperties": false,
+          "properties": {
+            "text_zh": { "type": "string", "minLength": 1 },
+            "rule_ids": { "type": "array", "items": { "type": "string" } },
+            "severities": { "type": "array", "items": { "enum": ["P1", "P2"] } }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label_zh", "value_zh", "evidence_ids"],
+            "additionalProperties": false,
+            "properties": {
+              "label_zh": { "type": "string", "minLength": 1 },
+              "value_zh": { "type": "string", "minLength": 1 },
+              "evidence_ids": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "analysis": {
+          "type": "object",
+          "required": ["text_zh"],
+          "additionalProperties": false,
+          "properties": {
+            "text_zh": { "type": "string", "minLength": 1 }
+          }
+        },
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "operation_zh", "risk_zh", "cost_zh", "cost_formula_zh",
+              "gain_zh", "gain_formula_zh", "rule_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "operation_zh": { "type": "string", "minLength": 1 },
+              "operation_sql": {
+                "type": "string",
+                "minLength": 1,
+                "description": "可选：纯可执行命令（如 CREATE INDEX / ANALYZE TABLE），不含中文、可直接粘贴到 TiDB 客户端执行；无完整命令的建议（谓词改写、合并批量）省略该字段。"
+              },
+              "risk_zh": { "type": "string", "minLength": 1 },
+              "cost_zh": { "type": "string", "minLength": 1 },
+              "cost_formula_zh": { "type": "string", "minLength": 1 },
+              "gain_zh": { "type": "string", "minLength": 1 },
+              "gain_formula_zh": { "type": "string", "minLength": 1 },
+              "rule_id": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text_zh"],
+            "additionalProperties": false,
+            "properties": { "text_zh": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "rollback": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text_zh"],
+            "additionalProperties": false,
+            "properties": {
+              "text_zh": { "type": "string", "minLength": 1 },
+              "sql": {
+                "type": "string",
+                "minLength": 1,
+                "description": "可选：纯可执行回滚命令（如 DROP INDEX），不含中文；无命令的回滚（纯应用层变更）省略该字段。"
+              }
+            }
+          }
+        },
+        "ai_summary": {
+          "type": "object",
+          "description": "AI 归纳（仅 mode=rules_ai 时存在；只追加，不改变规则六段）。",
+          "required": ["text_zh"],
+          "additionalProperties": false,
+          "properties": { "text_zh": { "type": "string", "minLength": 1, "maxLength": 400 } }
+        },
+        "ai_suggestions": {
+          "type": "array",
+          "maxItems": 3,
+          "description": "AI 补充策略建议；每条必含证据出处与验证方式，证据撑不住的条目不输出。",
+          "items": {
+            "type": "object",
+            "required": ["text_zh", "evidence_ids", "validation_zh"],
+            "additionalProperties": false,
+            "properties": {
+              "text_zh": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "evidence_ids": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": { "enum": ["ev_runtime", "ev_plan", "ev_stats", "ev_schema"] }
+              },
+              "validation_zh": { "type": "string", "minLength": 1, "maxLength": 160 }
+            }
+          }
+        },
+        "ai_review": {
+          "type": "array",
+          "maxItems": 2,
+          "description": "AI 对已命中规则结论的异议条目；规则结论照常原样展示，绝不被自动推翻。",
+          "items": {
+            "type": "object",
+            "required": ["rule_id", "text_zh"],
+            "additionalProperties": false,
+            "properties": {
+              "rule_id": { "type": "string", "minLength": 1 },
+              "text_zh": { "type": "string", "minLength": 1, "maxLength": 300 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

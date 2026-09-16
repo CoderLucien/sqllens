@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/sqllens/contracts/diagnosis-case-v1.schema.json",
+  "title": "DiagnosisCaseV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "caseId",
+    "revision",
+    "sourceLayer",
+    "workflowState",
+    "outcome",
+    "inputFingerprint",
+    "createdAt",
+    "updatedAt",
+    "evidenceCompleteness",
+    "evidence",
+    "hypotheses",
+    "recommendations",
+    "reviews",
+    "feedback",
+    "pinnedRevisions"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "diagnosis-case/v1" },
+    "caseId": { "type": "string", "pattern": "^case_[a-z0-9]{16,64}$" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "sourceLayer": { "enum": ["sql", "workload", "clinic_import"] },
+    "workflowState": {
+      "enum": ["queued", "collecting", "analyzing", "ready", "failed", "cancelled"]
+    },
+    "outcome": {
+      "description": "Business result. A completed case has exactly one of the four terminal outcomes; pending is the only non-terminal value.",
+      "enum": [
+        "pending",
+        "validated_effective",
+        "rolled_back",
+        "evidence_insufficient",
+        "risk_accepted"
+      ],
+      "x-legacyDraftAliases": {
+        "not_reviewed": "pending",
+        "accepted": "pending",
+        "rejected": "pending",
+        "implemented": "pending",
+        "validated": "pending"
+      },
+      "x-legacyDraftSources": {
+        "diagnosis-case/v1@1c3c271": {
+          "outcomeAliases": {
+            "not_reviewed": "pending",
+            "accepted": "pending",
+            "rejected": "pending",
+            "implemented": "pending",
+            "validated": "pending",
+            "rolled_back": "pending"
+          }
+        }
+      }
+    },
+    "inputFingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "evidenceCompleteness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "classification", "missing"],
+      "properties": {
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "classification": { "enum": ["insufficient", "partial", "sufficient"] },
+        "missing": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "hypotheses": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/hypothesis" }
+    },
+    "recommendations": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/recommendation" }
+    },
+    "reviews": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/review" }
+    },
+    "feedback": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/feedback" }
+    },
+    "pinnedRevisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ruleSet",
+        "policy",
+        "redaction",
+        "provider",
+        "model",
+        "modelArtifact",
+        "prompt"
+      ],
+      "properties": {
+        "ruleSet": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "parser": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "policy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "redaction": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "provider": { "type": ["string", "null"], "maxLength": 128 },
+        "model": { "type": ["string", "null"], "maxLength": 256 },
+        "modelArtifact": { "type": ["string", "null"], "maxLength": 256 },
+        "prompt": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceId",
+        "kind",
+        "source",
+        "observedAt",
+        "collectedAt",
+        "freshness",
+        "coverage",
+        "sensitivity",
+        "integrityDigest",
+        "summary"
+      ],
+      "properties": {
+        "evidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "collectedAt": { "type": "string", "format": "date-time" },
+        "freshness": { "enum": ["fresh", "stale", "unknown"] },
+        "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "sensitivity": { "enum": ["public", "metadata", "confidential", "secret"] },
+        "integrityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "hypothesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hypothesisId",
+        "statement",
+        "confidence",
+        "supportingEvidenceIds",
+        "contradictingEvidenceIds",
+        "status"
+      ],
+      "properties": {
+        "hypothesisId": { "type": "string", "pattern": "^hyp_[a-z0-9]{16,64}$" },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "supportingEvidenceIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "contradictingEvidenceIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "status": { "enum": ["candidate", "favored", "rejected", "unresolved"] }
+      }
+    },
+    "recommendation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recommendationId",
+        "title",
+        "rationale",
+        "risk",
+        "prerequisites",
+        "validation",
+        "rollback",
+        "evidenceIds",
+        "owner",
+        "requiresHumanApproval"
+      ],
+      "properties": {
+        "recommendationId": { "type": "string", "pattern": "^rec_[a-z0-9]{16,64}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "rationale": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "risk": { "enum": ["low", "medium", "high", "critical"] },
+        "prerequisites": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
+        "validation": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "rollback": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "evidenceIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        },
+        "owner": { "$ref": "#/$defs/actor" },
+        "requiresHumanApproval": { "const": true }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "displayName"],
+      "properties": {
+        "kind": { "enum": ["user", "team", "role"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewId", "reviewer", "decision", "createdAt", "comment"],
+      "properties": {
+        "reviewId": { "type": "string", "pattern": "^rev_[a-z0-9]{16,64}$" },
+        "reviewer": { "$ref": "#/$defs/actor" },
+        "decision": {
+          "enum": ["approved", "rejected", "needs_changes", "risk_accepted"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "comment": { "type": "string", "maxLength": 4096 },
+        "recommendationIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 32,
+          "items": { "type": "string", "pattern": "^rec_[a-z0-9]{16,64}$" }
+        }
+      }
+    },
+    "feedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feedbackId", "actor", "kind", "createdAt", "comment"],
+      "properties": {
+        "feedbackId": { "type": "string", "pattern": "^fb_[a-z0-9]{16,64}$" },
+        "actor": { "$ref": "#/$defs/actor" },
+        "kind": {
+          "enum": [
+            "useful",
+            "not_useful",
+            "incorrect",
+            "implemented",
+            "validated",
+            "rolled_back",
+            "evidence_insufficient"
+          ]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "comment": { "type": "string", "maxLength": 4096 },
+        "recommendationId": {
+          "type": ["string", "null"],
+          "pattern": "^rec_[a-z0-9]{16,64}$"
+        },
+        "evidenceIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "schemaVersion": "diagnosis-report/v1",
+  "caseId": "case_0000000000000002",
+  "caseRevision": 1,
+  "audience": "dba_sre",
+  "titleZh": "订单查询存在高频全表扫描，优先验证复合索引候选",
+  "priority": "P1",
+  "configuredMode": "rules_ai",
+  "effectiveMode": "rules_ai",
+  "conclusionZh": "该 SQL 是当前 10 分钟窗口的主要可行动瓶颈：842 次调用平均扫描 126 万行，普通计划为全表扫描，建议先在隔离环境验证索引候选。",
+  "impact": {
+    "clusterZh": "生产订单集群",
+    "databaseZh": "order_center",
+    "sqlDigest": "digest:7f3a...91c2",
+    "timeWindowZh": "2026-09-02 16:00-16:10 CST",
+    "businessZh": "订单列表接口 P95 升至 2.8 秒，影响约 31% 的查询请求；当前没有证据表明需要扩容。",
+    "businessEvidenceIds": [
+      "ev_0000000000000004"
+    ]
+  },
+  "evidenceSummary": [
+    {
+      "labelZh": "运行表现",
+      "valueZh": "842 次调用，P95 2.8 秒，平均扫描 126 万行",
+      "evidenceIds": [
+        "ev_0000000000000001"
+      ]
+    },
+    {
+      "labelZh": "执行计划",
+      "valueZh": "orders 表 TableFullScan，扫描/返回比 3150:1",
+      "evidenceIds": [
+        "ev_0000000000000002"
+      ]
+    },
+    {
+      "labelZh": "索引覆盖",
+      "valueZh": "现有索引未匹配 tenant_id、status、created_at 的过滤顺序",
+      "evidenceIds": [
+        "ev_0000000000000003"
+      ]
+    }
+  ],
+  "reasoning": {
+    "ruleFindingsZh": [
+      "高频慢 SQL 使用全表扫描，且过滤列缺少匹配访问路径。"
+    ],
+    "aiContributionZh": "该 SQL 是当前窗口的主要可行动瓶颈；应先在隔离环境验证复合索引候选，而不是调整集群资源。",
+    "aiStatus": "applied",
+    "aiCode": null,
+    "aiReasonZh": null
+  },
+  "actions": [
+    {
+      "actionId": "act_0000000000000001",
+      "order": 1,
+      "titleZh": "在隔离环境验证复合索引候选",
+      "rationaleZh": "现有计划为全表扫描，过滤列组合没有匹配的访问路径。",
+      "ownerRole": "dba",
+      "risk": "medium",
+      "prerequisitesZh": [
+        "使用 Plan Replayer 或等价隔离环境",
+        "确认索引空间与写放大预算"
+      ],
+      "stepsZh": [
+        "生成候选索引并只在隔离环境创建",
+        "对相同参数分布运行普通 EXPLAIN 和压测"
+      ],
+      "validation": {
+        "metricZh": "扫描行数、P95 延迟和写入开销",
+        "targetZh": "扫描行数下降 90% 以上，P95 低于 500 ms，写入回归不超过 5%"
+      },
+      "rollbackZh": [
+        "若收益或写入开销不达标，删除隔离环境候选索引并停止灰度",
+        "生产环境不执行任何自动变更"
+      ]
+    }
+  ],
+  "uncertainty": [
+    "当前证据未覆盖所有参数分布，索引收益必须在代表性数据上验证。"
+  ],
+  "trace": {
+    "evidenceLevel": "E3",
+    "evidenceIds": [
+      "ev_0000000000000001",
+      "ev_0000000000000002",
+      "ev_0000000000000003",
+      "ev_0000000000000004"
+    ],
+    "ruleIds": [
+      "IDX_ACCESS_001"
+    ],
+    "claimIds": [
+      "claim_0000000000000001"
+    ],
+    "sourceRevisions": [
+      "src_0000000000000001@3"
+    ],
+    "aiInvocation": {
+      "providerRevision": "openai-compatible/v1",
+      "modelRevision": "gpt-5.6-sol",
+      "promptRevision": "evidence-bound-synthesis/v1",
+      "payloadRevision": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "redactionRevision": "evidence-redaction/v2"
+    },
+    "pinnedRevisions": {
+      "rulePack": "pingkaidb-7.1-rules/v2",
+      "documentPack": "pingkaidb-sql-tuning@2026-09-02",
+      "parser": "sqlglot/mysql@30.17.0",
+      "policy": "diagnosis-policy/v4",
+      "redaction": "evidence-redaction/v2",
+      "provider": "openai-compatible/v1",
+      "model": "gpt-5.6-sol",
+      "prompt": "evidence-bound-synthesis/v1",
+      "payload": "diagnosis-ai-payload/v1",
+      "payloadDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "evidenceCompleteness": 100
+  }
+}

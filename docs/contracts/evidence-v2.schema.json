@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/sqllens/contracts/evidence-v2.schema.json",
+  "title": "EvidenceV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "evidenceId",
+    "revision",
+    "caseId",
+    "profileSubjectRef",
+    "profileObjectRef",
+    "origin",
+    "kind",
+    "sourceRef",
+    "observedAt",
+    "collectedAt",
+    "freshness",
+    "coverage",
+    "sensitivity",
+    "integrityDigest",
+    "summaryZh",
+    "payload",
+    "collection"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "evidence/v2" },
+    "evidenceId": { "type": "string", "pattern": "^ev_[a-z0-9]{16,64}$" },
+    "revision": { "const": 1 },
+    "caseId": { "type": "string", "pattern": "^case_[a-z0-9]{16,64}$" },
+    "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+    "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "origin": { "enum": ["managed_source", "plan_replayer", "manual"] },
+    "kind": {
+      "enum": [
+        "business_observation",
+        "sql_structure",
+        "statement_summary",
+        "slow_query",
+        "schema",
+        "index",
+        "statistics",
+        "ordinary_plan",
+        "runtime_metric",
+        "alert",
+        "validation_result",
+        "effect_metric_comparison",
+        "rollback_confirmation"
+      ]
+    },
+    "sourceRef": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sourceRef" }
+      ]
+    },
+    "observedAt": { "type": "string", "format": "date-time" },
+    "collectedAt": { "type": "string", "format": "date-time" },
+    "freshness": { "enum": ["fresh", "stale", "unknown"] },
+    "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+    "sensitivity": { "enum": ["public", "metadata", "confidential"] },
+    "integrityDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "summaryZh": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "payload": { "$ref": "#/$defs/payload" },
+    "collection": { "$ref": "#/$defs/collection" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "origin": { "const": "managed_source" } },
+        "required": ["origin"]
+      },
+      "then": {
+        "properties": {
+          "sourceRef": { "$ref": "#/$defs/sourceRef" },
+          "collection": {
+            "properties": {
+              "queryId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "queryRevision": { "type": "string", "minLength": 1, "maxLength": 128 }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": { "sourceRef": { "type": "null" } }
+      }
+    }
+  ],
+  "$defs": {
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "revision"],
+      "properties": {
+        "sourceId": { "type": "string", "pattern": "^src_[a-z0-9]{16,64}$" },
+        "revision": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaRevision", "extractionRevision", "canonicalRevision", "storageRef", "recordCount", "truncated", "digest", "typed", "typedDigest"],
+      "properties": {
+        "schemaRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "extractionRevision": { "const": "evidence-extractor/v1" },
+        "canonicalRevision": { "const": "rfc8785-safe-integer/v1" },
+        "storageRef": { "type": "string", "pattern": "^payload_[a-z0-9]{16,64}$" },
+        "recordCount": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "truncated": { "type": "boolean" },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "typedDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "typed": {
+          "oneOf": [
+            { "$ref": "#/$defs/businessObservationPayload" },
+            { "$ref": "#/$defs/sqlStructurePayload" },
+            { "$ref": "#/$defs/statementSummaryPayload" },
+            { "$ref": "#/$defs/slowQueryPayload" },
+            { "$ref": "#/$defs/schemaPayload" },
+            { "$ref": "#/$defs/indexPayload" },
+            { "$ref": "#/$defs/statisticsPayload" },
+            { "$ref": "#/$defs/ordinaryPlanPayload" },
+            { "$ref": "#/$defs/runtimeMetricPayload" },
+            { "$ref": "#/$defs/alertPayload" },
+            { "$ref": "#/$defs/validationResultPayload" },
+            { "$ref": "#/$defs/effectMetricComparisonPayload" },
+            { "$ref": "#/$defs/rollbackConfirmationPayload" }
+          ]
+        }
+      }
+    },
+    "businessObservationPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "textZh"],
+      "properties": {
+        "kind": { "const": "business_observation" },
+        "textZh": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "sqlStructurePayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "statementType", "tables", "predicateColumns"],
+      "properties": {
+        "kind": { "const": "sql_structure" },
+        "statementType": { "enum": ["select", "insert", "update", "delete", "other"] },
+        "tables": { "type": "array", "uniqueItems": true, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "predicateColumns": { "type": "array", "uniqueItems": true, "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
+      }
+    },
+    "statementSummaryPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "sqlStability"],
+      "properties": {
+        "kind": { "const": "statement_summary" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sqlStability": { "enum": ["plan_and_scan_stable", "plan_changed", "scan_changed", "unknown"] }
+      }
+    },
+    "slowQueryPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "windowMinutes", "callCount", "p95Ms", "averageScanRows", "averageReturnRows"],
+      "properties": {
+        "kind": { "const": "slow_query" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "windowMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+        "callCount": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "p95Ms": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+        "averageScanRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "averageReturnRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 }
+      }
+    },
+    "schemaPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "tableNames"],
+      "properties": {
+        "kind": { "const": "schema" },
+        "tableNames": { "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
+      }
+    },
+    "indexPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "tableName", "filterColumns", "indexCoverage"],
+      "properties": {
+        "kind": { "const": "index" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "tableName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "filterColumns": { "type": "array", "minItems": 1, "uniqueItems": true, "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "indexCoverage": { "enum": ["matching_composite_index", "no_matching_composite_index", "unknown"] }
+      }
+    },
+    "statisticsPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "tableName", "estimatedRows", "actualRows", "statisticsFreshness"],
+      "properties": {
+        "kind": { "const": "statistics" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "tableName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "estimatedRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "actualRows": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+        "statisticsFreshness": { "enum": ["current", "predates_bulk_import", "stale", "unknown"] }
+      }
+    },
+    "ordinaryPlanPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "tableName", "accessPath"],
+      "properties": {
+        "kind": { "const": "ordinary_plan" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "tableName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "accessPath": { "enum": ["table_full_scan", "index_full_scan", "index_range_scan", "point_get", "other"] }
+      }
+    },
+    "runtimeMetricPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "resourceCorrelation"],
+      "properties": {
+        "kind": { "const": "runtime_metric" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "resourceCorrelation": { "enum": ["same_window_elevated", "not_correlated", "unknown"] }
+      }
+    },
+    "alertPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "profileSubjectRef", "profileObjectRef", "alertScope"],
+      "properties": {
+        "kind": { "const": "alert" },
+        "profileSubjectRef": { "type": "string", "pattern": "^subject_[a-z0-9]{16,64}$" },
+        "profileObjectRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "alertScope": { "enum": ["cluster_component_window_match", "partial_match", "not_matched", "unknown"] }
+      }
+    },
+    "validationResultPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "status", "checkId"],
+      "properties": {
+        "kind": { "const": "validation_result" },
+        "status": { "enum": ["passed", "failed", "inconclusive"] },
+        "checkId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "effectMetricComparisonPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "actionId", "metricCode", "validationTargetZh", "baselineValue", "observedValue", "unit"],
+      "properties": {
+        "kind": { "const": "effect_metric_comparison" },
+        "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
+        "metricCode": {
+          "enum": [
+            "average_scan_rows",
+            "p95_latency_ms",
+            "write_regression_basis_points",
+            "estimation_ratio_basis_points",
+            "join_order_change_count",
+            "batch_duration_minutes",
+            "tikv_p99_latency_ms",
+            "hotspot_score_basis_points",
+            "payment_error_rate_basis_points"
+          ]
+        },
+        "validationTargetZh": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "baselineValue": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "observedValue": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "unit": { "enum": ["ms", "rows", "basis_points", "count", "minutes"] }
+      }
+    },
+    "rollbackConfirmationPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "actionId", "rollbackState"],
+      "properties": {
+        "kind": { "const": "rollback_confirmation" },
+        "actionId": { "type": "string", "pattern": "^act_[a-z0-9]{16,64}$" },
+        "rollbackState": { "enum": ["confirmed", "failed", "unknown"] }
+      }
+    },
+    "collection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collectorId",
+        "collectorRevision",
+        "queryId",
+        "queryRevision",
+        "status",
+        "redactionRevision",
+        "budget"
+      ],
+      "properties": {
+        "collectorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "collectorRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "queryId": { "type": ["string", "null"], "maxLength": 128 },
+        "queryRevision": { "type": ["string", "null"], "maxLength": 128 },
+        "status": { "enum": ["complete", "truncated"] },
+        "redactionRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "timeoutMs",
+            "maxRows",
+            "maxBytes",
+            "elapsedMs",
+            "rowsRead",
+            "bytesRead"
+          ],
+          "properties": {
+            "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
+            "maxRows": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "maxBytes": { "type": "integer", "minimum": 1024, "maximum": 67108864 },
+            "elapsedMs": { "type": "integer", "minimum": 0, "maximum": 60000 },
+            "rowsRead": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "bytesRead": { "type": "integer", "minimum": 0, "maximum": 67108864 }
+          }
+        }
+      }
+    }
+  }
+}

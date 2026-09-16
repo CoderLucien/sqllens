@@ -1,0 +1,177 @@
+{
+  "schemaVersion": "source/v1",
+  "sourceId": "src_0000000000000098",
+  "revision": 5,
+  "type": "prometheus",
+  "name": "准备删除的内网监控",
+  "state": "draining",
+  "product": "prometheus",
+  "version": {
+    "detected": "2.54.1",
+    "family": "prometheus",
+    "supported": true
+  },
+  "endpoint": {
+    "scheme": "http",
+    "host": "prometheus.internal",
+    "port": 9090,
+    "path": null,
+    "tlsMode": "disabled"
+  },
+  "auth": {
+    "kind": "none",
+    "credentialRef": null,
+    "credentialRevision": null,
+    "username": null,
+    "expiresAt": null
+  },
+  "credentialLifecycle": {
+    "state": "retiring",
+    "activeLeaseCount": 1,
+    "pendingOperation": "delete",
+    "retireAfter": "2026-09-02T10:10:00Z"
+  },
+  "associatedSourceIds": [],
+  "allowedSchemas": [],
+  "capabilities": [
+    {
+      "name": "prom_query",
+      "status": "available",
+      "required": true,
+      "detail": "Bounded Query and Query Range access was verified before drain."
+    }
+  ],
+  "budgets": {
+    "timeoutMs": 5000,
+    "maxRows": 5000,
+    "maxConcurrency": 2,
+    "ratePerMinute": 30
+  },
+  "owner": {
+    "displayName": "监控平台团队",
+    "reference": "MON-2026-0902"
+  },
+  "verification": {
+    "status": "passed",
+    "testedAt": "2026-09-02T09:20:00Z",
+    "identityDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    "errorCode": null
+  },
+  "transitionEvents": [
+    {
+      "eventId": "sevt_0000000000000091",
+      "sourceRevision": 1,
+      "type": "source_state",
+      "operation": "registered",
+      "fromState": null,
+      "toState": "draft",
+      "credentialRevision": null,
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
+      "createdAt": "2026-09-02T09:00:00Z",
+      "reason": "登记内网 Prometheus"
+    },
+    {
+      "eventId": "sevt_0000000000000092",
+      "sourceRevision": 2,
+      "type": "source_state",
+      "operation": "enabled",
+      "fromState": "draft",
+      "toState": "enabled",
+      "credentialRevision": null,
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
+      "createdAt": "2026-09-02T09:10:00Z",
+      "reason": "启用已验证的数据源"
+    },
+    {
+      "eventId": "sevt_0000000000000093",
+      "sourceRevision": 3,
+      "type": "source_state",
+      "operation": "edited",
+      "fromState": "enabled",
+      "toState": "enabled",
+      "credentialRevision": null,
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
+      "createdAt": "2026-09-02T09:30:00Z",
+      "reason": "更新负责人和使用说明"
+    },
+    {
+      "eventId": "sevt_0000000000000094",
+      "sourceRevision": 4,
+      "type": "source_state",
+      "operation": "leases_updated",
+      "fromState": "enabled",
+      "toState": "enabled",
+      "credentialRevision": null,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
+      "createdAt": "2026-09-02T09:50:00Z",
+      "reason": "只读诊断任务取得数据源租约"
+    },
+    {
+      "eventId": "sevt_0000000000000095",
+      "sourceRevision": 5,
+      "type": "source_state",
+      "operation": "delete_started",
+      "fromState": "enabled",
+      "toState": "draining",
+      "credentialRevision": null,
+      "actor": {
+        "kind": "user",
+        "role": "owner",
+        "id": "owner",
+        "displayName": "本机 Owner"
+      },
+      "createdAt": "2026-09-02T10:00:00Z",
+      "reason": "停止新任务并等待活动租约排空"
+    }
+  ],
+  "leaseEvents": [
+    {
+      "eventId": "levt_0000000000000091",
+      "sourceRevision": 4,
+      "operation": "lease_acquired",
+      "leaseId": "lease_0000000000000091",
+      "jobId": "job_0000000000000091",
+      "fromLeaseCount": 0,
+      "toLeaseCount": 1,
+      "actor": {
+        "kind": "system",
+        "role": "system",
+        "id": "diagnosis-job",
+        "displayName": "诊断任务"
+      },
+      "ownerApproval": null,
+      "createdAt": "2026-09-02T09:48:00Z",
+      "reason": "只读诊断任务取得数据源租约"
+    }
+  ],
+  "createdAt": "2026-09-02T09:00:00Z",
+  "updatedAt": "2026-09-02T10:00:00Z",
+  "activeLeases": [
+    {
+      "leaseId": "lease_0000000000000091",
+      "jobId": "job_0000000000000091",
+      "acquiredRevision": 4,
+      "acquiredAt": "2026-09-02T09:48:00Z"
+    }
+  ]
+}

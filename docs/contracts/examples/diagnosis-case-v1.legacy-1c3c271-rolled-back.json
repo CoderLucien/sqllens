@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "diagnosis-case/v1",
+  "caseId": "case_0000000000000001",
+  "revision": 1,
+  "sourceLayer": "sql",
+  "workflowState": "ready",
+  "outcome": "rolled_back",
+  "inputFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "createdAt": "2026-08-31T10:00:00Z",
+  "updatedAt": "2026-08-31T10:00:01Z",
+  "evidenceCompleteness": {
+    "score": 0.4,
+    "classification": "partial",
+    "missing": ["schema", "statistics", "runtime_metrics"]
+  },
+  "evidence": [
+    {
+      "evidenceId": "ev_0000000000000001",
+      "kind": "sql_rule",
+      "source": "local_rule_engine",
+      "observedAt": "2026-08-31T10:00:00Z",
+      "collectedAt": "2026-08-31T10:00:00Z",
+      "freshness": "fresh",
+      "coverage": 1,
+      "sensitivity": "metadata",
+      "integrityDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "summary": "A full table scan is possible, but schema and plan evidence are absent."
+    }
+  ],
+  "hypotheses": [
+    {
+      "hypothesisId": "hyp_0000000000000001",
+      "statement": "The predicate may lack a selective access path.",
+      "confidence": 0.35,
+      "supportingEvidenceIds": ["ev_0000000000000001"],
+      "contradictingEvidenceIds": [],
+      "status": "candidate"
+    }
+  ],
+  "recommendations": [
+    {
+      "recommendationId": "rec_0000000000000001",
+      "title": "Collect schema and plan evidence",
+      "rationale": "The current SQL-only evidence cannot justify a production index change.",
+      "risk": "low",
+      "prerequisites": ["Obtain read-only schema access"],
+      "validation": ["Compare the ordinary plan after schema evidence is available"],
+      "rollback": ["Remove the connector configuration if access is no longer required"],
+      "evidenceIds": ["ev_0000000000000001"],
+      "owner": {
+        "kind": "role",
+        "id": "dba",
+        "displayName": "Database administrator"
+      },
+      "requiresHumanApproval": true
+    }
+  ],
+  "reviews": [
+    {
+      "reviewId": "rev_0000000000000001",
+      "reviewer": {
+        "kind": "user",
+        "id": "user-1",
+        "displayName": "DBA reviewer"
+      },
+      "decision": "approved",
+      "createdAt": "2026-08-31T10:00:01Z",
+      "comment": "Approved for isolated validation.",
+      "recommendationIds": ["rec_0000000000000001"]
+    }
+  ],
+  "feedback": [
+    {
+      "feedbackId": "fb_0000000000000001",
+      "actor": {
+        "kind": "user",
+        "id": "user-1",
+        "displayName": "DBA reviewer"
+      },
+      "kind": "useful",
+      "createdAt": "2026-08-31T10:00:01Z",
+      "comment": "The evidence gaps are explicit.",
+      "recommendationId": "rec_0000000000000001"
+    },
+    {
+      "feedbackId": "fb_0000000000000002",
+      "actor": {
+        "kind": "user",
+        "id": "user-1",
+        "displayName": "DBA reviewer"
+      },
+      "kind": "implemented",
+      "createdAt": "2026-08-31T10:00:01Z",
+      "comment": "The recommendation was implemented in an isolated environment.",
+      "recommendationId": "rec_0000000000000001"
+    },
+    {
+      "feedbackId": "fb_0000000000000003",
+      "actor": {
+        "kind": "user",
+        "id": "user-1",
+        "displayName": "DBA reviewer"
+      },
+      "kind": "rolled_back",
+      "createdAt": "2026-08-31T10:00:01Z",
+      "comment": "The isolated change was rolled back.",
+      "recommendationId": "rec_0000000000000001"
+    }
+  ],
+  "pinnedRevisions": {
+    "ruleSet": "rules/v1",
+    "policy": "policy/v1",
+    "redaction": "redaction/v1",
+    "provider": null,
+    "model": null,
+    "modelArtifact": null,
+    "prompt": null
+  }
+}
